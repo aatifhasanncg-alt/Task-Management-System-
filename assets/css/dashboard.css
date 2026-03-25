@@ -1,0 +1,126 @@
+/* ============================================================
+   dashboard.css — MISPro Dashboard Styles
+   Extends main.css with dashboard-specific components
+   ============================================================ */
+
+/* ── Chart containers ─────────────────────────────────────── */
+.chart-container {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.chart-title {
+    font-size: .92rem; font-weight: 600; color: #1f2937;
+    margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
+}
+.chart-title i { color: #c9a84c; }
+#chart_dept, #chart_branch, #chart_staff, #chart_status {
+    width: 100%; height: 300px;
+}
+
+/* ── KPI tiles ────────────────────────────────────────────── */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 1rem; }
+.kpi-tile {
+    background: white; border: 1px solid #e5e7eb;
+    border-radius: 12px; padding: 1.25rem 1.5rem;
+    position: relative; overflow: hidden;
+    transition: transform .2s, box-shadow .2s;
+}
+.kpi-tile:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.08); }
+.kpi-tile::after {
+    content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+    background: var(--kpi-color, #c9a84c);
+}
+.kpi-icon { font-size: 1.6rem; margin-bottom: .5rem; }
+.kpi-val { font-size: 2rem; font-weight: 800; line-height: 1; margin-bottom: .25rem; color: var(--kpi-color, #c9a84c); }
+.kpi-label { font-size: .78rem; color: #9ca3af; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+.kpi-delta { font-size: .75rem; margin-top: .35rem; }
+.kpi-delta.up   { color: #10b981; }
+.kpi-delta.down { color: #ef4444; }
+
+/* ── Timeline ─────────────────────────────────────────────── */
+.timeline { position: relative; padding-left: 2rem; }
+.timeline::before {
+    content: ''; position: absolute; left: .65rem; top: 0; bottom: 0;
+    width: 2px; background: #e5e7eb;
+}
+.timeline-item { position: relative; margin-bottom: 1.5rem; }
+.timeline-dot {
+    position: absolute; left: -1.7rem; top: .3rem;
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid white; box-shadow: 0 0 0 2px #e5e7eb;
+}
+.timeline-time { font-size: .72rem; color: #9ca3af; margin-bottom: .25rem; }
+.timeline-card {
+    background: #fafafa; border: 1px solid #f3f4f6;
+    border-radius: 8px; padding: .75rem 1rem;
+}
+.timeline-action { font-size: .83rem; font-weight: 500; color: #1f2937; margin-bottom: .2rem; }
+.timeline-actor  { font-size: .75rem; color: #9ca3af; }
+.timeline-remark {
+    margin-top: .5rem; font-size: .78rem; color: #6b7280;
+    background: white; border-left: 3px solid #c9a84c;
+    padding: .4rem .7rem; border-radius: 0 6px 6px 0;
+    font-style: italic;
+}
+
+/* ── Transfer chain ───────────────────────────────────────── */
+.transfer-chain { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.transfer-node {
+    background: white; border: 1px solid #e5e7eb;
+    border-radius: 8px; padding: .6rem .9rem;
+    font-size: .78rem; text-align: center; min-width: 100px;
+}
+.transfer-node.active { border-color: #c9a84c; background: rgba(201,168,76,.06); }
+.transfer-node.completed { border-color: #10b981; background: rgba(16,185,129,.06); }
+.transfer-node .tn-name { font-weight: 600; color: #1f2937; }
+.transfer-node .tn-dept { color: #9ca3af; font-size: .72rem; }
+.transfer-node .tn-time { color: #6b7280; font-size: .7rem; }
+.transfer-arrow {
+    font-size: .7rem; color: #9ca3af; padding: 0 .25rem;
+    flex-shrink: 0;
+}
+
+/* ── Branch badge ─────────────────────────────────────────── */
+.branch-badge {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: rgba(10,15,30,.06);
+    border: 1px solid rgba(10,15,30,.1);
+    border-radius: 50px; padding: .25rem .8rem;
+    font-size: .75rem; font-weight: 600; color: #374151;
+}
+.branch-badge.head { background: rgba(201,168,76,.1); border-color: rgba(201,168,76,.3); color: #92400e; }
+
+/* ── Executive Charts grid ───────────────────────────────── */
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+@media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+
+/* ── Staff performance table ──────────────────────────────── */
+.perf-bar {
+    display: flex; align-items: center; gap: .5rem;
+}
+.perf-bar-track {
+    flex: 1; height: 6px; background: #f3f4f6;
+    border-radius: 50px; overflow: hidden;
+}
+.perf-bar-fill { height: 6px; border-radius: 50px; }
+
+/* ── Task status donut legend ─────────────────────────────── */
+.donut-legend { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; margin-top: .75rem; }
+.donut-legend-item { display: flex; align-items: center; gap: .4rem; font-size: .78rem; }
+.donut-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Print / PDF optimizations ────────────────────────────── */
+@media print {
+    .sidebar, .topbar, .btn, .no-print { display: none !important; }
+    .main-content { margin-left: 0 !important; padding-top: 0 !important; }
+    body { background: white !important; color: black !important; }
+    .chart-container, .card-mis { break-inside: avoid; }
+}

@@ -1,0 +1,100 @@
+<?php
+require_once '../config/db.php';
+require_once '../config/config.php';
+require_once '../config/session.php';
+requireAdmin();
+
+header('Content-Type: application/json');
+
+$deptCode = strtoupper(trim($_GET['dept_code'] ?? ''));
+
+$DEPT_FIELDS = [
+  'TAX' => [
+    ['firm_name','Firm Name','text',''],
+    ['pan_number','PAN Number','text',''],
+    ['registration_number','Registration No.','text',''],
+    ['proprietor_name','Proprietor Name','text',''],
+    ['tax_type','Tax Type','select','VAT|Income Tax|TDS|Excise|Custom|Other'],
+    ['assessment_year','Assessment Year','text','e.g. 2081/82'],
+    ['filing_period','Filing Period','text','e.g. Shrawan 2081'],
+    ['gross_income','Gross Income','number',''],
+    ['taxable_income','Taxable Income','number',''],
+    ['tax_amount','Tax Amount','number',''],
+    ['penalty_amount','Penalty Amount','number',''],
+    ['refund_amount','Refund Amount','number',''],
+    ['filing_date','Filing Date','date',''],
+    ['filing_status','Filing Status','select','Not Filed|Filed|Accepted|Rejected|Under Review'],
+    ['acknowledgement_no','Acknowledgement No.','text',''],
+    ['notice_received','Notice Received','checkbox',''],
+    ['notice_details','Notice Details','textarea',''],
+    ['follow_up_date','Follow-up Date','date',''],
+    ['notes','Notes','textarea',''],
+  ],
+  'RETAIL' => [
+    ['firm_name','Firm Name','text',''],
+    ['proprietor_name','Proprietor Name','text',''],
+    ['contact_number','Contact Number','phone',''],
+    ['shop_address','Shop Address','textarea',''],
+    ['product_category','Product Category','text',''],
+    ['product_name','Product Name','text',''],
+    ['quantity','Quantity','number',''],
+    ['unit_price','Unit Price','number',''],
+    ['total_amount','Total Amount','number',''],
+    ['discount_percent','Discount %','number',''],
+    ['invoice_number','Invoice Number','text',''],
+    ['invoice_date','Invoice Date','date',''],
+    ['payment_mode','Payment Mode','select','cash|cheque|bank_transfer|online|credit'],
+    ['payment_status','Payment Status','select','paid|unpaid|partial|refunded'],
+    ['delivery_date','Delivery Date','date',''],
+    ['delivery_status','Delivery Status','select','pending|dispatched|delivered|returned'],
+    ['return_reason','Return Reason','textarea',''],
+    ['follow_up_date','Follow-up Date','date',''],
+    ['notes','Notes','textarea',''],
+  ],
+  'CORP' => [
+    ['company_name','Company Name','text',''],
+    ['registration_no','Registration No.','text',''],
+    ['pan_no','PAN No.','text',''],
+    ['director_name','Director Name','text',''],
+    ['contact_number','Contact Number','phone',''],
+    ['service_type','Service Type','select','Company Registration|Audit|Legal Advisory|Compliance|Secretarial|Other'],
+    ['contract_value','Contract Value','number',''],
+    ['contract_date','Contract Date','date',''],
+    ['contract_end_date','Contract End Date','date',''],
+    ['document_status','Document Status','select','Pending|Submitted|Under Review|Approved|Rejected'],
+    ['compliance_type','Compliance Type','text',''],
+    ['last_agm_date','Last AGM Date','date',''],
+    ['next_agm_date','Next AGM Date','date',''],
+    ['roc_filing_date','ROC Filing Date','date',''],
+    ['audit_firm','Audit Firm','text',''],
+    ['audit_period','Audit Period','text',''],
+    ['remarks','Remarks','textarea',''],
+    ['follow_up_date','Follow-up Date','date',''],
+    ['notes','Notes','textarea',''],
+  ],
+  'BANK' => [
+    ['firm_name','Firm / Account Holder','text',''],
+    ['account_number','Account Number','text',''],
+    ['bank_name','Bank Name','text',''],
+    ['bank_branch','Bank Branch','text',''],
+    ['loan_type','Loan Type','select','Home Loan|Business Loan|Personal Loan|Vehicle Loan|Overdraft|CC Limit|Other'],
+    ['loan_amount','Loan Amount','number',''],
+    ['sanctioned_amount','Sanctioned Amount','number',''],
+    ['disbursed_amount','Disbursed Amount','number',''],
+    ['emi_amount','EMI Amount','number',''],
+    ['interest_rate','Interest Rate %','number',''],
+    ['tenure_months','Tenure (Months)','number',''],
+    ['collateral_details','Collateral Details','textarea',''],
+    ['guarantor_name','Guarantor Name','text',''],
+    ['guarantor_contact','Guarantor Contact','phone',''],
+    ['kyc_status','KYC Status','select','Pending|Submitted|Verified|Rejected'],
+    ['loan_status','Loan Status','select','Applied|Under Review|Approved|Rejected|Disbursed|Closed'],
+    ['follow_up_date','Follow-up Date','date',''],
+    ['notes','Notes','textarea',''],
+  ],
+];
+
+echo json_encode([
+    'fields' => $DEPT_FIELDS[$deptCode] ?? [],
+    'dept_code' => $deptCode,
+]);
