@@ -14,39 +14,38 @@ $adminStmt = $db->prepare("SELECT * FROM users WHERE id = ?");
 $adminStmt->execute([$user['id']]);
 $adminUser = $adminStmt->fetch();
 
-// Fetch task with status via join
-// Find the task fetch query and add this join (it may already be there):
+// Fetch task
 $taskStmt = $db->prepare("
     SELECT t.*,
            ts.status_name AS status,
            d.dept_name, d.dept_code, d.color,
            b.branch_name,
            c.company_name,
-           at.full_name AS assigned_to_name   -- ← add this
+           at2.full_name AS assigned_to_name,
+           au.auditor_name,
+           au.max_limit,
+           au.countable_count,
+           au.uncountable_count
     FROM tasks t
     LEFT JOIN task_status ts ON ts.id = t.status_id
     LEFT JOIN departments d  ON d.id  = t.department_id
     LEFT JOIN branches b     ON b.id  = t.branch_id
     LEFT JOIN companies c    ON c.id  = t.company_id
-    LEFT JOIN users at       ON at.id = t.assigned_to   -- ← add this
+    LEFT JOIN users at2      ON at2.id = t.assigned_to
+    LEFT JOIN auditors au    ON au.id  = t.auditor_id
     WHERE t.id = ? AND t.is_active = 1
 ");
 $taskStmt->execute([$id]);
 $task = $taskStmt->fetch();
 if (!$task) { setFlash('error', 'Task not found.'); header('Location: index.php'); exit; }
 
-
-
-// ── Load lookups ──
+// ── Load lookups ──────────────────────────────────────────────────────────────
 $taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
 $companies    = $db->query("SELECT id, company_name FROM companies WHERE is_active=1 ORDER BY company_name")->fetchAll();
 
-// All departments for transfer (exclude current)
-$allDepts = $db->query("
-    SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name
-")->fetchAll();
+$allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
 
-// Transfer staff — admins only, filtered by dept in JS
+// Transfer staff — admins only (exclude CORE), filtered by dept in JS
 $transferStaff = $db->query("
     SELECT u.id, u.full_name, b.branch_name, d.dept_name, d.dept_code
     FROM users u
@@ -54,54 +53,154 @@ $transferStaff = $db->query("
     LEFT JOIN departments d ON d.id = u.department_id
     LEFT JOIN roles r       ON r.id = u.role_id
     WHERE r.role_name = 'admin'
-    AND u.is_active = 1
-    AND d.dept_code != 'CORE'
+      AND u.is_active = 1
+      AND d.dept_code != 'CORE'
     ORDER BY u.full_name
 ")->fetchAll();
 
-// Scoped staff for task assignment
-$scopedStaff = $db->prepare("
-    SELECT u.id, u.full_name, b.branch_name FROM users u
+// All STAFF in this task's department (any branch) for assignment
+$deptStaff = $db->prepare("
+    SELECT u.id, u.full_name, b.branch_name
+    FROM users u
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
-    WHERE r.role_name = 'staff' AND u.is_active = 1
-    AND u.branch_id = ? AND u.department_id = ?
+    WHERE r.role_name = 'staff'
+      AND u.is_active  = 1
+      AND u.department_id = ?
     ORDER BY u.full_name
 ");
-$scopedStaff->execute([$adminUser['branch_id'], $adminUser['department_id']]);
-$scopedStaff = $scopedStaff->fetchAll();
+$deptStaff->execute([$task['department_id']]);
+$deptStaff = $deptStaff->fetchAll();
 
+// Fiscal years
+$fiscalYears = $db->query("
+    SELECT fy_code FROM fiscal_years ORDER BY fy_code DESC
+")->fetchAll(PDO::FETCH_COLUMN);
+
+// Auditors — loaded fresh for current audit_nature (also via AJAX on change)
+$currentAuditors = [];
+if ($task['audit_nature']) {
+    $audStmt = $db->prepare("
+        SELECT id, auditor_name, max_limit, countable_count, uncountable_count
+        FROM auditors
+        WHERE is_active = 1
+        ORDER BY auditor_name
+    ");
+    $audStmt->execute();
+    $currentAuditors = $audStmt->fetchAll();
+}
 
 $errors = [];
 
-// ── POST: Update main task ──
+// ── POST: Update main task ────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
     verifyCsrf();
-    $title    = trim($_POST['title'] ?? '');
-    $desc     = trim($_POST['description'] ?? '');
-    $priority = $_POST['priority'] ?? 'medium';
-    $dueDate  = $_POST['due_date'] ?: null;
-    $fy       = trim($_POST['fiscal_year'] ?? '');
-    $remarks  = trim($_POST['remarks'] ?? '');
-    $assignTo = (int)($_POST['assigned_to'] ?? 0) ?: null;
-    $compId   = (int)($_POST['company_id']  ?? 0) ?: null;
-    $status   = $_POST['status'] ?? '';
+
+    $title       = trim($_POST['title']       ?? '');
+    $desc        = trim($_POST['description'] ?? '');
+    $priority    = $_POST['priority']         ?? 'medium';
+    $dueDate     = $_POST['due_date']         ?: null;
+    $fy          = trim($_POST['fiscal_year'] ?? '');
+    $remarks     = trim($_POST['remarks']     ?? '');
+    $assignTo    = (int)($_POST['assigned_to']  ?? 0) ?: null;
+    $compId      = (int)($_POST['company_id']   ?? 0) ?: null;
+    $status      = $_POST['status']            ?? '';
+    $auditNature = $_POST['audit_nature']      ?? null;
+    $auditorId   = (int)($_POST['auditor_id']  ?? 0) ?: null;
 
     if (!$title) $errors[] = 'Task title is required.';
+
+    // Validate auditor capacity
+    if (!$errors && $auditorId && $auditNature) {
+        $audRow = $db->prepare("SELECT * FROM auditors WHERE id = ? AND is_active = 1");
+        $audRow->execute([$auditorId]);
+        $audRow = $audRow->fetch();
+
+        if ($audRow) {
+            $currentCount = $auditNature === 'countable'
+                ? $audRow['countable_count']
+                : $audRow['uncountable_count'];
+
+            // Only check limit if auditor is being changed
+            if ($auditorId != $task['auditor_id'] || $auditNature !== $task['audit_nature']) {
+                if ($auditNature === 'countable' && $currentCount >= $audRow['max_limit']) {
+                    $errors[] = "Auditor \"{$audRow['auditor_name']}\" has reached their countable limit ({$audRow['max_limit']}).";
+                }
+            }
+        }
+    }
 
     if (!$errors) {
         $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
         $stRow->execute([$status]);
         $statusId = (int)($stRow->fetchColumn() ?: 1);
 
+        // Detect auditor change to update counts
+        $oldAuditorId   = (int)$task['auditor_id'];
+        $oldAuditNature = $task['audit_nature'];
+
         $db->prepare("
             UPDATE tasks SET
-                title=?, description=?, company_id=?,
-                assigned_to=?, status_id=?, priority=?,
-                due_date=?, fiscal_year=?, remarks=?,
-                updated_at=NOW()
-            WHERE id=?
-        ")->execute([$title,$desc,$compId,$assignTo,$statusId,$priority,$dueDate,$fy,$remarks,$id]);
+                title        = ?,
+                description  = ?,
+                company_id   = ?,
+                assigned_to  = ?,
+                status_id    = ?,
+                priority     = ?,
+                due_date     = ?,
+                fiscal_year  = ?,
+                remarks      = ?,
+                audit_nature = ?,
+                auditor_id   = ?,
+                updated_at   = NOW()
+            WHERE id = ?
+        ")->execute([
+            $title, $desc, $compId, $assignTo, $statusId,
+            $priority, $dueDate, $fy, $remarks,
+            $auditNature ?: null, $auditorId, $id
+        ]);
+
+        // ── Update auditor counts ─────────────────────────────────────────────
+        // Decrement old auditor if it changed
+        if ($oldAuditorId && ($oldAuditorId !== $auditorId || $oldAuditNature !== $auditNature)) {
+            if ($oldAuditNature === 'countable') {
+                $db->prepare("UPDATE auditors SET countable_count = GREATEST(0, countable_count - 1) WHERE id = ?")->execute([$oldAuditorId]);
+            } elseif ($oldAuditNature === 'uncountable') {
+                $db->prepare("UPDATE auditors SET uncountable_count = GREATEST(0, uncountable_count - 1) WHERE id = ?")->execute([$oldAuditorId]);
+            }
+        }
+
+        // Increment new auditor
+        if ($auditorId && ($auditorId !== $oldAuditorId || $auditNature !== $oldAuditNature)) {
+            if ($auditNature === 'countable') {
+                $db->prepare("UPDATE auditors SET countable_count = countable_count + 1 WHERE id = ?")->execute([$auditorId]);
+            } elseif ($auditNature === 'uncountable') {
+                $db->prepare("UPDATE auditors SET uncountable_count = uncountable_count + 1 WHERE id = ?")->execute([$auditorId]);
+            }
+        }
+
+        // Workflow log for assignment change
+        if ($assignTo && $assignTo != $task['assigned_to']) {
+            try {
+                $db->prepare("
+                    INSERT INTO task_workflow
+                    (task_id, action, from_user_id, to_user_id, from_dept_id, to_dept_id, old_status, new_status, remarks)
+                    VALUES (?, 'assigned', ?, ?, ?, ?, ?, ?, ?)
+                ")->execute([
+                    $id, $user['id'], $assignTo,
+                    $task['department_id'], $task['department_id'],
+                    $task['status'], $status, $remarks
+                ]);
+            } catch (Exception $e) {}
+
+            notify(
+                $assignTo,
+                'Task Assigned to You',
+                "Task {$task['task_number']} has been assigned to you.",
+                'task',
+                APP_URL . '/staff/tasks/view.php?id=' . $id
+            );
+        }
 
         logActivity("Task updated: {$task['task_number']}", 'tasks');
         setFlash('success', 'Task updated successfully.');
@@ -109,11 +208,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
     }
 }
 
-// ── POST: Transfer department ── (works for ALL departments)
+// ── POST: Transfer department ─────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
     verifyCsrf();
     $newDeptId    = (int)($_POST['new_dept_id']    ?? 0);
-    $newAssignTo  = (int)($_POST['new_assigned_to']?? 0) ?: null;
+    $newAssignTo  = (int)($_POST['new_assigned_to'] ?? 0) ?: null;
     $transferNote = trim($_POST['transfer_note']   ?? '');
 
     if (!$newDeptId) {
@@ -127,9 +226,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
 
         $db->prepare("
             UPDATE tasks SET
-                department_id=?, current_dept_id=?,
-                assigned_to=?, status_id=?, updated_at=NOW()
-            WHERE id=?
+                department_id   = ?,
+                current_dept_id = ?,
+                assigned_to     = ?,
+                status_id       = ?,
+                updated_at      = NOW()
+            WHERE id = ?
         ")->execute([$newDeptId, $newDeptId, $newAssignTo, $notStartedId, $id]);
 
         try {
@@ -137,11 +239,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
                 INSERT INTO task_workflow
                 (task_id, action, from_user_id, to_user_id,
                  from_dept_id, to_dept_id, old_status, new_status, remarks)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                VALUES (?, 'transferred_dept', ?, ?, ?, ?, ?, 'Not Started', ?)
             ")->execute([
-                $id, 'transferred_dept', $user['id'], $newAssignTo,
+                $id, $user['id'], $newAssignTo,
                 $task['department_id'], $newDeptId,
-                $task['status'], 'Not Started', $transferNote
+                $task['status'], $transferNote
             ]);
         } catch (Exception $e) {}
 
@@ -157,12 +259,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
                 [
                     'template' => 'task_transferred',
                     'task'     => [
-                        'id'         => $id,
-                        'task_number'=> $task['task_number'],
-                        'title'      => $task['title'],
-                        'department' => $newDept['dept_name'],
-                        'status'     => 'Not Started',
-                        'due_date'   => $task['due_date'],
+                        'id'          => $id,
+                        'task_number' => $task['task_number'],
+                        'title'       => $task['title'],
+                        'department'  => $newDept['dept_name'],
+                        'status'      => 'Not Started',
+                        'due_date'    => $task['due_date'],
                     ],
                     'remarks' => $transferNote,
                 ]
@@ -174,11 +276,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
         header("Location: view.php?id={$id}"); exit;
     }
 }
-$fiscalYears = $db->query("
-    SELECT fy_code
-    FROM fiscal_years 
-    ORDER BY fy_code DESC
-")->fetchAll(PDO::FETCH_COLUMN);
 
 $pageTitle = 'Edit Task: ' . $task['task_number'];
 include '../../includes/header.php';
@@ -191,7 +288,6 @@ include '../../includes/header.php';
 
 <?= flashHtml() ?>
 
-<!-- Back -->
 <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <a href="view.php?id=<?= $id ?>" class="btn btn-outline-secondary btn-sm">
         <i class="fas fa-arrow-left me-1"></i>Back to View
@@ -213,283 +309,452 @@ include '../../includes/header.php';
 <div class="row g-4">
 
     <!-- ── LEFT COLUMN ── -->
-   <!-- ── LEFT COLUMN ── -->
-                    <div class="col-lg-8">
+    <div class="col-lg-8">
 
-                        <!-- Main Task Details — the only editable section here -->
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-info-circle text-warning me-2"></i>Task Details</h5>
-                            </div>
-                            <div class="card-mis-body">
-                                <form method="POST">
-                                    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                                    <input type="hidden" name="update_task" value="1">
-                                    <div class="row g-3">
+        <div class="card-mis mb-4">
+            <div class="card-mis-header">
+                <h5><i class="fas fa-info-circle text-warning me-2"></i>Task Details</h5>
+            </div>
+            <div class="card-mis-body">
+                <form method="POST">
+                    <input type="hidden" name="csrf_token"  value="<?= csrfToken() ?>">
+                    <input type="hidden" name="update_task" value="1">
+                    <div class="row g-3">
 
-                                        <div class="col-12">
-                                            <label class="form-label-mis">Task Title <span class="required-star">*</span></label>
-                                            <input type="text" name="title" class="form-control"
-                                                value="<?= htmlspecialchars($_POST['title'] ?? $task['title']) ?>" required>
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Department</label>
-                                            <input type="text" class="form-control"
-                                                value="<?= htmlspecialchars($task['dept_name']) ?>"
-                                                readonly style="background:#f9fafb;cursor:not-allowed;">
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Branch</label>
-                                            <input type="text" class="form-control"
-                                                value="<?= htmlspecialchars($task['branch_name']) ?>"
-                                                readonly style="background:#f9fafb;cursor:not-allowed;">
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Company / Client</label>
-                                            <select name="company_id" class="form-select">
-                                                <option value="">-- None --</option>
-                                                <?php foreach ($companies as $c): ?>
-                                                    <option value="<?= $c['id'] ?>"
-                                                        <?= ($task['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($c['company_name']) ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Status</label>
-                                            <select name="status" class="form-select">
-                                                <?php foreach ($taskStatuses as $ts): ?>
-                                                    <option value="<?= htmlspecialchars($ts['status_name']) ?>"
-                                                        <?= ($task['status'] ?? '') === $ts['status_name'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($ts['status_name']) ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Priority</label>
-                                            <select name="priority" class="form-select">
-                                                <?php foreach (TASK_PRIORITIES as $key => $p): ?>
-                                                    <option value="<?= $key ?>"
-                                                        <?= ($task['priority'] ?? '') === $key ? 'selected' : '' ?>>
-                                                        <?= $p['label'] ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Due Date</label>
-                                            <input type="date" name="due_date" class="form-control"
-                                                value="<?= htmlspecialchars($task['due_date'] ?? '') ?>">
-                                        </div>
-
-                                        <div class="col-md-4">
-                                            <label class="form-label-mis">Fiscal Year</label>
-                                            <select name="fiscal_year" class="form-select">
-                                                <option value="">-- Select FY --</option>
-                                                <?php foreach ($fiscalYears as $fy): ?>
-                                                    <option value="<?= $fy ?>"
-                                                        <?= ($task['fiscal_year'] ?? '') === $fy ? 'selected' : '' ?>>
-                                                        <?= $fy ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-
-                                        <div class="col-md-8">
-                                            <label class="form-label-mis">Assign To</label>
-                                            <select name="assigned_to" class="form-select">
-                                                <option value="">-- Unassigned --</option>
-                                                <?php foreach ($scopedStaff as $s): ?>
-                                                    <option value="<?= $s['id'] ?>"
-                                                        <?= ($task['assigned_to'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($s['full_name']) ?>
-                                                        — <?= htmlspecialchars($s['branch_name']) ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-
-                                        <div class="col-12">
-                                            <label class="form-label-mis">Description</label>
-                                            <textarea name="description" class="form-control"
-                                                    rows="2"><?= htmlspecialchars($task['description'] ?? '') ?></textarea>
-                                        </div>
-
-                                        <div class="col-12">
-                                            <label class="form-label-mis">Remarks</label>
-                                            <textarea name="remarks" class="form-control"
-                                                    rows="2"><?= htmlspecialchars($task['remarks'] ?? '') ?></textarea>
-                                        </div>
-
-                                        <div class="col-12">
-                                            <button type="submit" class="btn btn-gold btn-sm">
-                                                <i class="fas fa-save me-1"></i>Update Task
-                                            </button>
-                                        </div>
-                                    </div>
-                                </form>
-                            </div>
+                        <div class="col-12">
+                            <label class="form-label-mis">Task Title <span class="required-star">*</span></label>
+                            <input type="text" name="title" class="form-control"
+                                value="<?= htmlspecialchars($_POST['title'] ?? $task['title']) ?>" required>
                         </div>
 
-                        <!-- Dept detail info — links to view page -->
-                        <div class="card-mis" style="border-left:3px solid <?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;">
-                            <div class="card-mis-body d-flex align-items-center justify-content-between gap-3 py-3">
-                                <div class="d-flex align-items-center gap-3">
-                                    <div style="width:40px;height:40px;border-radius:10px;background:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                        <i class="fas fa-layer-group" style="color:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;"></i>
-                                    </div>
-                                    <div>
-                                        <div style="font-size:.88rem;font-weight:600;color:#1f2937;">
-                                            <?= htmlspecialchars($task['dept_name']) ?> Details
-                                        </div>
-                                        <div style="font-size:.75rem;color:#9ca3af;margin-top:.1rem;">
-                                            Department-specific fields are managed from the task view page
-                                        </div>
-                                    </div>
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Department</label>
+                            <input type="text" class="form-control"
+                                value="<?= htmlspecialchars($task['dept_name']) ?>"
+                                readonly style="background:#f9fafb;cursor:not-allowed;">
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Branch</label>
+                            <input type="text" class="form-control"
+                                value="<?= htmlspecialchars($task['branch_name']) ?>"
+                                readonly style="background:#f9fafb;cursor:not-allowed;">
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Company / Client</label>
+                            <select name="company_id" class="form-select">
+                                <option value="">-- None --</option>
+                                <?php foreach ($companies as $c): ?>
+                                    <option value="<?= $c['id'] ?>"
+                                        <?= ($task['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($c['company_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Status</label>
+                            <select name="status" class="form-select">
+                                <?php foreach ($taskStatuses as $ts): ?>
+                                    <option value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                        <?= ($task['status'] ?? '') === $ts['status_name'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($ts['status_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Priority</label>
+                            <select name="priority" class="form-select">
+                                <?php foreach (TASK_PRIORITIES as $key => $p): ?>
+                                    <option value="<?= $key ?>"
+                                        <?= ($task['priority'] ?? '') === $key ? 'selected' : '' ?>>
+                                        <?= $p['label'] ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Due Date</label>
+                            <input type="date" name="due_date" class="form-control"
+                                value="<?= htmlspecialchars($task['due_date'] ?? '') ?>">
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Fiscal Year</label>
+                            <select name="fiscal_year" class="form-select">
+                                <option value="">-- Select FY --</option>
+                                <?php foreach ($fiscalYears as $fy): ?>
+                                    <option value="<?= $fy ?>"
+                                        <?= ($task['fiscal_year'] ?? '') === $fy ? 'selected' : '' ?>>
+                                        <?= $fy ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <!-- ── Assign To: ALL staff of this department ── -->
+                        <div class="col-md-8">
+                            <label class="form-label-mis">Assign To
+                                <span style="font-size:.72rem;color:#9ca3af;">
+                                    — all <?= htmlspecialchars($task['dept_name']) ?> staff
+                                </span>
+                            </label>
+                            <select name="assigned_to" class="form-select">
+                                <option value="">-- Unassigned --</option>
+                                <?php foreach ($deptStaff as $s): ?>
+                                    <option value="<?= $s['id'] ?>"
+                                        <?= ($task['assigned_to'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($s['full_name']) ?>
+                                        — <?= htmlspecialchars($s['branch_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                                <?php if (empty($deptStaff)): ?>
+                                    <option disabled>No staff in this department</option>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+
+                        <!-- ── Audit Nature ── -->
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Audit Nature</label>
+                            <select name="audit_nature" id="audit_nature"
+                                    class="form-select" onchange="loadAuditors(this.value)">
+                                <option value="">-- Select --</option>
+                                <option value="countable"
+                                    <?= ($task['audit_nature'] ?? '') === 'countable' ? 'selected' : '' ?>>
+                                    Countable
+                                </option>
+                                <option value="uncountable"
+                                    <?= ($task['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
+                                    Uncountable
+                                </option>
+                            </select>
+                        </div>
+
+                        <!-- ── Auditor ── -->
+                        <div class="col-md-8" id="auditor-wrap"
+                             style="<?= $task['audit_nature'] ? '' : 'display:none;' ?>">
+                            <label class="form-label-mis">Auditor
+                                <span id="auditor-limit-note"
+                                      style="font-size:.72rem;color:#9ca3af;margin-left:.3rem;"></span>
+                            </label>
+                            <select name="auditor_id" id="auditor_id" class="form-select">
+                                <option value="">-- Select Auditor --</option>
+                                <?php foreach ($currentAuditors as $a):
+                                    $count = ($task['audit_nature'] === 'countable')
+                                        ? $a['countable_count']
+                                        : $a['uncountable_count'];
+                                    $atLimit = ($task['audit_nature'] === 'countable')
+                                        && $a['countable_count'] >= $a['max_limit']
+                                        && $a['id'] != $task['auditor_id'];
+                                ?>
+                                    <option value="<?= $a['id'] ?>"
+                                        <?= $task['auditor_id'] == $a['id'] ? 'selected' : '' ?>
+                                        <?= $atLimit ? 'disabled' : '' ?>
+                                        data-countable="<?= $a['countable_count'] ?>"
+                                        data-uncountable="<?= $a['uncountable_count'] ?>"
+                                        data-limit="<?= $a['max_limit'] ?>">
+                                        <?= htmlspecialchars($a['auditor_name']) ?>
+                                        (<?= $task['audit_nature'] === 'countable' ? $a['countable_count'] : $a['uncountable_count'] ?>
+                                        <?= $task['audit_nature'] === 'countable' ? '/ ' . $a['max_limit'] : '' ?>)
+                                        <?= $atLimit ? '— FULL' : '' ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <!-- Capacity bar for selected auditor -->
+                            <div id="auditor-capacity" style="margin-top:.4rem;display:none;">
+                                <div class="d-flex justify-content-between mb-1" style="font-size:.72rem;color:#6b7280;">
+                                    <span id="capacity-label">Capacity</span>
+                                    <span id="capacity-text"></span>
                                 </div>
-                                <a href="view.php?id=<?= $id ?>"
-                                class="btn btn-sm flex-shrink-0"
-                                style="background:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;color:white;border-radius:6px;padding:.3rem .8rem;font-size:.78rem;white-space:nowrap;">
-                                    <i class="fas fa-eye me-1"></i>View & Edit Details
-                                </a>
+                                <div style="background:#f3f4f6;border-radius:99px;height:5px;">
+                                    <div id="capacity-bar"
+                                         style="height:100%;border-radius:99px;background:#10b981;transition:.3s;width:0%;"></div>
+                                </div>
                             </div>
                         </div>
 
-                    </div><!-- end col-lg-8 -->
+                        <div class="col-12">
+                            <label class="form-label-mis">Description</label>
+                            <textarea name="description" class="form-control"
+                                rows="2"><?= htmlspecialchars($task['description'] ?? '') ?></textarea>
+                        </div>
 
-            <!-- ── RIGHT SIDEBAR ── always visible for ALL departments ── -->
-            <div class="col-lg-4">
+                        <div class="col-12">
+                            <label class="form-label-mis">Remarks</label>
+                            <textarea name="remarks" class="form-control"
+                                rows="2"><?= htmlspecialchars($task['remarks'] ?? '') ?></textarea>
+                        </div>
+
+                        <div class="col-12">
+                            <button type="submit" class="btn btn-gold btn-sm">
+                                <i class="fas fa-save me-1"></i>Update Task
+                            </button>
+                        </div>
+
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Dept detail link -->
+        <div class="card-mis" style="border-left:3px solid <?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;">
+            <div class="card-mis-body d-flex align-items-center justify-content-between gap-3 py-3">
+                <div class="d-flex align-items-center gap-3">
+                    <div style="width:40px;height:40px;border-radius:10px;
+                                background:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>22;
+                                display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                        <i class="fas fa-layer-group"
+                           style="color:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;"></i>
+                    </div>
+                    <div>
+                        <div style="font-size:.88rem;font-weight:600;color:#1f2937;">
+                            <?= htmlspecialchars($task['dept_name']) ?> Details
+                        </div>
+                        <div style="font-size:.75rem;color:#9ca3af;margin-top:.1rem;">
+                            Department-specific fields are managed from the task view page
+                        </div>
+                    </div>
+                </div>
+                <a href="view.php?id=<?= $id ?>"
+                   class="btn btn-sm flex-shrink-0"
+                   style="background:<?= htmlspecialchars($task['color'] ?? '#c9a84c') ?>;color:white;
+                          border-radius:6px;padding:.3rem .8rem;font-size:.78rem;white-space:nowrap;">
+                    <i class="fas fa-eye me-1"></i>View & Edit Details
+                </a>
+            </div>
+        </div>
+
+    </div><!-- end col-lg-8 -->
+
+    <!-- ── RIGHT SIDEBAR ── -->
+    <div class="col-lg-4">
+
         <!-- Task Info -->
-                <div class="card-mis mb-3 p-3" style="font-size:.82rem;color:#6b7280;">
-                    <div class="mb-2"><strong>Task #:</strong> <?= htmlspecialchars($task['task_number']) ?></div>
-                    <div class="mb-2"><strong>Department:</strong> <?= htmlspecialchars($task['dept_name']) ?></div>
-                    <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($task['branch_name']) ?></div>
-                    <div class="mb-2"><strong>Status:</strong>
-                        <span class="status-badge status-<?= strtolower(str_replace(' ','-',$task['status'])) ?>">
-                            <?= htmlspecialchars($task['status']) ?>
-                        </span>
+        <div class="card-mis mb-3 p-3" style="font-size:.82rem;color:#6b7280;">
+            <div class="mb-2"><strong>Task #:</strong> <?= htmlspecialchars($task['task_number']) ?></div>
+            <div class="mb-2"><strong>Department:</strong> <?= htmlspecialchars($task['dept_name']) ?></div>
+            <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($task['branch_name']) ?></div>
+            <div class="mb-2"><strong>Status:</strong>
+                <span class="status-badge status-<?= strtolower(str_replace(' ','-',$task['status'])) ?>">
+                    <?= htmlspecialchars($task['status']) ?>
+                </span>
+            </div>
+            <?php if ($task['auditor_name']): ?>
+            <div class="mb-2"><strong>Auditor:</strong> <?= htmlspecialchars($task['auditor_name']) ?></div>
+            <div class="mb-2"><strong>Audit Nature:</strong>
+                <span style="text-transform:capitalize;"><?= htmlspecialchars($task['audit_nature'] ?? '—') ?></span>
+            </div>
+            <?php endif; ?>
+            <div class="mb-2"><strong>Created:</strong> <?= date('d M Y', strtotime($task['created_at'])) ?></div>
+            <div><strong>Updated:</strong> <?= date('d M Y', strtotime($task['updated_at'])) ?></div>
+        </div>
+
+        <!-- Transfer to Department -->
+        <div class="card-mis mb-3" style="border-left:3px solid #8b5cf6;">
+            <div class="card-mis-header">
+                <h5><i class="fas fa-exchange-alt me-2" style="color:#8b5cf6;"></i>Transfer to Department</h5>
+            </div>
+            <div class="card-mis-body">
+                <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
+                    Transfer this task to another department for further processing.
+                </p>
+                <form method="POST" onsubmit="return confirm('Transfer this task?');">
+                    <input type="hidden" name="csrf_token"    value="<?= csrfToken() ?>">
+                    <input type="hidden" name="transfer_dept" value="1">
+                    <div class="row g-2">
+
+                        <div class="col-12">
+                            <label class="form-label-mis">Transfer To</label>
+                            <select name="new_dept_id" id="transferDept"
+                                    class="form-select form-select-sm"
+                                    required onchange="filterTransferStaff()">
+                                <option value="">-- Select Department --</option>
+                                <?php foreach ($allDepts as $d): ?>
+                                    <?php if ($d['id'] == $task['department_id']) continue; ?>
+                                    <?php if ($d['dept_code'] === 'CORE') continue; ?>
+                                    <option value="<?= $d['id'] ?>"
+                                            data-code="<?= htmlspecialchars($d['dept_code']) ?>"
+                                            data-name="<?= htmlspecialchars($d['dept_name']) ?>">
+                                        <?= htmlspecialchars($d['dept_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label-mis">
+                                Assign To Admin
+                                <span id="staffFilterNote" style="font-size:.7rem;color:#9ca3af;">
+                                    (select dept first)
+                                </span>
+                            </label>
+                            <select name="new_assigned_to" id="transferStaff"
+                                    class="form-select form-select-sm">
+                                <option value="">-- Unassigned --</option>
+                                <?php foreach ($transferStaff as $s): ?>
+                                    <option value="<?= $s['id'] ?>"
+                                            data-deptcode="<?= htmlspecialchars($s['dept_code']) ?>">
+                                        <?= htmlspecialchars($s['full_name']) ?>
+                                        — <?= htmlspecialchars($s['branch_name']) ?>
+                                        (<?= htmlspecialchars($s['dept_name']) ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label-mis">Transfer Note</label>
+                            <textarea name="transfer_note" class="form-control form-control-sm"
+                                rows="2" placeholder="Reason / instructions for next dept…"></textarea>
+                        </div>
+
+                        <div class="col-12 mt-1">
+                            <button type="submit" class="btn w-100 btn-sm"
+                                style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:.5rem;">
+                                <i class="fas fa-exchange-alt me-1"></i>Transfer Task
+                            </button>
+                        </div>
                     </div>
-                    <div class="mb-2"><strong>Created:</strong> <?= date('d M Y', strtotime($task['created_at'])) ?></div>
-                    <div><strong>Updated:</strong> <?= date('d M Y', strtotime($task['updated_at'])) ?></div>
-                </div>
-
-                <!-- ── TRANSFER TO ANOTHER DEPT — shown for ALL departments ── -->
-                <div class="card-mis mb-3" style="border-left:3px solid #8b5cf6;">
-                    <div class="card-mis-header">
-                        <h5><i class="fas fa-exchange-alt me-2" style="color:#8b5cf6;"></i>Transfer to Department</h5>
-                    </div>
-                    <div class="card-mis-body">
-                        <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
-                            Transfer this task to another department for further processing.
-                        </p>
-                        <form method="POST" onsubmit="return confirm('Are you sure you want to transfer this task?');">
-                            <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                            <input type="hidden" name="transfer_dept" value="1">
-                            <div class="row g-2">
-
-                                <div class="col-12">
-                                    <label class="form-label-mis">Transfer To</label>
-                                    <select name="new_dept_id" class="form-select form-select-sm"
-                                            id="transferDept" required onchange="filterTransferStaff()">
-                                        <option value="">-- Select Department --</option>
-                                        <?php foreach ($allDepts as $d): ?>
-                                            <?php if ($d['id'] == $task['department_id']) continue; ?>
-                                            <?php if ($d['dept_code'] === 'CORE') continue; ?>
-                                            <option value="<?= $d['id'] ?>"
-                                                    data-code="<?= htmlspecialchars($d['dept_code']) ?>"
-                                                    data-name="<?= htmlspecialchars($d['dept_name']) ?>">
-                                                <?= htmlspecialchars($d['dept_name']) ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-
-                                <div class="col-12">
-                                    <label class="form-label-mis">
-                                        Assign To Admin
-                                        <span style="font-size:.7rem;color:#9ca3af;" id="staffFilterNote">(select dept first)</span>
-                                    </label>
-                                    <select name="new_assigned_to" class="form-select form-select-sm" id="transferStaff">
-                                        <option value="">-- Unassigned --</option>
-                                        <?php foreach ($transferStaff as $s): ?>
-                                            <option value="<?= $s['id'] ?>"
-                                                    data-deptcode="<?= htmlspecialchars($s['dept_code']) ?>">
-                                                <?= htmlspecialchars($s['full_name']) ?>
-                                                — <?= htmlspecialchars($s['branch_name']) ?>
-                                                (<?= htmlspecialchars($s['dept_name']) ?>)
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-
-                                <div class="col-12">
-                                    <label class="form-label-mis">Transfer Note</label>
-                                    <textarea name="transfer_note" class="form-control form-control-sm" rows="2"
-                                            placeholder="Reason / instructions for next dept…"></textarea>
-                                </div>
-
-                                <div class="col-12 mt-1">
-                                    <button type="submit" class="btn w-100 btn-sm"
-                                            style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:.5rem;">
-                                        <i class="fas fa-exchange-alt me-1"></i>Transfer Task
-                                    </button>
-                                </div>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+                </form>
+            </div>
+        </div>
 
         <!-- Status Reference -->
         <div class="card-mis p-3" style="border-left:3px solid var(--gold);">
             <p class="mb-2" style="font-size:.8rem;font-weight:600;">Status Reference</p>
             <?php foreach (TASK_STATUSES as $k => $s): ?>
                 <div class="d-flex align-items-center gap-2 mb-1">
-                    <div style="width:8px;height:8px;border-radius:50%;background:<?= $s['color'] ?>;flex-shrink:0;"></div>
+                    <div style="width:8px;height:8px;border-radius:50%;
+                                background:<?= $s['color'] ?>;flex-shrink:0;"></div>
                     <span style="font-size:.78rem;color:#6b7280;"><?= $s['label'] ?></span>
                 </div>
             <?php endforeach; ?>
         </div>
 
     </div><!-- end col-lg-4 -->
-
 </div><!-- end row -->
 </div>
 
-<script>
-function loadAuditors() {
-    const nature = document.getElementById('audit_nature').value;
-
-    if (!nature) return;
-
-    fetch(`${APP_URL}/ajax/get_auditors.php?nature=${nature}`)
-        .then(res => res.json())
-        .then(data => {
-            const select = document.getElementById('auditor_id');
-
-            select.innerHTML = '<option value="">-- Select Auditor --</option>';
-
-            data.forEach(a => {
-                let count = nature === 'countable'
-                    ? a.countable_count
-                    : a.uncountable_count;
-
-                select.innerHTML += `
-                    <option value="${a.id}">
-                        ${a.auditor_name} (${count})
-                    </option>
-                `;
-            });
-        })
-        .catch(err => console.error("Error loading auditors:", err));
-}
-</script>
-
 <?php include '../../includes/footer.php'; ?>
+
+<script>
+// ── Transfer dept: filter admin dropdown by selected dept ─────────────────────
+function filterTransferStaff() {
+    const sel      = document.getElementById('transferDept');
+    const option   = sel.options[sel.selectedIndex];
+    const deptCode = option ? option.dataset.code : '';
+    const deptName = option ? option.dataset.name : '';
+    const staffSel = document.getElementById('transferStaff');
+    const note     = document.getElementById('staffFilterNote');
+
+    Array.from(staffSel.options).forEach(o => {
+        if (!o.value) return; // keep "Unassigned"
+        o.hidden = deptCode ? (o.dataset.deptcode !== deptCode) : false;
+    });
+
+    // Reset if current selection is hidden
+    const curr = staffSel.options[staffSel.selectedIndex];
+    if (curr && curr.hidden) staffSel.value = '';
+
+    note.textContent = deptCode ? `(${deptName} admins)` : '(select dept first)';
+}
+
+// ── Load auditors via AJAX on audit_nature change ─────────────────────────────
+function loadAuditors(nature) {
+    const wrap = document.getElementById('auditor-wrap');
+    const sel  = document.getElementById('auditor_id');
+
+    if (!nature) {
+        wrap.style.display = 'none';
+        return;
+    }
+    wrap.style.display = 'block';
+
+    document.getElementById('auditor-limit-note').textContent =
+        nature === 'countable' ? '(limit applies)' : '(no limit)';
+
+    sel.innerHTML = '<option value="">Loading…</option>';
+
+    fetch(`<?= APP_URL ?>/ajax/get_auditors.php?nature=${encodeURIComponent(nature)}`)
+        .then(r => r.json())
+        .then(data => {
+            sel.innerHTML = '<option value="">-- Select Auditor --</option>';
+            data.forEach(a => {
+                const count   = nature === 'countable' ? a.countable_count : a.uncountable_count;
+                const atLimit = nature === 'countable' && a.countable_count >= a.max_limit;
+                const label   = nature === 'countable'
+                    ? `${a.name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
+                    : `${a.name} (${a.uncountable_count})`;
+                const opt = document.createElement('option');
+                opt.value = a.id;
+                opt.text  = label;
+                opt.disabled = atLimit;
+                opt.dataset.countable   = a.countable_count;
+                opt.dataset.uncountable = a.uncountable_count;
+                opt.dataset.limit       = a.max_limit;
+                // Re-select if same auditor
+                if (a.id == <?= (int)($task['auditor_id'] ?? 0) ?>) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            updateCapacityBar();
+        })
+        .catch(() => {
+            sel.innerHTML = '<option value="">Error loading auditors</option>';
+        });
+}
+
+// ── Capacity bar ──────────────────────────────────────────────────────────────
+function updateCapacityBar() {
+    const nature   = document.getElementById('audit_nature').value;
+    const sel      = document.getElementById('auditor_id');
+    const opt      = sel.options[sel.selectedIndex];
+    const capDiv   = document.getElementById('auditor-capacity');
+
+    if (!opt || !opt.value || !nature) {
+        capDiv.style.display = 'none';
+        return;
+    }
+
+    const count = nature === 'countable'
+        ? parseInt(opt.dataset.countable  || 0)
+        : parseInt(opt.dataset.uncountable || 0);
+    const limit = parseInt(opt.dataset.limit || 100);
+
+    if (nature === 'uncountable') {
+        // Just show count, no limit bar
+        document.getElementById('capacity-label').textContent = 'Uncountable tasks';
+        document.getElementById('capacity-text').textContent  = count;
+        document.getElementById('capacity-bar').style.width   = '0%';
+        capDiv.style.display = 'block';
+        return;
+    }
+
+    const pct   = Math.min(100, Math.round((count / limit) * 100));
+    const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
+
+    document.getElementById('capacity-label').textContent = 'Countable capacity used';
+    document.getElementById('capacity-text').textContent  = `${count} / ${limit} (${pct}%)`;
+    document.getElementById('capacity-bar').style.width   = pct + '%';
+    document.getElementById('capacity-bar').style.background = color;
+    capDiv.style.display = 'block';
+}
+
+document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
+
+// Run on page load if audit_nature already set
+document.addEventListener('DOMContentLoaded', () => {
+    const nature = document.getElementById('audit_nature').value;
+    if (nature) {
+        document.getElementById('auditor-wrap').style.display = 'block';
+        document.getElementById('auditor-limit-note').textContent =
+            nature === 'countable' ? '(limit applies)' : '(no limit)';
+        updateCapacityBar();
+    }
+});
+</script>
