@@ -216,7 +216,11 @@ $allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 
 
 // ── Status tab counts ─────────────────────────────────────────────────────────
 $tabCounts = [];
-foreach (TASK_STATUSES as $k => $s) {
+$allStatuses = $db->query("SELECT id, status_name, color, bg_color FROM task_status ORDER BY id")->fetchAll();
+
+$tabCounts = [];
+foreach ($allStatuses as $st) {
+    $k = $st['status_name'];
     $tabParams = $params;
     $tabWhere = $whereStr;
     if ($filterStatus) {
@@ -236,10 +240,11 @@ foreach (TASK_STATUSES as $k => $s) {
     ");
     $cntSt->execute(array_merge($tabParams, [$k]));
     $tabCounts[$k] = (int) $cntSt->fetchColumn();
+   $tabCounts[$k] = (int) $cntSt->fetchColumn();
 }
 $fiscalYears = $db->query("
     SELECT fy_code 
-    FROM fiscal_years 
+    FROM fiscal_years WHERE is_active=1
     ORDER BY fy_code DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
 include '../../includes/header.php';
@@ -303,12 +308,15 @@ include '../../includes/header.php';
                     class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>">
                     All (<?= $total ?>)
                 </a>
-                <?php foreach (TASK_STATUSES as $k => $s): ?>
+               <?php foreach ($allStatuses as $st):
+                    $k = $st['status_name'];
+                    $col = $st['color'] ?? '#9ca3af';
+                ?>
                     <a href="?<?= http_build_query(array_merge($_GET, ['status' => $k, 'page' => 1])) ?>" class="btn btn-sm"
-                        style="border:1px solid <?= $s['color'] ?>;
-              color:<?= $filterStatus === $k ? '#fff' : $s['color'] ?>;
-              background:<?= $filterStatus === $k ? $s['color'] : 'transparent' ?>;">
-                        <?= $s['label'] ?> (<?= $tabCounts[$k] ?? 0 ?>)
+                        style="border:1px solid <?= $col ?>;
+                               color:<?= $filterStatus === $k ? '#fff' : $col ?>;
+                               background:<?= $filterStatus === $k ? $col : 'transparent' ?>;">
+                        <?= htmlspecialchars($k) ?> (<?= $tabCounts[$k] ?? 0 ?>)
                     </a>
                 <?php endforeach; ?>
             </div>

@@ -626,7 +626,69 @@ CREATE TABLE bank_summary (
     FOREIGN KEY (branch_id)         REFERENCES branches(id),
     FOREIGN KEY (updated_by)        REFERENCES users(id)
 );
+CREATE TABLE auditor_yearly_quota (
+    auditor_id       INT NOT NULL,
+    fiscal_year_id   INT NOT NULL,
+    countable_count   INT NOT NULL DEFAULT 0,
+    uncountable_count INT NOT NULL DEFAULT 0,
+    max_countable_override INT NULL,
 
+    PRIMARY KEY (auditor_id, fiscal_year_id),   -- composite PK, no surrogate id needed
+
+    FOREIGN KEY (auditor_id)     REFERENCES auditors(id) ON DELETE CASCADE,
+    FOREIGN KEY (fiscal_year_id) REFERENCES fiscal_years(id) ON DELETE CASCADE
+);
+DELIMITER $$
+
+CREATE TRIGGER trg_auditor_quota_increment
+AFTER INSERT ON tasks
+FOR EACH ROW
+BEGIN
+    DECLARE v_fy_id  INT;
+    DECLARE v_max    INT;
+    DECLARE v_count  INT;
+
+    IF NEW.auditor_id IS NOT NULL AND NEW.audit_nature IS NOT NULL THEN
+
+        SELECT id INTO v_fy_id
+        FROM fiscal_years WHERE is_current = 1 LIMIT 1;
+
+        IF v_fy_id IS NOT NULL THEN
+
+            INSERT INTO auditor_yearly_quota
+                (auditor_id, fiscal_year_id, countable_count, uncountable_count)
+            VALUES (
+                NEW.auditor_id,
+                v_fy_id,
+                IF(NEW.audit_nature = 'countable', 1, 0),
+                IF(NEW.audit_nature = 'uncountable', 1, 0)
+            )
+            ON DUPLICATE KEY UPDATE
+                countable_count   = countable_count   + IF(NEW.audit_nature = 'countable', 1, 0),
+                uncountable_count = uncountable_count + IF(NEW.audit_nature = 'uncountable', 1, 0);
+
+            -- Enforce cap on countable only
+            IF NEW.audit_nature = 'countable' THEN
+                SELECT
+                    q.countable_count,
+                    COALESCE(q.max_countable_override, a.max_countable)
+                INTO v_count, v_max
+                FROM auditor_yearly_quota q
+                JOIN auditors a ON a.id = q.auditor_id
+                WHERE q.auditor_id = NEW.auditor_id
+                  AND q.fiscal_year_id = v_fy_id;
+
+                IF v_count > v_max THEN
+                    SIGNAL SQLSTATE '45000'
+                    SET MESSAGE_TEXT = 'Auditor countable task limit reached for this fiscal year';
+                END IF;
+            END IF;
+
+        END IF;
+    END IF;
+END$$
+
+DELIMITER ;
 -- Client categories for banking
 CREATE TABLE bank_client_categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -657,7 +719,6 @@ CREATE TABLE task_banking (
     client_category_id INT,              -- FK bank_client_categories
 
     -- Assignment
-    auditor_id INT,            -- FK auditor
     assigned_date DATE,
     ecd DATE,
     completion_date DATE,
@@ -686,7 +747,6 @@ CREATE TABLE task_banking (
     FOREIGN KEY (task_id)              REFERENCES tasks(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id)           REFERENCES companies(id),
     FOREIGN KEY (bank_reference_id)    REFERENCES bank_references(id),
-    FOREIGN KEY (auditor_id)           REFERENCES auditors(id) ON DELETE SET NULL;
     FOREIGN KEY (client_category_id)   REFERENCES bank_client_categories(id),
     FOREIGN KEY (work_status_id)       REFERENCES task_status(id)
 );
@@ -696,27 +756,12 @@ CREATE TABLE task_banking (
 -- (Post-completion: payments, service tax, clearance)
 -- ========================
 
-CREATE TABLE finance_service_types (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    service_name VARCHAR(100) UNIQUE NOT NULL
-);
-
-INSERT INTO finance_service_types (service_name) VALUES
-('Audit Fee'),
-('Consultation Fee'),
-('Tax Filing Fee'),
-('VAT Filing Fee'),
-('Company Registration'),
-('Renewal Fee'),
-('Other Service');
 
 CREATE TABLE task_finance (
     id INT AUTO_INCREMENT PRIMARY KEY,
     task_id INT NOT NULL UNIQUE,
     company_id INT NOT NULL,
 
-    -- Service
-    service_type_id INT,                -- FK finance_service_types
     fiscal_year VARCHAR(10),
 
     -- Payment Details
@@ -743,7 +788,6 @@ CREATE TABLE task_finance (
 
     FOREIGN KEY (task_id)              REFERENCES tasks(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id)           REFERENCES companies(id),
-    FOREIGN KEY (service_type_id)      REFERENCES finance_service_types(id),
     FOREIGN KEY (tax_clearance_status_id) REFERENCES task_status(id),
     FOREIGN KEY (payment_status_id)    REFERENCES task_status(id)
 );

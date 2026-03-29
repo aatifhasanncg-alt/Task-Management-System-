@@ -170,10 +170,6 @@ try {
                 <i class="fas fa-landmark"></i>
                 <span>Bank Summary</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/banking/auditors.php" class="nav-item <?= isActive('/banking/auditors') ?>">
-                <i class="fas fa-user-tie"></i>
-                <span>Auditors</span>
-            </a>
         <?php endif; ?>
 
 

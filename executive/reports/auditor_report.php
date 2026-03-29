@@ -28,8 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
     $icanMemNo = trim($_POST['ICAN_mem_no'] ?? '');
     $class = trim($_POST['class'] ?? '');
     $address = trim($_POST['address'] ?? '');
-    $countable = (int) ($_POST['countable_count'] ?? 0);
-    $uncountable = (int) ($_POST['uncountable_count'] ?? 0);
+    $maxCountable = (int) ($_POST['max_countable'] ?? 100);
     $isActive = isset($_POST['is_active']) ? 1 : 0;
 
     if (!$auditorName) {
@@ -43,55 +42,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
             UPDATE auditors SET
                 auditor_name=?, firm_name=?, pan_number=?, cop_no=?,
                 f_reg=?, ICAN_mem_no=?, class=?, address=?, is_active=?,
-                countable_count=?, uncountable_count=?
+                max_countable=?
             WHERE id=?
         ");
-
         $stmt->execute([
-            $auditorName,
-            $firmName,
-            $panNumber,
-            $copNo,
-            $fReg,
-            $icanMemNo,
-            $class,
-            $address,
-            $isActive,
-            $countable,
-            $uncountable,
-            $auditorId
+            $auditorName, $firmName, $panNumber, $copNo,
+            $fReg, $icanMemNo, $class, $address, $isActive,
+            $maxCountable, $auditorId
         ]);
         setFlash('success', 'Auditor updated successfully.');
+
+        // ── Update current FY quota override and used count ───────────────────
+        $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
+        if ($fyId && $auditorId > 0) {
+            $overrideVal = ($_POST['max_countable_override'] ?? '') !== ''
+                ? (int) $_POST['max_countable_override']
+                : null;
+            $usedVal = ($_POST['countable_override_used'] ?? '') !== ''
+                ? (int) $_POST['countable_override_used']
+                : null;
+
+            // Only update if at least one value was provided
+            if ($overrideVal !== null || $usedVal !== null) {
+                // Ensure row exists
+                $db->prepare("
+                    INSERT INTO auditor_yearly_quota
+                        (auditor_id, fiscal_year_id, countable_count, uncountable_count)
+                    VALUES (?, ?, 0, 0)
+                    ON DUPLICATE KEY UPDATE auditor_id = auditor_id
+                ")->execute([$auditorId, $fyId]);
+
+                // Update only provided fields
+                if ($overrideVal !== null && $usedVal !== null) {
+                    $db->prepare("
+                        UPDATE auditor_yearly_quota
+                        SET max_countable_override = ?, countable_count = ?
+                        WHERE auditor_id = ? AND fiscal_year_id = ?
+                    ")->execute([$overrideVal, $usedVal, $auditorId, $fyId]);
+                } elseif ($overrideVal !== null) {
+                    $db->prepare("
+                        UPDATE auditor_yearly_quota
+                        SET max_countable_override = ?
+                        WHERE auditor_id = ? AND fiscal_year_id = ?
+                    ")->execute([$overrideVal, $auditorId, $fyId]);
+                } elseif ($usedVal !== null) {
+                    $db->prepare("
+                        UPDATE auditor_yearly_quota
+                        SET countable_count = ?
+                        WHERE auditor_id = ? AND fiscal_year_id = ?
+                    ")->execute([$usedVal, $auditorId, $fyId]);
+                }
+            }
+        }
+
     } else {
         $stmt = $db->prepare("
             INSERT INTO auditors
-                (auditor_name, firm_name, pan_number, cop_no, f_reg, ICAN_mem_no, class, address, is_active, countable_count, uncountable_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                (auditor_name, firm_name, pan_number, cop_no, f_reg, ICAN_mem_no, class, address, is_active, max_countable)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
         ");
-
         $stmt->execute([
-            $auditorName,
-            $firmName,
-            $panNumber,
-            $copNo,
-            $fReg,
-            $icanMemNo,
-            $class,
-            $address,
-            $isActive,
-            $countable,
-            $uncountable
-        ]);
-        $stmt->execute([
-            $auditorName,
-            $firmName,
-            $panNumber,
-            $copNo,
-            $fReg,
-            $icanMemNo,
-            $class,
-            $address,
-            $isActive
+            $auditorName, $firmName, $panNumber, $copNo,
+            $fReg, $icanMemNo, $class, $address, $isActive, $maxCountable
         ]);
         setFlash('success', 'Auditor added successfully.');
     }
@@ -122,17 +134,23 @@ $ws = implode(' AND ', $where);
 $stmt = $db->prepare("
     SELECT
         a.id, a.auditor_name, a.firm_name, a.pan_number, a.cop_no,
-        a.f_reg, a.ICAN_mem_no, a.class, a.address, a.is_active, a.countable_count, a.uncountable_count,
-        COUNT(tb.id) AS total_files,
+        a.f_reg, a.ICAN_mem_no, a.class, a.address, a.is_active,
+        a.max_countable,
+        COALESCE(q.countable_count, 0)      AS countable_count,
+        COALESCE(q.uncountable_count, 0)    AS uncountable_count,
+        q.max_countable_override            AS max_countable_override,
+        COUNT(t.id) AS total_files,
         SUM(CASE WHEN ts.status_name = 'Done'    THEN 1 ELSE 0 END) AS completed,
         SUM(CASE WHEN ts.status_name = 'Pending' THEN 1 ELSE 0 END) AS pending,
         SUM(CASE WHEN ts.status_name = 'HBC'     THEN 1 ELSE 0 END) AS hbc
     FROM auditors a
-    LEFT JOIN task_banking tb ON tb.auditor_id = a.id
-    LEFT JOIN tasks        t  ON t.id = tb.task_id
-    LEFT JOIN task_status  ts ON ts.id = t.status_id
+    LEFT JOIN auditor_yearly_quota q
+           ON q.auditor_id = a.id
+          AND q.fiscal_year_id = (SELECT id FROM fiscal_years WHERE is_current = 1 LIMIT 1)
+    LEFT JOIN tasks       t  ON t.auditor_id = a.id AND t.is_active = 1
+    LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE {$ws}
-    GROUP BY a.id
+    GROUP BY a.id, q.countable_count, q.uncountable_count
     ORDER BY total_files DESC
 ");
 $stmt->execute($params);
@@ -302,8 +320,18 @@ include '../../includes/header.php';
                                             <span class="badge bg-secondary">Inactive</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td style="text-align:center;font-weight:600;"><?= $a['countable_count'] ?? 0 ?></td>
-
+                                    <td style="text-align:center;">
+                                        <?php
+                                        $used = (int)($a['countable_count'] ?? 0);
+                                        $cap  = (int)($a['max_countable'] ?? 0);
+                                        $pctBar = $cap > 0 ? min(100, round(($used / $cap) * 100)) : 0;
+                                        $barCol = $pctBar >= 100 ? '#ef4444' : ($pctBar >= 80 ? '#f59e0b' : '#10b981');
+                                        ?>
+                                        <div style="font-size:.78rem;font-weight:600;"><?= $used ?> / <?= $cap ?></div>
+                                        <div style="background:#1e2a45;border-radius:99px;height:4px;margin-top:.2rem;">
+                                            <div style="width:<?= $pctBar ?>%;background:<?= $barCol ?>;height:100%;border-radius:99px;"></div>
+                                        </div>
+                                    </td>
                                     <td style="text-align:center;font-weight:600;"><?= $a['uncountable_count'] ?? 0 ?></td>
                                     <td style="text-align:center;font-weight:600;"><?= $a['total_files'] ?></td>
                                     <td style="text-align:center;">
@@ -406,19 +434,47 @@ include '../../includes/header.php';
                                             <?= isCoreAdmin() ? '' : 'readonly' ?>></textarea>
                                     </div>
                                     <div class="col-md-6">
-                                        <label class="form-label-mis">Countable Count</label>
-                                        <input type="number" name="countable_count" id="countable_count"
-                                            class="form-control form-control-sm" min="0">
+                                        <label class="form-label-mis">
+                                            Max Countable Limit
+                                            <span style="font-size:.68rem;color:#9ca3af;margin-left:.3rem;">
+                                                (default cap for this auditor)
+                                            </span>
+                                        </label>
+                                        <input type="number" name="max_countable" id="max_countable"
+                                            class="form-control form-control-sm" min="0"
+                                            <?= isCoreAdmin() ? '' : 'readonly' ?>>
+                                        <div id="auditor_usage_info" style="font-size:.72rem;color:#6b7280;margin-top:.3rem;"></div>
                                     </div>
-
                                     <div class="col-md-6">
-                                        <label class="form-label-mis">Uncountable Count</label>
-                                        <input type="number" name="uncountable_count" id="uncountable_count"
-                                            class="form-control form-control-sm" min="0">
+                                        <label class="form-label-mis">
+                                            Override Limit (Current FY)
+                                            <span style="font-size:.68rem;color:#f59e0b;margin-left:.3rem;">
+                                                <i class="fas fa-exclamation-triangle me-1"></i>overrides default
+                                            </span>
+                                        </label>
+                                        <input type="number" name="max_countable_override" id="max_countable_override"
+                                            class="form-control form-control-sm" min="0"
+                                            placeholder="Leave blank to use default"
+                                            <?= isCoreAdmin() ? '' : 'readonly' ?>>
+                                        <small style="font-size:.65rem;color:#9ca3af;">
+                                            Set this to temporarily allow more tasks for this fiscal year only.
+                                        </small>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label-mis">Current Countable Used (This FY)</label>
+                                        <input type="number" name="countable_override_used" id="countable_override_used"
+                                            class="form-control form-control-sm" min="0"
+                                            placeholder="Current count this FY"
+                                            <?= isCoreAdmin() ? '' : 'readonly' ?>>
+                                        <small style="font-size:.65rem;color:#ef4444;">
+                                            ⚠ Editing this directly adjusts the quota counter. Use carefully.
+                                        </small>
                                     </div>
                                     <div class="col-12">
                                         <div class="form-check form-switch">
-                                            <input type="checkbox" name="is_active" id="is_active" <?= isCoreAdmin() ? '' : 'disabled' ?>>
+                                            <input type="checkbox" name="is_active" id="is_active"
+                                                class="form-check-input"
+                                                <?= isCoreAdmin() ? '' : 'disabled' ?>>
                                             <label class="form-check-label" for="is_active">Active</label>
                                         </div>
                                     </div>
@@ -449,8 +505,20 @@ include '../../includes/header.php';
                     document.getElementById('ICAN_mem_no').value = auditor.ICAN_mem_no || '';
                     document.getElementById('class').value = auditor.class || '';
                     document.getElementById('address').value = auditor.address || '';
-                    document.getElementById('countable_count').value = auditor.countable_count || 0;
-                    document.getElementById('uncountable_count').value = auditor.uncountable_count || 0;
+                    document.getElementById('max_countable').value = auditor.max_countable || 100;
+                    document.getElementById('max_countable_override').value = auditor.max_countable_override || '';
+                    document.getElementById('countable_override_used').value = auditor.countable_count || 0;
+
+                    // Show usage info
+                    const used  = parseInt(auditor.countable_count || 0);
+                    const cap   = parseInt(auditor.max_countable_override || auditor.max_countable || 100);
+                    const pct   = cap > 0 ? Math.round((used / cap) * 100) : 0;
+                    const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
+                    document.getElementById('auditor_usage_info').innerHTML =
+                        `<span style="color:${color};font-weight:600;">Used: ${used} / ${cap} (${pct}%)</span>` +
+                        (auditor.max_countable_override
+                            ? ` <span style="color:#f59e0b;">— FY override active</span>`
+                            : '');
                     document.getElementById('is_active').checked = auditor.is_active == 1;
 
                     new bootstrap.Modal(document.getElementById('auditorModal')).show();

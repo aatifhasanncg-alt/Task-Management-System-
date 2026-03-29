@@ -20,17 +20,7 @@ define('UPLOAD_URL',          APP_URL . '/uploads/');
 define('MAX_FILE_SIZE',       5 * 1024 * 1024); // 5MB
 define('ALLOWED_EXTENSIONS',  ['pdf','doc','docx','xls','xlsx','jpg','jpeg','png']);
 
-// ── Task statuses — must match task_status.status_name in DB exactly ──────────
-define('TASK_STATUSES', [
-    'Not Started'     => ['label' => 'Not Started',     'color' => '#9ca3af', 'bg' => '#f3f4f6'],
-    'HBC'             => ['label' => 'HBC',             'color' => '#3b82f6', 'bg' => '#eff6ff'],
-    'WIP'             => ['label' => 'WIP',             'color' => '#f59e0b', 'bg' => '#fffbeb'],
-    'Pending'         => ['label' => 'Pending',         'color' => '#ef4444', 'bg' => '#fef2f2'],
-    'Next Year'       => ['label' => 'Next Year',       'color' => '#8b5cf6', 'bg' => '#f5f3ff'],
-    'Corporate Team'  => ['label' => 'Corporate Team',  'color' => '#06b6d4', 'bg' => '#ecfeff'],
-    'NON Performance' => ['label' => 'NON Performance', 'color' => '#ec4899', 'bg' => '#fdf2f8'],
-    'Done'            => ['label' => 'Done',            'color' => '#10b981', 'bg' => '#ecfdf5'],
-]);
+
 
 // ── Task priorities ───────────────────────────────────────────────────────────
 define('TASK_PRIORITIES', [

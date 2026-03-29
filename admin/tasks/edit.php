@@ -22,10 +22,7 @@ $taskStmt = $db->prepare("
            b.branch_name,
            c.company_name,
            at2.full_name AS assigned_to_name,
-           au.auditor_name,
-           au.max_limit,
-           au.countable_count,
-           au.uncountable_count
+           au.auditor_name
     FROM tasks t
     LEFT JOIN task_status ts ON ts.id = t.status_id
     LEFT JOIN departments d  ON d.id  = t.department_id
@@ -41,7 +38,16 @@ if (!$task) { setFlash('error', 'Task not found.'); header('Location: index.php'
 
 // ── Load lookups ──────────────────────────────────────────────────────────────
 $taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
-$companies    = $db->query("SELECT id, company_name FROM companies WHERE is_active=1 ORDER BY company_name")->fetchAll();
+$companiesStmt = $db->prepare("
+    SELECT id, company_name,
+           COALESCE(pan_number,'')   AS pan_number,
+           COALESCE(company_code,'') AS company_code
+    FROM companies
+    WHERE is_active=1 AND branch_id = ?
+    ORDER BY company_name
+");
+$companiesStmt->execute([$adminUser['branch_id']]);
+$companies = $companiesStmt->fetchAll();
 
 $allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
 
@@ -60,7 +66,7 @@ $transferStaff = $db->query("
 
 // All STAFF in this task's department (any branch) for assignment
 $deptStaff = $db->prepare("
-    SELECT u.id, u.full_name, b.branch_name
+    SELECT u.id, u.full_name, u.employee_id, b.branch_name
     FROM users u
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
@@ -74,19 +80,26 @@ $deptStaff = $deptStaff->fetchAll();
 
 // Fiscal years
 $fiscalYears = $db->query("
-    SELECT fy_code FROM fiscal_years ORDER BY fy_code DESC
-")->fetchAll(PDO::FETCH_COLUMN);
+    SELECT fy_code, fy_label, is_current
+    FROM fiscal_years WHERE is_active=1 ORDER BY fy_code DESC
+")->fetchAll(PDO::FETCH_ASSOC);
 
 // Auditors — loaded fresh for current audit_nature (also via AJAX on change)
 $currentAuditors = [];
 if ($task['audit_nature']) {
+    $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
     $audStmt = $db->prepare("
-        SELECT id, auditor_name, max_limit, countable_count, uncountable_count
-        FROM auditors
-        WHERE is_active = 1
-        ORDER BY auditor_name
+        SELECT a.id, a.auditor_name,
+               COALESCE(q.countable_count, 0)                      AS countable_count,
+               COALESCE(q.uncountable_count, 0)                    AS uncountable_count,
+               COALESCE(q.max_countable_override, a.max_countable) AS max_limit
+        FROM auditors a
+        LEFT JOIN auditor_yearly_quota q
+               ON q.auditor_id = a.id AND q.fiscal_year_id = ?
+        WHERE a.is_active = 1
+        ORDER BY a.auditor_name
     ");
-    $audStmt->execute();
+    $audStmt->execute([$fyId ?: 0]);
     $currentAuditors = $audStmt->fetchAll();
 }
 
@@ -110,104 +123,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
 
     if (!$title) $errors[] = 'Task title is required.';
 
-    // Validate auditor capacity
-    if (!$errors && $auditorId && $auditNature) {
-        $audRow = $db->prepare("SELECT * FROM auditors WHERE id = ? AND is_active = 1");
-        $audRow->execute([$auditorId]);
-        $audRow = $audRow->fetch();
-
-        if ($audRow) {
-            $currentCount = $auditNature === 'countable'
-                ? $audRow['countable_count']
-                : $audRow['uncountable_count'];
-
-            // Only check limit if auditor is being changed
-            if ($auditorId != $task['auditor_id'] || $auditNature !== $task['audit_nature']) {
-                if ($auditNature === 'countable' && $currentCount >= $audRow['max_limit']) {
-                    $errors[] = "Auditor \"{$audRow['auditor_name']}\" has reached their countable limit ({$audRow['max_limit']}).";
-                }
-            }
-        }
-    }
-
     if (!$errors) {
         $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
         $stRow->execute([$status]);
         $statusId = (int)($stRow->fetchColumn() ?: 1);
 
-        // Detect auditor change to update counts
-        $oldAuditorId   = (int)$task['auditor_id'];
-        $oldAuditNature = $task['audit_nature'];
+        $auditNature = $_POST['audit_nature'] ? strtolower(trim($_POST['audit_nature'])) : null;
+        $auditorId   = (int)($_POST['auditor_id'] ?? 0) ?: null;
+
+        // Cap check — only when auditor or nature actually changes
+        $oldAuditorId   = (int)($task['auditor_id']   ?? 0);
+        $oldAuditNature = strtolower($task['audit_nature'] ?? '');
+        $auditorChanged = $auditorId  !== $oldAuditorId;
+        $natureChanged  = $auditNature !== $oldAuditNature;
+        if ($auditNature === 'countable' && ($auditorChanged || $natureChanged)) {
+        $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
+
+        $capStmt = $db->prepare("
+            SELECT
+                a.auditor_name,
+                COALESCE(q.max_countable_override, a.max_countable) AS cap,
+                COALESCE(q.countable_count, 0)                      AS used
+            FROM auditors a
+            LEFT JOIN auditor_yearly_quota q
+                ON q.auditor_id     = a.id
+                AND q.fiscal_year_id = ?
+            WHERE a.id = ?
+        ");
+        $capStmt->execute([$fyId ?: 0, $auditorId]);
+        $capData = $capStmt->fetch();
+
+        if ($capData && (int)$capData['used'] >= (int)$capData['cap']) {
+            $errors[] = "Auditor \"{$capData['auditor_name']}\" has reached their countable limit
+                        ({$capData['cap']}) for this fiscal year.";
+        }
+    }
+
+       if (!$errors) {
+        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+        $stRow->execute([$status]);
+        $statusId = (int)($stRow->fetchColumn() ?: 1);
 
         $db->prepare("
             UPDATE tasks SET
-                title        = ?,
-                description  = ?,
-                company_id   = ?,
-                assigned_to  = ?,
-                status_id    = ?,
-                priority     = ?,
-                due_date     = ?,
-                fiscal_year  = ?,
-                remarks      = ?,
-                audit_nature = ?,
-                auditor_id   = ?,
-                updated_at   = NOW()
+                title        = ?, description  = ?, company_id   = ?,
+                assigned_to  = ?, status_id    = ?, priority     = ?,
+                due_date     = ?, fiscal_year  = ?, remarks      = ?,
+                audit_nature = ?, auditor_id   = ?, updated_at   = NOW()
             WHERE id = ?
         ")->execute([
             $title, $desc, $compId, $assignTo, $statusId,
             $priority, $dueDate, $fy, $remarks,
-            $auditNature ?: null, $auditorId, $id
+            $auditNature ?: null, $auditorId, $id,
         ]);
 
-        // ── Update auditor counts ─────────────────────────────────────────────
-        // Decrement old auditor if it changed
-        if ($oldAuditorId && ($oldAuditorId !== $auditorId || $oldAuditNature !== $auditNature)) {
-            if ($oldAuditNature === 'countable') {
-                $db->prepare("UPDATE auditors SET countable_count = GREATEST(0, countable_count - 1) WHERE id = ?")->execute([$oldAuditorId]);
-            } elseif ($oldAuditNature === 'uncountable') {
-                $db->prepare("UPDATE auditors SET uncountable_count = GREATEST(0, uncountable_count - 1) WHERE id = ?")->execute([$oldAuditorId]);
-            }
-        }
+         $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
 
-        // Increment new auditor
-        if ($auditorId && ($auditorId !== $oldAuditorId || $auditNature !== $oldAuditNature)) {
-            if ($auditNature === 'countable') {
-                $db->prepare("UPDATE auditors SET countable_count = countable_count + 1 WHERE id = ?")->execute([$auditorId]);
-            } elseif ($auditNature === 'uncountable') {
-                $db->prepare("UPDATE auditors SET uncountable_count = uncountable_count + 1 WHERE id = ?")->execute([$auditorId]);
+        if ($fyId && ($auditorChanged || $natureChanged)) {
+
+            // Decrement old auditor
+            if ($oldAuditorId && $oldAuditNature) {
+                $col = $oldAuditNature === 'countable' ? 'countable_count' : 'uncountable_count';
+                $db->prepare("
+                    INSERT INTO auditor_yearly_quota
+                        (auditor_id, fiscal_year_id, countable_count, uncountable_count)
+                    VALUES (?, ?, 0, 0)
+                    ON DUPLICATE KEY UPDATE
+                        {$col} = GREATEST(0, {$col} - 1)
+                ")->execute([$oldAuditorId, $fyId]);
+            }
+
+            // Increment new auditor
+            if ($auditorId && $auditNature) {
+                $col = $auditNature === 'countable' ? 'countable_count' : 'uncountable_count';
+                $db->prepare("
+                    INSERT INTO auditor_yearly_quota
+                        (auditor_id, fiscal_year_id, countable_count, uncountable_count)
+                    VALUES (?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        {$col} = {$col} + 1
+                ")->execute([
+                    $auditorId, $fyId,
+                    $auditNature === 'countable'   ? 1 : 0,
+                    $auditNature === 'uncountable' ? 1 : 0,
+                ]);
             }
         }
 
         // Workflow log for assignment change
-        if ($assignTo && $assignTo != $task['assigned_to']) {
-            try {
-                $db->prepare("
-                    INSERT INTO task_workflow
-                    (task_id, action, from_user_id, to_user_id, from_dept_id, to_dept_id, old_status, new_status, remarks)
-                    VALUES (?, 'assigned', ?, ?, ?, ?, ?, ?, ?)
-                ")->execute([
-                    $id, $user['id'], $assignTo,
-                    $task['department_id'], $task['department_id'],
-                    $task['status'], $status, $remarks
-                ]);
-            } catch (Exception $e) {}
+       if ($assignTo && $assignTo != $task['assigned_to']) {
+        try {
+            $db->prepare("
+                INSERT INTO task_workflow
+                (task_id, action, from_user_id, to_user_id,
+                 from_dept_id, to_dept_id, old_status, new_status, remarks)
+                VALUES (?, 'assigned', ?, ?, ?, ?, ?, ?, ?)
+            ")->execute([
+                $id, $user['id'], $assignTo,
+                $task['department_id'], $task['department_id'],
+                $task['status'], $status, $remarks
+            ]);
+        } catch (Exception $e) {}
 
-            notify(
-                $assignTo,
-                'Task Assigned to You',
-                "Task {$task['task_number']} has been assigned to you.",
-                'task',
-                APP_URL . '/staff/tasks/view.php?id=' . $id
-            );
+        notify($assignTo, 'Task Assigned to You',
+            "Task {$task['task_number']} has been assigned to you.",
+            'task', APP_URL . '/staff/tasks/view.php?id=' . $id);
+            }
+
+            logActivity("Task updated: {$task['task_number']}", 'tasks');
+            setFlash('success', 'Task updated successfully.');
+            header("Location: edit.php?id={$id}"); exit;
         }
-
-        logActivity("Task updated: {$task['task_number']}", 'tasks');
-        setFlash('success', 'Task updated successfully.');
-        header("Location: edit.php?id={$id}"); exit;
     }
 }
-
 // ── POST: Transfer department ─────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
     verifyCsrf();
@@ -280,6 +308,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
 $pageTitle = 'Edit Task: ' . $task['task_number'];
 include '../../includes/header.php';
 ?>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
 <div class="app-wrapper">
 <?php include '../../includes/sidebar_admin.php'; ?>
 <div class="main-content">
@@ -343,13 +374,18 @@ include '../../includes/header.php';
 
                         <div class="col-md-4">
                             <label class="form-label-mis">Company / Client</label>
-                            <select name="company_id" class="form-select">
+                            <select name="company_id" id="company_select" class="form-select">
                                 <option value="">-- None --</option>
-                                <?php foreach ($companies as $c): ?>
-                                    <option value="<?= $c['id'] ?>"
-                                        <?= ($task['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
-                                        <?= htmlspecialchars($c['company_name']) ?>
-                                    </option>
+                                <?php foreach ($companies as $c):
+                                    $meta = [];
+                                    if (!empty($c['pan_number']))   $meta[] = $c['pan_number'];
+                                    if (!empty($c['company_code'])) $meta[] = $c['company_code'];
+                                    $metaStr = $meta ? ' — ' . implode(' | ', $meta) : '';
+                                    $sel = ((int)($task['company_id'] ?? 0) === (int)$c['id']) ? 'selected' : '';
+                                ?>
+                                <option value="<?= $c['id'] ?>" <?= $sel ?>>
+                                    <?= htmlspecialchars($c['company_name'] . $metaStr) ?>
+                                </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -389,51 +425,54 @@ include '../../includes/header.php';
                             <select name="fiscal_year" class="form-select">
                                 <option value="">-- Select FY --</option>
                                 <?php foreach ($fiscalYears as $fy): ?>
-                                    <option value="<?= $fy ?>"
-                                        <?= ($task['fiscal_year'] ?? '') === $fy ? 'selected' : '' ?>>
-                                        <?= $fy ?>
-                                    </option>
+                                <option value="<?= htmlspecialchars($fy['fy_code']) ?>"
+                                    <?= ($task['fiscal_year'] ?? '') === $fy['fy_code'] ? 'selected' : '' ?>
+                                    <?= $fy['is_current'] ? 'style="font-weight:700;color:#16a34a;"' : '' ?>>
+                                    <?= htmlspecialchars($fy['fy_label'] ?: $fy['fy_code']) ?>
+                                    <?= $fy['is_current'] ? ' ★ Current' : '' ?>
+                                </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
 
                         <!-- ── Assign To: ALL staff of this department ── -->
                         <div class="col-md-8">
-                            <label class="form-label-mis">Assign To
-                                <span style="font-size:.72rem;color:#9ca3af;">
-                                    — all <?= htmlspecialchars($task['dept_name']) ?> staff
-                                </span>
-                            </label>
-                            <select name="assigned_to" class="form-select">
+                        <label class="form-label-mis">Assign To
+                            <span style="font-size:.72rem;color:#9ca3af;">
+                                — all <?= htmlspecialchars($task['dept_name']) ?> staff
+                            </span>
+                        </label>
+                       
+                        <select name="assigned_to" id="assigned_to_sel" class="form-select">
                                 <option value="">-- Unassigned --</option>
-                                <?php foreach ($deptStaff as $s): ?>
-                                    <option value="<?= $s['id'] ?>"
-                                        <?= ($task['assigned_to'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                        <?= htmlspecialchars($s['full_name']) ?>
-                                        — <?= htmlspecialchars($s['branch_name']) ?>
-                                    </option>
+                                <?php foreach ($deptStaff as $s):
+                                    $sel = ((int)($task['assigned_to'] ?? 0) === (int)$s['id']) ? 'selected' : '';
+                                    $label = $s['full_name'];
+                                    if ($s['employee_id'])   $label .= ' (' . $s['employee_id'] . ')';
+                                    if ($s['branch_name'])   $label .= ' — ' . $s['branch_name'];
+                                ?>
+                                <option value="<?= $s['id'] ?>" <?= $sel ?>>
+                                    <?= htmlspecialchars($label) ?>
+                                </option>
                                 <?php endforeach; ?>
-                                <?php if (empty($deptStaff)): ?>
-                                    <option disabled>No staff in this department</option>
-                                <?php endif; ?>
                             </select>
-                        </div>
+                    </div>
 
                         <!-- ── Audit Nature ── -->
                         <div class="col-md-4">
                             <label class="form-label-mis">Audit Nature</label>
                             <select name="audit_nature" id="audit_nature"
-                                    class="form-select" onchange="loadAuditors(this.value)">
-                                <option value="">-- Select --</option>
-                                <option value="countable"
-                                    <?= ($task['audit_nature'] ?? '') === 'countable' ? 'selected' : '' ?>>
-                                    Countable
-                                </option>
-                                <option value="uncountable"
-                                    <?= ($task['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
-                                    Uncountable
-                                </option>
-                            </select>
+                                class="form-select" onchange="loadAuditors(this.value)">
+                            <option value="">-- Select --</option>
+                            <option value="countable"
+                                <?= strtolower($task['audit_nature'] ?? '') === 'countable' ? 'selected' : '' ?>>
+                                Countable
+                            </option>
+                            <option value="uncountable"
+                                <?= strtolower($task['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
+                                Uncountable
+                            </option>
+                        </select>
                         </div>
 
                         <!-- ── Auditor ── -->
@@ -446,10 +485,9 @@ include '../../includes/header.php';
                             <select name="auditor_id" id="auditor_id" class="form-select">
                                 <option value="">-- Select Auditor --</option>
                                 <?php foreach ($currentAuditors as $a):
-                                    $count = ($task['audit_nature'] === 'countable')
-                                        ? $a['countable_count']
-                                        : $a['uncountable_count'];
-                                    $atLimit = ($task['audit_nature'] === 'countable')
+                                    $nature  = strtolower($task['audit_nature'] ?? '');
+                                    $count   = ($nature === 'countable') ? $a['countable_count'] : $a['uncountable_count'];
+                                    $atLimit = ($nature === 'countable')
                                         && $a['countable_count'] >= $a['max_limit']
                                         && $a['id'] != $task['auditor_id'];
                                 ?>
@@ -460,8 +498,8 @@ include '../../includes/header.php';
                                         data-uncountable="<?= $a['uncountable_count'] ?>"
                                         data-limit="<?= $a['max_limit'] ?>">
                                         <?= htmlspecialchars($a['auditor_name']) ?>
-                                        (<?= $task['audit_nature'] === 'countable' ? $a['countable_count'] : $a['uncountable_count'] ?>
-                                        <?= $task['audit_nature'] === 'countable' ? '/ ' . $a['max_limit'] : '' ?>)
+                                        (<?= strtolower($task['audit_nature'] ?? '') === 'countable' ? $a['countable_count'] : $a['uncountable_count'] ?>
+                                             <?= strtolower($task['audit_nature'] ?? '') === 'countable' ? '/ ' . $a['max_limit'] : '' ?>)
                                         <?= $atLimit ? '— FULL' : '' ?>
                                     </option>
                                 <?php endforeach; ?>
@@ -625,18 +663,6 @@ include '../../includes/header.php';
             </div>
         </div>
 
-        <!-- Status Reference -->
-        <div class="card-mis p-3" style="border-left:3px solid var(--gold);">
-            <p class="mb-2" style="font-size:.8rem;font-weight:600;">Status Reference</p>
-            <?php foreach (TASK_STATUSES as $k => $s): ?>
-                <div class="d-flex align-items-center gap-2 mb-1">
-                    <div style="width:8px;height:8px;border-radius:50%;
-                                background:<?= $s['color'] ?>;flex-shrink:0;"></div>
-                    <span style="font-size:.78rem;color:#6b7280;"><?= $s['label'] ?></span>
-                </div>
-            <?php endforeach; ?>
-        </div>
-
     </div><!-- end col-lg-4 -->
 </div><!-- end row -->
 </div>
@@ -644,7 +670,64 @@ include '../../includes/header.php';
 <?php include '../../includes/footer.php'; ?>
 
 <script>
-// ── Transfer dept: filter admin dropdown by selected dept ─────────────────────
+// ── Tom Select: Company ───────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function () {
+
+    new TomSelect('#company_select', {
+        placeholder: 'Search company, PAN or code…',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        render: {
+            option: function(data, escape) {
+                const parts  = data.text.split(' — ');
+                const name   = parts[0] || '';
+                const meta   = parts[1] || '';
+                return `<div style="padding:.4rem .2rem;">
+                    <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
+                    ${meta ? `<div style="font-size:.75rem;color:#6b7280;">${escape(meta)}</div>` : ''}
+                </div>`;
+            },
+            item: function(data, escape) {
+                return `<div>${escape(data.text.split(' — ')[0])}</div>`;
+            }
+        }
+    });
+
+    // ── Tom Select: Assigned To ───────────────────────────────────────────────
+    new TomSelect('#assigned_to_sel', {
+        placeholder: 'Search staff by name or ID…',
+        allowEmptyOption: true,
+        maxOptions: 300,
+        searchField: ['text'],
+        render: {
+            option: function(data, escape) {
+                const parts  = data.text.split(' — ');
+                const name   = parts[0] || '';
+                const branch = parts[1] || '';
+                return `<div style="padding:.4rem .2rem;">
+                    <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
+                    ${branch ? `<div style="font-size:.75rem;color:#6b7280;">${escape(branch)}</div>` : ''}
+                </div>`;
+            },
+            item: function(data, escape) {
+                const name = data.text.split(' — ')[0];
+                return `<div>${escape(name)}</div>`;
+            }
+        }
+    });
+
+    // Init capacity bar on page load
+    const nature = document.getElementById('audit_nature').value;
+    if (nature) {
+        document.getElementById('auditor-wrap').style.display = 'block';
+        document.getElementById('auditor-limit-note').textContent =
+            nature === 'countable' ? '(limit applies)' : '(no limit)';
+        updateCapacityBar();
+    }
+});
+
+// ── Transfer dept filter ──────────────────────────────────────────────────────
 function filterTransferStaff() {
     const sel      = document.getElementById('transferDept');
     const option   = sel.options[sel.selectedIndex];
@@ -654,26 +737,21 @@ function filterTransferStaff() {
     const note     = document.getElementById('staffFilterNote');
 
     Array.from(staffSel.options).forEach(o => {
-        if (!o.value) return; // keep "Unassigned"
+        if (!o.value) return;
         o.hidden = deptCode ? (o.dataset.deptcode !== deptCode) : false;
     });
 
-    // Reset if current selection is hidden
     const curr = staffSel.options[staffSel.selectedIndex];
     if (curr && curr.hidden) staffSel.value = '';
-
     note.textContent = deptCode ? `(${deptName} admins)` : '(select dept first)';
 }
 
-// ── Load auditors via AJAX on audit_nature change ─────────────────────────────
+// ── Load auditors via AJAX ────────────────────────────────────────────────────
 function loadAuditors(nature) {
     const wrap = document.getElementById('auditor-wrap');
     const sel  = document.getElementById('auditor_id');
 
-    if (!nature) {
-        wrap.style.display = 'none';
-        return;
-    }
+    if (!nature) { wrap.style.display = 'none'; return; }
     wrap.style.display = 'block';
 
     document.getElementById('auditor-limit-note').textContent =
@@ -682,79 +760,65 @@ function loadAuditors(nature) {
     sel.innerHTML = '<option value="">Loading…</option>';
 
     fetch(`<?= APP_URL ?>/ajax/get_auditors.php?nature=${encodeURIComponent(nature)}`)
-        .then(r => r.json())
-        .then(data => {
-            sel.innerHTML = '<option value="">-- Select Auditor --</option>';
-            data.forEach(a => {
-                const count   = nature === 'countable' ? a.countable_count : a.uncountable_count;
-                const atLimit = nature === 'countable' && a.countable_count >= a.max_limit;
-                const label   = nature === 'countable'
-                    ? `${a.name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
-                    : `${a.name} (${a.uncountable_count})`;
-                const opt = document.createElement('option');
-                opt.value = a.id;
-                opt.text  = label;
-                opt.disabled = atLimit;
-                opt.dataset.countable   = a.countable_count;
-                opt.dataset.uncountable = a.uncountable_count;
-                opt.dataset.limit       = a.max_limit;
-                // Re-select if same auditor
-                if (a.id == <?= (int)($task['auditor_id'] ?? 0) ?>) opt.selected = true;
-                sel.appendChild(opt);
-            });
-            updateCapacityBar();
-        })
-        .catch(() => {
-            sel.innerHTML = '<option value="">Error loading auditors</option>';
+    .then(r => r.json())
+    .then(data => {
+        sel.innerHTML = '<option value="">-- Select Auditor --</option>';
+        if (!Array.isArray(data)) throw new Error('Invalid data');
+
+        data.forEach(a => {
+            // ✅ FIX: use lowercase comparison to match get_auditors.php response
+            const atLimit = nature === 'countable' && a.at_limit;
+            const label   = nature === 'countable'
+                ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
+                : `${a.auditor_name} (${a.uncountable_count} tasks)`;
+
+            const opt         = document.createElement('option');
+            opt.value         = a.id;
+            opt.text          = label;
+            opt.disabled      = atLimit;
+            opt.dataset.countable   = a.countable_count;
+            opt.dataset.uncountable = a.uncountable_count;
+            opt.dataset.limit       = a.max_limit;
+            sel.appendChild(opt);
         });
+
+        updateCapacityBar();
+    })
+    .catch(() => {
+        sel.innerHTML = '<option value="">Error loading auditors</option>';
+    });
 }
 
 // ── Capacity bar ──────────────────────────────────────────────────────────────
 function updateCapacityBar() {
-    const nature   = document.getElementById('audit_nature').value;
-    const sel      = document.getElementById('auditor_id');
-    const opt      = sel.options[sel.selectedIndex];
-    const capDiv   = document.getElementById('auditor-capacity');
+    const nature  = document.getElementById('audit_nature').value;
+    const sel     = document.getElementById('auditor_id');
+    const capDiv  = document.getElementById('auditor-capacity');
+    const opt     = sel.options[sel.selectedIndex];
 
-    if (!opt || !opt.value || !nature) {
-        capDiv.style.display = 'none';
-        return;
-    }
+    if (!opt || !opt.value || !nature) { capDiv.style.display = 'none'; return; }
 
-    const count = nature === 'countable'
-        ? parseInt(opt.dataset.countable  || 0)
-        : parseInt(opt.dataset.uncountable || 0);
-    const limit = parseInt(opt.dataset.limit || 100);
+    const used  = parseInt(opt.dataset.countable  || 0);
+    const limit = parseInt(opt.dataset.limit       || 0);
+    const unc   = parseInt(opt.dataset.uncountable || 0);
 
     if (nature === 'uncountable') {
-        // Just show count, no limit bar
         document.getElementById('capacity-label').textContent = 'Uncountable tasks';
-        document.getElementById('capacity-text').textContent  = count;
+        document.getElementById('capacity-text').textContent  = unc;
         document.getElementById('capacity-bar').style.width   = '0%';
         capDiv.style.display = 'block';
         return;
     }
 
-    const pct   = Math.min(100, Math.round((count / limit) * 100));
+    const pct   = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
     const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
 
-    document.getElementById('capacity-label').textContent = 'Countable capacity used';
-    document.getElementById('capacity-text').textContent  = `${count} / ${limit} (${pct}%)`;
-    document.getElementById('capacity-bar').style.width   = pct + '%';
+    document.getElementById('capacity-label').textContent    = 'Countable capacity used';
+    document.getElementById('capacity-text').textContent     = `${used} / ${limit} (${pct}%)`;
+    document.getElementById('capacity-bar').style.width      = pct + '%';
     document.getElementById('capacity-bar').style.background = color;
     capDiv.style.display = 'block';
 }
 
 document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
-
-// Run on page load if audit_nature already set
-document.addEventListener('DOMContentLoaded', () => {
-    const nature = document.getElementById('audit_nature').value;
-    if (nature) {
-        document.getElementById('auditor-wrap').style.display = 'block';
-        document.getElementById('auditor-limit-note').textContent =
-            nature === 'countable' ? '(limit applies)' : '(no limit)';
-        updateCapacityBar();
-    }
-});
 </script>

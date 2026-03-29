@@ -790,7 +790,7 @@ include '../../includes/header.php';
                                             <?php foreach ($taskStatuses as $ts):
                                                 $statusKey = strtolower(str_replace(' ', '-', $ts['status_name']));
                                                 $isChecked = ($task['status'] ?? '') === $ts['status_name'];
-                                                $statusColor = TASK_STATUSES[$ts['status_name']]['color'] ?? '#9ca3af';
+                                                $statusColor = $ts['color'] ?? '#9ca3af';
                                                 ?>
                                                 <div class="form-check mb-2">
                                                     <input class="form-check-input" type="radio" name="new_status"

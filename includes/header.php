@@ -11,6 +11,7 @@ $__user = isset($_SESSION['user_id']) ? (function () {
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
@@ -29,7 +30,9 @@ $__user = isset($_SESSION['user_id']) ? (function () {
         window.APP_USER_ID = <?= $__user['id'] ?? 0 ?>;
         window.APP_ROLE = '<?= htmlspecialchars($__user['role'] ?? 'admin') ?>';
     </script>
- 
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 </head>
 
 <body>
@@ -40,4 +43,5 @@ $__user = isset($_SESSION['user_id']) ? (function () {
             <button onclick="this.parentElement.remove()"
                 style="background:none;border:none;cursor:pointer;float:right;">&times;</button>
         </div>
+        
     <?php endif; ?>

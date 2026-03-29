@@ -24,7 +24,7 @@ $userBranch = $userBranchStmt->fetch();
 $allBanks    = $db->query("SELECT id, bank_name, address FROM bank_references WHERE is_active=1 ORDER BY bank_name")->fetchAll();
 $fiscalYears = $db->query("
     SELECT fy_code
-    FROM fiscal_years 
+    FROM fiscal_years WHERE is_active =1
     ORDER BY fy_code DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
 
@@ -130,8 +130,8 @@ else                           include '../../includes/sidebar_staff.php';
 </div>
 
 <!-- Fiscal Year Filter -->
-<div class="filter-bar mb-4">
-    <form method="GET" class="row g-2 align-items-end">
+<div class="filter-bar mb-4 w-100">
+    <form method="GET" class="row g-2 align-items-end w-100">
         <div class="col-md-3">
             <label class="form-label-mis">Fiscal Year</label>
             <select name="fiscal_year" class="form-select form-select-sm">
@@ -142,7 +142,7 @@ else                           include '../../includes/sidebar_staff.php';
             </select>
         </div>
         <div class="col-md-2 d-flex gap-1">
-            <button type="submit" class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i></button>
+            <button type="submit" class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i> Filter</button>
             <a href="summary.php" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times"></i></a>
         </div>
     </form>

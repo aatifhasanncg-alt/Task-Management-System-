@@ -165,15 +165,17 @@ include '../../includes/header.php';
                                         <i class="fas fa-tag me-1"></i>Status
                                     </button>
                                     <ul class="dropdown-menu dropdown-menu-end" style="min-width:160px; z-index:1055;">
-                                        <?php foreach (TASK_STATUSES as $k => $s):
-                                            if ($k === $t['status'])
-                                                continue; ?>
+                                        <?php
+                                        $allStatuses = $db->query("SELECT id, status_name, color FROM task_status ORDER BY id")->fetchAll();
+                                        foreach ($allStatuses as $s):
+                                            if ($s['status_name'] === $t['status']) continue;
+                                        ?>
                                             <li>
                                                 <a class="dropdown-item" href="#" style="font-size:.82rem;"
-                                                    onclick="quickStatus(<?= $t['id'] ?>,'<?= $k ?>',this);return false;">
+                                                    onclick="quickStatus(<?= $t['id'] ?>,'<?= htmlspecialchars($s['status_name']) ?>',this);return false;">
                                                     <span
-                                                        style="width:8px;height:8px;border-radius:50%;background:<?= $s['color'] ?>;display:inline-block;margin-right:.4rem;"></span>
-                                                    <?= $s['label'] ?>
+                                                        style="width:8px;height:8px;border-radius:50%;background:<?= htmlspecialchars($s['color'] ?? '#9ca3af') ?>;display:inline-block;margin-right:.4rem;"></span>
+                                                    <?= htmlspecialchars($s['status_name']) ?>
                                                 </a>
                                             </li>
                                         <?php endforeach; ?>

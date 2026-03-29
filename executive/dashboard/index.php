@@ -21,6 +21,7 @@ $byStatus = array_column($tSt->fetchAll(), 'cnt', 'status');
 $stats['total_tasks'] = array_sum($byStatus);
 $stats['hbc'] = $byStatus['HBC'] ?? 0;
 $stats['wip'] = $byStatus['WIP'] ?? 0;
+$stats['not_started'] = $byStatus['Not Started'] ?? 0;
 $stats['pending'] = $byStatus['Pending'] ?? 0;
 $stats['next_year'] = $byStatus['Next Year'] ?? 0;
 $stats['done'] = $byStatus['Done'] ?? 0;
@@ -169,6 +170,13 @@ include '../../includes/header.php';
                                         <a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/industry.php">
                                             <i class="fas fa-building me-2 text-secondary"></i> Industry
                                         </a>
+                                        <a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/department.php">
+                                            <i class="fas fa-sitemap me-2 text-primary"></i> Departments
+                                        </a>
+
+                                        <a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/branch.php">
+                                            <i class="fas fa-code-branch me-2 text-success"></i> Branches
+                                        </a>
                                     </li>
                                 </ul>
                             </div>
@@ -176,33 +184,57 @@ include '../../includes/header.php';
                     </div>
                 </div>
             </div>
-
-            <!-- Main Stat Row -->
+            <h5 class="mb-3">Task Status</h5>
             <div class="row g-3 mb-4">
                 <?php
-                $mainStats = [
-                    ['Tasks Total', $stats['total_tasks'], 'fa-list-check', '#3b82f6', '#eff6ff'],
-                    ['WIP', $stats['wip'], 'fa-spinner', '#f59e0b', '#fffbeb'],
-                    ['Pending', $stats['pending'], 'fa-clock', '#ef4444', '#fef2f2'],
-                    ['HBC', $stats['hbc'], 'fa-hourglass', '#8b5cf6', '#f5f3ff'],
-                    ['Done', $stats['done'], 'fa-check-circle', '#10b981', '#ecfdf5'],
-                    ['Companies', $stats['companies'], 'fa-building', '#c9a84c', '#fefce8'],
-                    ['Staff', $stats['staff'], 'fa-users', '#06b6d4', '#ecfeff'],
-                    ['Admins', $stats['admins'], 'fa-user-shield', '#ec4899', '#fdf2f8'],
+                $statusCards = [
+                    ['Not Started', $stats['not_started'], 'fa-circle', '#6b7280', '#f3f4f6'],
+                    ['WIP', $stats['wip'], 'fa-person-digging', '#f59e0b', '#fffbeb'],
+                    ['Pending', $stats['pending'], 'fa-hourglass-half', '#ef4444', '#fef2f2'],
+                    ['HBC', $stats['hbc'], 'fa-hourglass-end', '#7c3aed', '#f5f3ff'],
+                    ['Done', $stats['done'], 'fa-circle-check', '#10b981', '#ecfdf5'],
                 ];
-                foreach ($mainStats as [$label, $val, $icon, $color, $bg]):
-                    ?>
-                    <div class="col-6 col-md-3 col-xl-3">
+                foreach ($statusCards as [$label, $val, $icon, $color, $bg]): ?>
+                    <div class="col-6 col-md-3 col-xl-2">
                         <div class="stat-card">
                             <div class="stat-card-icon" style="background:<?= $bg ?>;color:<?= $color ?>;">
                                 <i class="fas <?= $icon ?>"></i>
                             </div>
-                            <div class="stat-card-value" style="color:<?= $color ?>;"><?= number_format($val) ?></div>
+                            <div class="stat-card-value" style="color:<?= $color ?>;">
+                                <?= number_format($val) ?>
+                            </div>
                             <div class="stat-card-label"><?= $label ?></div>
                         </div>
                     </div>
                 <?php endforeach; ?>
             </div>
+            <h5 class="mb-3">Overview</h5>
+            <div class="row g-3 mb-4">
+                <?php
+                $otherCards = [
+                    ['Tasks Total', $stats['total_tasks'], 'fa-layer-group', '#2563eb', '#eff6ff'],
+                    ['Companies', $stats['companies'], 'fa-building', '#0ea5e9', '#ecfeff'],
+                    ['Staff', $stats['staff'], 'fa-users', '#14b8a6', '#f0fdfa'],
+                    ['Admins', $stats['admins'], 'fa-user-shield', '#db2777', '#fdf2f8'],
+                ];
+                foreach ($otherCards as [$label, $val, $icon, $color, $bg]): ?>
+                    <div class="col-6 col-md-3 col-xl-3">
+                        <div class="stat-card">
+                            <div class="stat-card-icon" style="background:<?= $bg ?>;color:<?= $color ?>;">
+                                <i class="fas <?= $icon ?>"></i>
+                            </div>
+                            <div class="stat-card-value" style="color:<?= $color ?>;">
+                                <?= number_format($val) ?>
+                            </div>
+                            <div class="stat-card-label">
+                                <?= $label ?>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <!-- Main Stat Row -->
+
 
             <div class="row g-4 mb-4">
 

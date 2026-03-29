@@ -137,10 +137,126 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {}
 
-        logActivity("Staff added: {$fullName} ({$employeeId})", 'users');
+        logActivity("Staff added: {$fullName}", 'users');
         setFlash('success', "Staff member \"{$fullName}\" added. Credentials sent to {$email}.");
         header("Location: view.php?id={$newId}"); exit; // ← redirect to view so QR is visible
     }
+}
+
+// ── Bulk Excel Import ─────────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
+    verifyCsrf();
+
+    if (!isset($_FILES['excel_file']) || $_FILES['excel_file']['error'] !== UPLOAD_ERR_OK) {
+        setFlash('error', 'Please upload a valid Excel file.');
+        header('Location: add.php'); exit;
+    }
+
+    require_once '../../vendor/autoload.php'; // PhpSpreadsheet
+
+    try {
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($_FILES['excel_file']['tmp_name']);
+        $sheet       = $spreadsheet->getActiveSheet();
+        $rows        = $sheet->toArray(null, true, true, true);
+
+        $imported = 0;
+        $skipped  = 0;
+        $skipReasons = [];
+
+        // Expected columns: A=full_name, B=username, C=email, D=phone,
+        //                   E=password, F=role_name, G=branch_name, H=dept_name,
+        //                   I=joining_date, J=address, K=emergency_contact
+        array_shift($rows); // remove header row
+
+        foreach ($rows as $lineNum => $row) {
+            $fullName  = trim($row['A'] ?? '');
+            $username  = trim($row['B'] ?? '');
+            $email     = trim($row['C'] ?? '');
+            $phone     = trim($row['D'] ?? '');
+            $password  = trim($row['E'] ?? '');
+            $roleName  = strtolower(trim($row['F'] ?? 'staff'));
+            $branchName= trim($row['G'] ?? '');
+            $deptName  = trim($row['H'] ?? '');
+            $joinDate  = trim($row['I'] ?? '');
+            $address   = trim($row['J'] ?? '');
+            $emergency = trim($row['K'] ?? '');
+
+            if (!$fullName || !$username || !$email) {
+                $skipped++;
+                $skipReasons[] = "Row " . ($lineNum + 1) . ": missing name/username/email";
+                continue;
+            }
+
+            // Check duplicates
+            $dup = $db->prepare("SELECT id FROM users WHERE username=? OR email=?");
+            $dup->execute([$username, $email]);
+            if ($dup->fetch()) {
+                $skipped++;
+                $skipReasons[] = "Row " . ($lineNum + 1) . ": {$email} or {$username} already exists";
+                continue;
+            }
+
+            // Resolve role
+            $roleRow = $db->prepare("SELECT id FROM roles WHERE role_name=?");
+            $roleRow->execute([$roleName]);
+            $roleId = $roleRow->fetchColumn() ?: null;
+            if (!$roleId) { $skipped++; $skipReasons[] = "Row ".($lineNum+1).": invalid role '{$roleName}'"; continue; }
+
+            // Resolve branch
+            $branchRow = $db->prepare("SELECT id FROM branches WHERE branch_name LIKE ? AND is_active=1 LIMIT 1");
+            $branchRow->execute(["%{$branchName}%"]);
+            $branchId = $branchRow->fetchColumn() ?: null;
+            if (!$branchId) { $skipped++; $skipReasons[] = "Row ".($lineNum+1).": branch '{$branchName}' not found"; continue; }
+
+            // Resolve dept
+            $deptRow = $db->prepare("SELECT id FROM departments WHERE dept_name LIKE ? AND is_active=1 LIMIT 1");
+            $deptRow->execute(["%{$deptName}%"]);
+            $deptId = $deptRow->fetchColumn() ?: null;
+            if (!$deptId) { $skipped++; $skipReasons[] = "Row ".($lineNum+1).": dept '{$deptName}' not found"; continue; }
+
+            $finalPass = $password ?: 'Welcome@123';
+            $hashed    = password_hash($finalPass, PASSWORD_DEFAULT);
+            $newSecret = $ga->createSecret();
+
+            $db->prepare("
+                INSERT INTO users
+                (full_name, username, email, phone, password, role_id,
+                 branch_id, department_id, joining_date, address,
+                 emergency_contact, ga_secret, ga_enabled, is_active, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,1,NOW())
+            ")->execute([
+                $fullName, $username, $email, $phone ?: null, $hashed,
+                $roleId, $branchId, $deptId,
+                $joinDate ?: null, $address ?: null, $emergency ?: null,
+                $newSecret,
+            ]);
+
+            // Send welcome email
+            try {
+                require_once '../../config/mailer.php';
+                $emailHtml = emailWrapper("
+                    <h2>Welcome to MISPro</h2>
+                    <p>Dear <strong>{$fullName}</strong>,</p>
+                    <p>Username: <strong>{$username}</strong></p>
+                    <p>Password: <strong>{$finalPass}</strong></p>
+                    <p>2FA Secret: <strong style='font-family:monospace'>{$newSecret}</strong></p>
+                    <p>Please set up Google Authenticator before your first login.</p>
+                ");
+                sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
+            } catch (Exception $e) {}
+
+            $imported++;
+        }
+
+        $msg = "Imported: {$imported}. Skipped: {$skipped}.";
+        if ($skipReasons) $msg .= " Reasons: " . implode('; ', array_slice($skipReasons, 0, 5));
+        setFlash($skipped > 0 && $imported === 0 ? 'error' : 'success', $msg);
+
+    } catch (Exception $e) {
+        setFlash('error', 'Excel parse error: ' . $e->getMessage());
+    }
+
+    header('Location: add.php'); exit;
 }
 
 include '../../includes/header.php';
@@ -157,7 +273,21 @@ include '../../includes/header.php';
     <a href="index.php" class="btn btn-outline-secondary btn-sm">
         <i class="fas fa-arrow-left me-1"></i>Back
     </a>
-    <h5 style="margin:0;">Add New Staff Member</h5>
+    <h5 style="margin:0;">Add Staff Member</h5>
+</div>
+
+<!-- Tab switcher -->
+<div style="display:flex;gap:.5rem;margin-bottom:1.5rem;border-bottom:2px solid #f3f4f6;padding-bottom:0;">
+    <button id="tab-single-btn" onclick="switchTab('single')"
+        style="background:none;border:none;padding:.6rem 1.2rem;font-size:.88rem;font-weight:600;
+               cursor:pointer;border-bottom:2px solid #c9a84c;margin-bottom:-2px;color:#c9a84c;">
+        <i class="fas fa-user me-1"></i>Single Staff
+    </button>
+    <button id="tab-bulk-btn" onclick="switchTab('bulk')"
+        style="background:none;border:none;padding:.6rem 1.2rem;font-size:.88rem;font-weight:600;
+               cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:#9ca3af;">
+        <i class="fas fa-file-excel me-1"></i>Bulk Import via Excel
+    </button>
 </div>
 
 <?php if (!empty($errors)): ?>
@@ -171,6 +301,8 @@ include '../../includes/header.php';
 </div>
 <?php endif; ?>
 
+<!-- TAB 1 — Single Staff -->
+<div id="tab-single" style="display:block;">
 <div class="row g-4">
     <div class="col-lg-8">
         <form method="POST">
@@ -277,8 +409,14 @@ include '../../includes/header.php';
                         <div class="card-mis" style="border-left:3px solid #10b981;margin-top:.5rem;">
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-shield-alt" style="color:#10b981;"></i><span class="ms-2">Google 2FA Setup</span></h5>
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" id="enable2fa"
+                                        checked onchange="toggle2FA(this)">
+                                    <label class="form-check-label" for="enable2fa"
+                                        style="font-size:.78rem;color:#6b7280;">Enable 2FA</label>
+                                </div>
                             </div>
-                            <div class="card-mis-body">
+                            <div class="card-mis-body" id="twofa-body">
                                 <div class="row g-3 align-items-center">
                                     <div class="col-md-4 text-center">
                                         <div style="background:#fff;padding:10px;border-radius:10px;border:2px solid #e5e7eb;display:inline-block;">
@@ -391,34 +529,188 @@ include '../../includes/header.php';
     </div>
 </div>
 
+</div><!-- /tab-single -->
+
+<!-- TAB 2 — Bulk Import -->
+<div id="tab-bulk" style="display:none;">
+<div class="row g-4">
+    <div class="col-lg-8">
+
+        <div class="card-mis mb-4">
+            <div class="card-mis-header">
+                <h5><i class="fas fa-file-excel text-warning me-2"></i>Upload Excel File</h5>
+            </div>
+            <div class="card-mis-body">
+                <form method="POST" enctype="multipart/form-data" id="bulk-form">
+                    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                    <input type="hidden" name="bulk_import" value="1">
+
+                    <!-- Drop zone -->
+                    <div id="drop-zone"
+                        onclick="document.getElementById('bulk_file').click()"
+                        style="border:2px dashed #d1d5db;border-radius:12px;padding:2.5rem 1.5rem;
+                               text-align:center;cursor:pointer;transition:.2s;background:#fafafa;"
+                        ondragover="event.preventDefault();this.style.borderColor='#c9a84c';this.style.background='#fffbeb';"
+                        ondragleave="this.style.borderColor='#d1d5db';this.style.background='#fafafa';"
+                        ondrop="handleDrop(event)">
+                        <div id="drop-icon" style="margin-bottom:.75rem;">
+                            <i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>
+                        </div>
+                        <div id="drop-text" style="font-size:.9rem;font-weight:600;color:#1f2937;">
+                            Click or drag & drop your Excel file here
+                        </div>
+                        <div style="font-size:.78rem;color:#9ca3af;margin-top:.35rem;">
+                            Supports .xlsx, .xls · Max 5 MB · Up to 500 rows
+                        </div>
+                        <input type="file" id="bulk_file" name="excel_file"
+                               accept=".xlsx,.xls" style="display:none;"
+                               onchange="onFileSelect(this)">
+                    </div>
+
+                    <!-- File preview -->
+                    <div id="file-preview"
+                        style="display:none;margin-top:1rem;background:#f0fdf4;
+                               border:1px solid #bbf7d0;border-radius:8px;
+                               padding:.75rem 1rem;align-items:center;gap:.75rem;">
+                        <i class="fas fa-file-excel" style="color:#16a34a;font-size:1.4rem;"></i>
+                        <div style="flex:1;min-width:0;">
+                            <div id="file-name" style="font-size:.87rem;font-weight:600;color:#1f2937;
+                                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+                            <div id="file-size" style="font-size:.75rem;color:#6b7280;"></div>
+                        </div>
+                        <button type="button" onclick="clearFile()"
+                            style="background:none;border:none;color:#9ca3af;font-size:1rem;cursor:pointer;">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+
+                    <div class="d-flex gap-2 mt-3">
+                        <button type="submit" id="upload-btn" class="btn btn-gold" disabled>
+                            <i class="fas fa-upload me-1"></i>Upload & Process
+                        </button>
+                        <span id="upload-spinner"
+                            style="display:none;align-items:center;gap:.5rem;color:#6b7280;font-size:.85rem;">
+                            <i class="fas fa-spinner fa-spin"></i> Processing…
+                        </span>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- How it works -->
+        <div class="card-mis mb-4">
+            <div class="card-mis-header">
+                <h5><i class="fas fa-circle-question text-warning me-2"></i>How It Works</h5>
+            </div>
+            <div class="card-mis-body">
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered" style="font-size:.75rem;">
+                        <thead style="background:#0a0f1e;color:#c9a84c;">
+                            <tr>
+                                <th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th>
+                                <th>G</th><th>H</th><th>I</th><th>J</th><th>K</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>full_name*</td><td>username*</td><td>email*</td>
+                                <td>phone</td><td>password</td><td>role_name</td>
+                                <td>branch_name*</td><td>dept_name*</td>
+                                <td>joining_date</td><td>address</td><td>emergency_contact</td>
+                            </tr>
+                            <tr style="color:#9ca3af;font-style:italic;">
+                                <td>John Doe</td><td>johndoe</td><td>john@ask.com</td>
+                                <td>9800000000</td><td>Pass@123</td><td>staff</td>
+                                <td>Kathmandu</td><td>Tax</td>
+                                <td>2024-01-15</td><td>Lalitpur</td><td>9800000001</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div style="font-size:.72rem;color:#6b7280;margin-top:.5rem;">
+                    * Required. Password defaults to <strong>Welcome@123</strong> if blank.
+                    Role: <code>staff</code>, <code>admin</code>, or <code>executive</code>.
+                    2FA secret is auto-generated per user and emailed automatically.
+                </div>
+            </div>
+        </div>
+
+    </div><!-- col-lg-8 -->
+
+    <div class="col-lg-4">
+        <div class="card-mis mb-3" style="border-left:3px solid #c9a84c;">
+            <div class="card-mis-body p-3">
+                <div style="font-size:.85rem;font-weight:700;color:#1f2937;margin-bottom:.5rem;">
+                    <i class="fas fa-download text-warning me-1"></i>Download Template
+                </div>
+                <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
+                    Use our pre-formatted Excel template with sample rows and column hints.
+                </p>
+                <a href="<?= APP_URL ?>/exports/staff_template.xlsx"
+                   class="btn btn-gold btn-sm w-100">
+                    <i class="fas fa-file-excel me-1"></i>Download Template (.xlsx)
+                </a>
+            </div>
+        </div>
+
+        <div class="card-mis p-3">
+            <div style="font-size:.82rem;font-weight:700;color:#1f2937;margin-bottom:.75rem;">
+                <i class="fas fa-list-check text-warning me-1"></i>Valid Roles
+            </div>
+            <?php foreach (['staff', 'admin', 'executive'] as $rn): ?>
+                <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;
+                             margin:.1rem .1rem 0 0;display:inline-block;font-size:.78rem;">
+                    <?= $rn ?>
+                </span>
+            <?php endforeach; ?>
+
+            <div style="font-size:.82rem;font-weight:700;color:#1f2937;margin:1rem 0 .5rem;">
+                <i class="fas fa-code-branch text-warning me-1"></i>Available Branches
+            </div>
+            <?php foreach ($allBranches as $b): ?>
+                <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;
+                             margin:.1rem .1rem 0 0;display:inline-block;font-size:.78rem;">
+                    <?= htmlspecialchars($b['branch_name']) ?>
+                </span>
+            <?php endforeach; ?>
+
+            <div style="font-size:.82rem;font-weight:700;color:#1f2937;margin:1rem 0 .5rem;">
+                <i class="fas fa-layer-group text-warning me-1"></i>Available Departments
+            </div>
+            <?php foreach ($allDepts as $d): ?>
+                <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;
+                             margin:.1rem .1rem 0 0;display:inline-block;font-size:.78rem;">
+                    <?= htmlspecialchars($d['dept_name']) ?>
+                </span>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
 </div>
+</div><!-- /tab-bulk -->
+
+
 <script>
-function togglePassword(fieldId, btn){
-
-    let field = document.getElementById(fieldId);
-    let icon = btn.querySelector("i");
-
-    if(field.type === "password"){
-        field.type = "text";
-        icon.classList.remove("fa-eye");
-        icon.classList.add("fa-eye-slash");
-    }else{
-        field.type = "password";
-        icon.classList.remove("fa-eye-slash");
-        icon.classList.add("fa-eye");
-    }
-
-}
-function copyGaSecret() {
-    const text = document.getElementById('gaSecretDisplay').value;
-    navigator.clipboard.writeText(text).then(() => {
-        const icon = document.getElementById('copyGaIcon');
-        icon.className = 'fas fa-check';
-        icon.style.color = '#10b981';
-        setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
-    });
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+    document.getElementById('tab-single').style.display = tab === 'single' ? 'block' : 'none';
+    document.getElementById('tab-bulk').style.display   = tab === 'bulk'   ? 'block' : 'none';
+    const gold = '#c9a84c', gray = '#9ca3af';
+    const active   = tab === 'single' ? 'tab-single-btn' : 'tab-bulk-btn';
+    const inactive = tab === 'single' ? 'tab-bulk-btn'   : 'tab-single-btn';
+    document.getElementById(active).style.color             = gold;
+    document.getElementById(active).style.borderBottomColor = gold;
+    document.getElementById(inactive).style.color             = gray;
+    document.getElementById(inactive).style.borderBottomColor = 'transparent';
 }
 
+// ── 2FA toggle ────────────────────────────────────────────────────────────────
+function toggle2FA(checkbox) {
+    const body = document.getElementById('twofa-body');
+    body.style.display = checkbox.checked ? 'block' : 'none';
+}
+
+// ── Password toggle ───────────────────────────────────────────────────────────
 function togglePassword(fieldId, btn) {
     const field = document.getElementById(fieldId);
     const icon  = btn.querySelector('i');
@@ -431,26 +723,77 @@ function togglePassword(fieldId, btn) {
     }
 }
 
-// Update QR code when email field changes
-document.querySelector('[name="email"]')?.addEventListener('blur', function() {
-    const email  = this.value.trim();
-    const secret = document.getElementById('gaSecretDisplay').value;
-    if (!email) return;
-    const otpUrl = encodeURIComponent(
-        'otpauth://totp/ASK%20MIS:' + encodeURIComponent(email) +
-        '?secret=' + secret + '&issuer=ASK%20MIS'
-    );
-    document.querySelector('[name="email"]')?.addEventListener('blur', function() {
-    const email  = this.value.trim();
-    const secret = document.getElementById('gaSecretDisplay').value;
-    if (!email) return;
+// ── Copy 2FA secret ───────────────────────────────────────────────────────────
+function copyGaSecret() {
+    const text = document.getElementById('gaSecretDisplay').value;
+    navigator.clipboard.writeText(text).then(() => {
+        const icon = document.getElementById('copyGaIcon');
+        icon.className = 'fas fa-check';
+        icon.style.color = '#10b981';
+        setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
+    });
+}
 
+// ── QR update on email blur ───────────────────────────────────────────────────
+document.querySelector('[name="email"]')?.addEventListener('blur', function () {
+    const email  = this.value.trim();
+    const secret = document.getElementById('gaSecretDisplay').value;
+    if (!email) return;
     const otpUrl = 'otpauth://totp/ASK MIS:' + encodeURIComponent(email) +
                    '?secret=' + secret + '&issuer=ASK MIS';
-
     document.getElementById('qrPreview').src =
-        'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' + encodeURIComponent(otpUrl);
+        'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' +
+        encodeURIComponent(otpUrl);
 });
+
+// ── File drop / select helpers ────────────────────────────────────────────────
+function formatBytes(bytes) {
+    if (bytes < 1024)      return bytes + ' B';
+    if (bytes < 1048576)   return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(2) + ' MB';
+}
+
+function showFile(file) {
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-size').textContent = formatBytes(file.size);
+    document.getElementById('file-preview').style.display = 'flex';
+    document.getElementById('drop-text').textContent = 'File selected — ready to upload';
+    document.getElementById('drop-icon').innerHTML =
+        '<i class="fas fa-check-circle" style="font-size:2.2rem;color:#16a34a;"></i>';
+    document.getElementById('upload-btn').disabled = false;
+}
+
+function onFileSelect(input) {
+    if (input.files[0]) showFile(input.files[0]);
+}
+
+function handleDrop(e) {
+    e.preventDefault();
+    const dz  = document.getElementById('drop-zone');
+    dz.style.borderColor = '#d1d5db';
+    dz.style.background  = '#fafafa';
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['xlsx','xls'].includes(ext)) { alert('Please upload an .xlsx or .xls file.'); return; }
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    document.getElementById('bulk_file').files = dt.files;
+    showFile(file);
+}
+
+function clearFile() {
+    document.getElementById('bulk_file').value = '';
+    document.getElementById('file-preview').style.display = 'none';
+    document.getElementById('drop-text').textContent = 'Click or drag & drop your Excel file here';
+    document.getElementById('drop-icon').innerHTML =
+        '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
+    document.getElementById('upload-btn').disabled = true;
+}
+
+document.getElementById('bulk-form')?.addEventListener('submit', function () {
+    document.getElementById('upload-btn').disabled = true;
+    document.getElementById('upload-spinner').style.display = 'flex';
 });
 </script>
 <?php include '../../includes/footer.php'; ?>

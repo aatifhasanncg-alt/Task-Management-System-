@@ -104,7 +104,7 @@ $adminDeptStmt->execute([$adminUser['department_id'] ?? 0]);
 $adminDeptCode = $adminDeptStmt->fetchColumn() ?: '';
 
 $taskStmt = $db->prepare("
-    SELECT t.*,
+    SELECT t.*,a.auditor_name,
            d.dept_name, d.dept_code, d.color, d.icon AS dept_icon,
            b.branch_name,
            c.company_name,
@@ -113,6 +113,7 @@ $taskStmt = $db->prepare("
            asgn.full_name AS assigned_to_name,
            asgn.email     AS assigned_to_email
     FROM tasks t
+    LEFT JOIN auditors a ON a.id = t.auditor_id
     LEFT JOIN departments d  ON d.id  = t.department_id
     LEFT JOIN branches    b  ON b.id  = t.branch_id
     LEFT JOIN companies   c  ON c.id  = t.company_id
@@ -130,28 +131,6 @@ if (!$task) {
 }
 
 $canEditDept = ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code']);
-
-// ── Auto-add missing columns ──────────────────────────────────────────────────
-$autoAlters = [
-    ['task_tax', 'fiscal_year', "ALTER TABLE task_tax ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER tax_type_id"],
-    ['task_tax', 'fiscal_year_id', "ALTER TABLE task_tax ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year"],
-    ['task_retail', 'fiscal_year_id', "ALTER TABLE task_retail ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year"],
-    ['task_finance', 'fiscal_year_id', "ALTER TABLE task_finance ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year"],
-    ['task_banking', 'fiscal_year', "ALTER TABLE task_banking ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER completion_date"],
-    ['task_banking', 'fiscal_year_id', "ALTER TABLE task_banking ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year"],
-    ['task_corporate', 'fiscal_year', "ALTER TABLE task_corporate ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER pan_no"],
-    ['task_corporate', 'fiscal_year_id', "ALTER TABLE task_corporate ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year"],
-];
-foreach ($autoAlters as [$tbl, $col, $sql]) {
-    try {
-        $db->query("SELECT `{$col}` FROM `{$tbl}` LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec($sql);
-        } catch (Exception $e2) {
-        }
-    }
-}
 
 // ── Load dept detail ──────────────────────────────────────────────────────────
 $detailTableMap = ['RETAIL' => 'task_retail', 'TAX' => 'task_tax', 'BANK' => 'task_banking', 'CORP' => 'task_corporate', 'FIN' => 'task_finance'];
@@ -235,20 +214,19 @@ if ($detailTable) {
             case 'BANK':
                 $dSt = $db->prepare("
                     SELECT tb.*,
-                           br.bank_name, a.auditor_name, a.firm_name AS auditor_firm, a.phone AS auditor_phone,
+                           br.bank_name,
                            bcc.category_name AS client_category_name, ws.status_name AS work_status_name,
                            c.company_name, c.contact_person, c.contact_phone,
                            c.pan_number AS company_pan, ct.type_name AS company_type_name
                     FROM task_banking tb
                     LEFT JOIN bank_references br         ON br.id=tb.bank_reference_id
-                    LEFT JOIN auditors a                 ON a.id=tb.auditor_id
                     LEFT JOIN bank_client_categories bcc ON bcc.id=tb.client_category_id
                     LEFT JOIN task_status ws             ON ws.id=tb.work_status_id
                     LEFT JOIN companies c                ON c.id=tb.company_id
                     LEFT JOIN company_types ct           ON ct.id=c.company_type_id
                     WHERE tb.task_id = ?");
                 $dSt->execute([$id]);
-                $detail = $dSt->fetch();
+                $detail = $dSt->fetch(PDO::FETCH_ASSOC);
                 break;
 
             case 'FIN':
@@ -272,7 +250,7 @@ if ($detailTable) {
 }
 
 // ── Lookups ───────────────────────────────────────────────────────────────────
-$taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
+$taskStatuses = $db->query("SELECT id, status_name, color, bg_color FROM task_status ORDER BY id")->fetchAll();
 $yesNo = $db->query("SELECT id, value FROM yes_no ORDER BY id")->fetchAll();
 $allStaff = $db->query("
     SELECT u.id, u.full_name FROM users u
@@ -669,15 +647,178 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
     $p = [$task['id'], $task['company_id'], ($b['bank_reference_id'] ?? null), ($b['client_category_id'] ?? null), ($b['auditor_id'] ?? null), parseDate($b['assigned_date'] ?? null), parseDate($b['ecd'] ?? null), parseDate($b['completion_date'] ?? null), ($b['work_status_id'] ?? null), ($b['sales_check'] ?? null), ($b['audit_check'] ?? null), ($b['provisional_financial_statement'] ?? null), ($b['projected'] ?? null), ($b['consulting'] ?? null), ($b['nta'] ?? null), ($b['salary_certificate'] ?? null), ($b['ca_certification'] ?? null), ($b['etds'] ?? null), isset($b['bill_issued']) ? 1 : 0, $b['remarks'] ?? null];
     $ex = $db->prepare("SELECT id FROM task_banking WHERE task_id=?");
     $ex->execute([$task['id']]);
-    if ($ex->fetch()) {
-        $db->prepare("UPDATE task_banking SET company_id=?,bank_reference_id=?,client_category_id=?,auditor_id=?,assigned_date=?,ecd=?,completion_date=?,work_status_id=?,sales_check=?,audit_check=?,provisional_financial_statement=?,projected=?,consulting=?,nta=?,salary_certificate=?,ca_certification=?,etds=?,bill_issued=?,remarks=? WHERE task_id=?")->execute(array_merge(array_slice($p, 1), [$task['id']]));
-    } else {
-        $db->prepare("INSERT INTO task_banking(task_id,company_id,bank_reference_id,client_category_id,auditor_id,assigned_date,ecd,completion_date,work_status_id,sales_check,audit_check,provisional_financial_statement,projected,consulting,nta,salary_certificate,ca_certification,etds,bill_issued,remarks)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute($p);
+
+    // ── Sanitize ALL inputs once, before INSERT/UPDATE branch ────────────────
+// Dates
+    foreach (['assigned_date', 'ecd', 'completion_date'] as $dateField) {
+        $b[$dateField] = !empty($b[$dateField]) ? parseDate($b[$dateField]) : null;
     }
+    // Integer / nullable numeric fields
+    $numericFields = [
+        'sales_check',
+        'audit_check',
+        'provisional_financial_statement',
+        'projected',
+        'consulting',
+        'nta',
+        'salary_certificate',
+        'ca_certification',
+        'etds'
+    ];
+    foreach ($numericFields as $nf) {
+        $b[$nf] = (isset($b[$nf]) && $b[$nf] !== '') ? (int) $b[$nf] : null;
+    }
+    // Checkbox
+    $b['bill_issued'] = !empty($b['bill_issued']) ? 1 : 0;
+
+    if ($ex->fetch()) {
+        $stmt = $db->prepare("
+        UPDATE task_banking SET 
+            company_id=?,
+            bank_reference_id=?,
+            client_category_id=?,
+            assigned_date=?,
+            ecd=?,
+            completion_date=?,
+            work_status_id=?,
+            sales_check=?,
+            audit_check=?,
+            provisional_financial_statement=?,
+            projected=?,
+            consulting=?,
+            nta=?,
+            salary_certificate=?,
+            ca_certification=?,
+            etds=?,
+            bill_issued=?,
+            remarks=?
+        WHERE task_id=?
+    ");
+        $stmt->execute([
+            $task['company_id'] ?? 0,
+            $b['bank_reference_id'] ?? null,
+            $b['client_category_id'] ?? null,
+            $b['assigned_date'],
+            $b['ecd'],
+            $b['completion_date'],
+            $b['work_status_id'] ?? null,
+            $b['sales_check'],
+            $b['audit_check'],
+            $b['provisional_financial_statement'],
+            $b['projected'],
+            $b['consulting'],
+            $b['nta'],
+            $b['salary_certificate'],
+            $b['ca_certification'],
+            $b['etds'],
+            $b['bill_issued'],
+            $b['remarks'] ?? null,
+            $task['id']
+        ]);
+
+    } else {
+        $db->prepare("
+        INSERT INTO task_banking(
+            task_id, company_id, bank_reference_id, client_category_id,
+            assigned_date, ecd, completion_date, work_status_id,
+            sales_check, audit_check, provisional_financial_statement, projected,
+            consulting, nta, salary_certificate, ca_certification, etds,
+            bill_issued, remarks
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ")->execute([
+                    $task['id'],
+                    $task['company_id'],
+                    $b['bank_reference_id'] ?? null,
+                    $b['client_category_id'] ?? null,
+                    $b['assigned_date'],
+                    $b['ecd'],
+                    $b['completion_date'],
+                    $b['work_status_id'] ?? null,
+                    $b['sales_check'],
+                    $b['audit_check'],
+                    $b['provisional_financial_statement'],
+                    $b['projected'],
+                    $b['consulting'],
+                    $b['nta'],
+                    $b['salary_certificate'],
+                    $b['ca_certification'],
+                    $b['etds'],
+                    $b['bill_issued'],
+                    $b['remarks'] ?? null
+                ]);
+    }
+    // ── bank_summary sync helper ──────────────────────────────────────────────────
+    function syncBankSummary(PDO $db, int $bankRefId, int $branchId, string $fiscalYear, int $updatedBy): void
+    {
+        if (!$bankRefId || !$branchId || !$fiscalYear)
+            return;
+
+        $row = $db->prepare("
+        SELECT
+            COUNT(*)                                               AS total_files,
+            SUM(ts.status_name = 'Done')                          AS completed,
+            SUM(ts.status_name = 'HBC')                           AS hbc,
+            SUM(ts.status_name IN ('Pending','WIP','Not Started')) AS pending,
+            SUM(ts.status_name = 'Corporate Team')                AS support,
+            SUM(ts.status_name = 'Next Year')                     AS cancelled
+        FROM task_banking tb
+        JOIN tasks       t  ON t.id  = tb.task_id
+        JOIN task_status ts ON ts.id = t.status_id
+        WHERE tb.bank_reference_id = ?
+          AND t.branch_id          = ?
+          AND t.fiscal_year        = ?
+          AND t.is_active          = 1
+    ");
+        $row->execute([$bankRefId, $branchId, $fiscalYear]);
+        $counts = $row->fetch(PDO::FETCH_ASSOC);
+
+        $db->prepare("
+        INSERT INTO bank_summary
+            (bank_reference_id, branch_id, fiscal_year,
+             total_files, completed, hbc, pending, support, cancelled,
+             updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+            total_files = VALUES(total_files),
+            completed   = VALUES(completed),
+            hbc         = VALUES(hbc),
+            pending     = VALUES(pending),
+            support     = VALUES(support),
+            cancelled   = VALUES(cancelled),
+            updated_by  = VALUES(updated_by),
+            updated_at  = NOW()
+    ")->execute([
+                    $bankRefId,
+                    $branchId,
+                    $fiscalYear,
+                    (int) ($counts['total_files'] ?? 0),
+                    (int) ($counts['completed'] ?? 0),
+                    (int) ($counts['hbc'] ?? 0),
+                    (int) ($counts['pending'] ?? 0),
+                    (int) ($counts['support'] ?? 0),
+                    (int) ($counts['cancelled'] ?? 0),
+                    $updatedBy,
+                ]);
+    }
+    // existing INSERT/UPDATE task_banking code above stays unchanged ...
+
+    // ── Sync bank_summary ─────────────────────────────────────────────────────
+    $bankRefId = (int) ($b['bank_reference_id'] ?? 0);
+    if ($bankRefId) {
+        syncBankSummary(
+            $db,
+            $bankRefId,
+            (int) $task['branch_id'],
+            $task['fiscal_year'] ?? '',
+            $user['id']
+        );
+    }
+
     syncTaskFiscalYear($db, $task['id']);
     setFlash('success', 'Banking details saved.');
     header("Location: view.php?id={$task['id']}");
     exit;
+
 }
 
 // POST: add_comment
@@ -750,11 +891,12 @@ include '../../includes/header.php';
                         </div>
                         <div class="card-mis-body">
                             <div class="row g-3">
-                                <?php foreach (['Department' => htmlspecialchars($task['dept_name'] ?? '—'), 'Branch' => htmlspecialchars($task['branch_name'] ?? '—'), 'Company' => htmlspecialchars($task['company_name'] ?? '—'), 'Created By' => htmlspecialchars($task['assigned_by_name'] ?? '—'), 'Assigned To' => htmlspecialchars($task['assigned_to_name'] ?? 'Unassigned'), 'Priority' => '<span class="status-badge priority-' . $task['priority'] . '">' . ucfirst($task['priority']) . '</span>', 'Due Date' => $task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—', 'Fiscal Year' => htmlspecialchars($task['fiscal_year'] ?? '—'), 'Created' => date('d M Y, H:i', strtotime($task['created_at']))] as $label => $val): ?>
+                                <?php foreach (['Department' => htmlspecialchars($task['dept_name'] ?? '—'), 'Branch' => htmlspecialchars($task['branch_name'] ?? '—'), 'Company' => htmlspecialchars($task['company_name'] ?? '—'), 'Created By' => htmlspecialchars($task['assigned_by_name'] ?? '—'), 'Assigned To' => htmlspecialchars($task['assigned_to_name'] ?? 'Unassigned'), 'Priority' => '<span class="status-badge priority-' . $task['priority'] . '">' . ucfirst($task['priority']) . '</span>', 'Due Date' => $task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—', 'Fiscal Year' => htmlspecialchars($task['fiscal_year'] ?? '—'), 'Auditor' => htmlspecialchars($task['auditor_name'] ?? '—'), 'Created' => date('d M Y, H:i', strtotime($task['created_at']))] as $label => $val): ?>
                                     <div class="col-md-4">
                                         <div
                                             style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            <?= $label ?></div>
+                                            <?= $label ?>
+                                        </div>
                                         <div style="font-size:.9rem;margin-top:.2rem;"><?= $val ?></div>
                                     </div>
                                 <?php endforeach; ?>
@@ -764,7 +906,8 @@ include '../../includes/header.php';
                                             style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
                                             Description</div>
                                         <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['description'])) ?></div>
+                                            <?= nl2br(htmlspecialchars($task['description'])) ?>
+                                        </div>
                                     </div><?php endif; ?>
                                 <?php if ($task['remarks']): ?>
                                     <div class="col-12">
@@ -772,7 +915,8 @@ include '../../includes/header.php';
                                             style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
                                             Remarks</div>
                                         <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['remarks'])) ?></div>
+                                            <?= nl2br(htmlspecialchars($task['remarks'])) ?>
+                                        </div>
                                     </div><?php endif; ?>
                             </div>
                         </div>
@@ -824,7 +968,8 @@ include '../../includes/header.php';
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
@@ -832,7 +977,8 @@ include '../../includes/header.php';
                                             <div class="col-md-6">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div class="d-flex align-items-center gap-2 mt-1"><span
                                                         style="font-size:.88rem;font-weight:600;"><?= htmlspecialchars($val ?: '—') ?></span><?php if ($val): ?><a
                                                             href="<?= $url ?>" target="_blank"
@@ -847,7 +993,8 @@ include '../../includes/header.php';
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
                                                     Remarks</div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;">
-                                                    <?= nl2br(htmlspecialchars($detail['remarks'])) ?></div>
+                                                    <?= nl2br(htmlspecialchars($detail['remarks'])) ?>
+                                                </div>
                                             </div><?php endif; ?>
                                     </div>
                                     <?php if ($canEditDept): ?>
@@ -861,7 +1008,8 @@ include '../../includes/header.php';
                                 <?php if ($canEditDept): ?>
                                     <div
                                         style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Tax Details</div>
+                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Tax Details
+                                    </div>
                                     <form method="POST">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="save_tax" value="1">
@@ -874,9 +1022,9 @@ include '../../includes/header.php';
                                                     name="tax[assigned_office_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taxOfficeTypes as $o): ?>
-                                                        <option value="<?= $o['id'] ?>"
-                                                            <?= ($detail['assigned_office_id'] ?? '') == $o['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($o['office_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $o['id'] ?>" <?= ($detail['assigned_office_id'] ?? '') == $o['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($o['office_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3"><label class="form-label-mis">Office Branch
                                                     Address</label><input type="text" name="tax[assigned_office_address]"
@@ -888,9 +1036,9 @@ include '../../includes/header.php';
                                             <div class="col-md-3"><label class="form-label-mis">Tax Type</label><select
                                                     name="tax[tax_type_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option><?php foreach ($taxTypes as $tt): ?>
-                                                        <option value="<?= $tt['id'] ?>"
-                                                            <?= ($detail['tax_type_id'] ?? '') == $tt['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($tt['tax_type_name']) ?></option>
+                                                        <option value="<?= $tt['id'] ?>" <?= ($detail['tax_type_id'] ?? '') == $tt['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($tt['tax_type_name']) ?>
+                                                        </option>
                                                     <?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3">
@@ -932,24 +1080,25 @@ include '../../includes/header.php';
                                                     name="tax[status_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Tax Clearance
                                                     Status</label><select name="tax[tax_clearance_status_id]"
                                                     class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <?php foreach (['file_received_by' => 'File Received By', 'updated_by' => 'Updated By', 'verify_by' => 'Verify By'] as $f => $l): ?>
                                                 <div class="col-md-3"><label class="form-label-mis"><?= $l ?></label><select
                                                         name="tax[<?= $f ?>]" class="form-select form-select-sm">
                                                         <option value="">-- Select --</option><?php foreach ($allStaff as $s): ?>
-                                                            <option value="<?= $s['id'] ?>" <?= ($detail[$f] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option><?php endforeach; ?>
+                                                            <option value="<?= $s['id'] ?>" <?= ($detail[$f] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option>
+                                                        <?php endforeach; ?>
                                                     </select></div>
                                             <?php endforeach; ?>
                                             <div class="col-md-3"><label class="form-label-mis">Assigned To <span
@@ -965,7 +1114,8 @@ include '../../includes/header.php';
                                             <?php foreach (['bills_issued' => 'Bills Issued (Rs.)', 'fee_received' => 'Fee Received (Rs.)', 'tds_payment' => 'TDS Payment (Rs.)'] as $f => $l): ?>
                                                 <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
                                                         type="number" name="tax[<?= $f ?>]" class="form-control form-control-sm"
-                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>"></div>
+                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>">
+                                                </div>
                                             <?php endforeach; ?>
                                             <?php foreach (['assigned_date' => 'Assigned Date', 'completed_date' => 'Completed Date', 'follow_up_date' => 'Follow-up Date'] as $f => $l): ?>
                                                 <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
@@ -1000,36 +1150,20 @@ include '../../includes/header.php';
                                     style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:1rem;margin-bottom:1rem;">
                                     <div
                                         style="font-size:.72rem;font-weight:700;color:#16a34a;text-transform:uppercase;margin-bottom:.5rem;">
-                                        <i class="fas fa-building me-1"></i>Client Info</div>
+                                        <i class="fas fa-building me-1"></i>Client Info
+                                    </div>
                                     <div class="row g-2">
-                                        <?php foreach (['Company' => $detail['company_name'] ?? $task['company_name'] ?? '—', 'Contact' => $detail['contact_person'] ?? '—', 'Phone' => $detail['contact_phone'] ?? '—', 'PAN' => $detail['company_pan'] ?? '—', 'Type' => $detail['company_type_name'] ?? '—', 'Bank' => $detail['bank_name'] ?? '—', 'Category' => $detail['client_category_name'] ?? '—', 'Work Status' => $detail['work_status_name'] ?? '—', 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Completion' => ($detail['completion_date'] ?? '') ? date('d M Y', strtotime($detail['completion_date'])) : '—'] as $lbl => $val): ?>
+                                        <?php foreach (['Company' => $detail['company_name'] ?? ($task['company_name'] ?? '—'), 'Contact' => $detail['contact_person'] ?? '—', 'Phone' => $detail['contact_phone'] ?? '—', 'PAN' => $detail['company_pan'] ?? '—', 'Type' => $detail['company_type_name'] ?? '—', 'Bank' => $detail['bank_name'] ?? '—', 'Category' => $detail['client_category_name'] ?? '—', 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Completion' => ($detail['completion_date'] ?? '') ? date('d M Y', strtotime($detail['completion_date'])) : '—'] as $lbl => $val): ?>
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div style="font-size:.87rem;"><?= htmlspecialchars($val) ?></div>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
                                 </div>
-                                <?php if (!empty($detail['auditor_name'])): ?>
-                                    <div
-                                        style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#3b82f6;text-transform:uppercase;margin-bottom:.5rem;">
-                                            <i class="fas fa-user-tie me-1"></i>Auditor</div>
-                                        <div class="row g-2">
-                                            <?php foreach (['Name' => $detail['auditor_name'], 'Firm' => $detail['auditor_firm'], 'Phone' => $detail['auditor_phone']] as $lbl => $val): ?>
-                                                <div class="col-md-4">
-                                                    <div
-                                                        style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                        <?= $lbl ?></div>
-                                                    <div style="font-size:.87rem;font-weight:500;">
-                                                        <?= htmlspecialchars($val ?? '—') ?></div>
-                                                </div><?php endforeach; ?>
-                                        </div>
-                                    </div>
-                                <?php endif; ?>
                                 <?php if ($detail && !$canEditDept): ?>
                                     <div style="background:#f9fafb;border-radius:10px;padding:1rem;margin-bottom:1rem;">
                                         <div
@@ -1040,9 +1174,11 @@ include '../../includes/header.php';
                                                 <div class="col-md-3 col-6">
                                                     <div
                                                         style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                        <?= $lbl ?></div>
+                                                        <?= $lbl ?>
+                                                    </div>
                                                     <div style="font-size:.87rem;font-weight:600;">
-                                                        <?= htmlspecialchars((string) $val) ?></div>
+                                                        <?= htmlspecialchars((string) $val) ?>
+                                                    </div>
                                                 </div><?php endforeach; ?>
                                         </div>
                                     </div>
@@ -1055,37 +1191,34 @@ include '../../includes/header.php';
                                     <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
                                             type="hidden" name="save_banking" value="1">
                                         <div class="row g-3">
-                                            <div class="col-md-6"><label class="form-label-mis">Bank Name</label><select
-                                                    name="banking[bank_reference_id]" class="form-select form-select-sm">
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Bank Name</label>
+
+                                                <select name="banking[bank_reference_id]" id="bank_select"
+                                                    class="form-select form-select-sm">
                                                     <option value="">-- Select Bank --</option>
+
                                                     <?php foreach ($allBanks as $bk): ?>
-                                                        <option value="<?= $bk['id'] ?>"
-                                                            <?= ($detail['bank_reference_id'] ?? '') == $bk['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($bk['bank_name'] . ($bk['address'] ? ' - ' . $bk['address'] : '')) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
+                                                        <option value="<?= $bk['id'] ?>" <?= ($detail['bank_reference_id'] ?? '') == $bk['id'] ? 'selected' : '' ?>>
+
+                                                            <?= htmlspecialchars($bk['bank_name']) ?>
+
+                                                            <?php if (!empty($bk['address'])): ?>
+                                                                - <?= htmlspecialchars($bk['address']) ?>
+                                                            <?php endif; ?>
+
+                                                        </option>
+                                                    <?php endforeach; ?>
+
+                                                </select>
+                                            </div>
                                             <div class="col-md-3"><label class="form-label-mis">Category</label><select
                                                     name="banking[client_category_id]" class="form-select form-select-sm">
                                                     <option value="">--</option><?php foreach ($allCats as $cat): ?>
-                                                        <option value="<?= $cat['id'] ?>"
-                                                            <?= ($detail['client_category_id'] ?? '') == $cat['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($cat['category_name']) ?></option>
+                                                        <option value="<?= $cat['id'] ?>" <?= ($detail['client_category_id'] ?? '') == $cat['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($cat['category_name']) ?>
+                                                        </option>
                                                     <?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Auditor</label><select
-                                                    name="banking[auditor_id]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($allAuditors as $au): ?>
-                                                        <option value="<?= $au['id'] ?>"
-                                                            <?= ($detail['auditor_id'] ?? '') == $au['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($au['auditor_name'] . ($au['firm_name'] ? ' — ' . $au['firm_name'] : '')) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Work Status</label><select
-                                                    name="banking[work_status_id]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
                                                 </select></div>
                                             <?php foreach (['assigned_date' => 'Assigned Date', 'ecd' => 'ECD', 'completion_date' => 'Completion Date'] as $f => $l): ?>
                                                 <div class="col-md-3"><label class="form-label-mis"><?= $l ?></label><input
@@ -1139,7 +1272,8 @@ include '../../includes/header.php';
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
@@ -1154,16 +1288,17 @@ include '../../includes/header.php';
                                 <?php if ($canEditDept): ?>
                                     <div
                                         style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Finance Details</div>
+                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Finance Details
+                                    </div>
                                     <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
                                             type="hidden" name="save_finance" value="1">
                                         <div class="row g-3">
                                             <div class="col-md-6"><label class="form-label-mis">Service Type</label><select
                                                     name="finance[service_type_id]" class="form-select form-select-sm">
                                                     <option value="">--</option><?php foreach ($financeServiceTypes as $fst): ?>
-                                                        <option value="<?= $fst['id'] ?>"
-                                                            <?= ($detail['service_type_id'] ?? '') == $fst['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($fst['service_name']) ?></option>
+                                                        <option value="<?= $fst['id'] ?>" <?= ($detail['service_type_id'] ?? '') == $fst['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($fst['service_name']) ?>
+                                                        </option>
                                                     <?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3">
@@ -1173,7 +1308,8 @@ include '../../includes/header.php';
                                             <?php foreach (['total_amount' => 'Total Amount (Rs.)', 'paid_amount' => 'Paid Amount (Rs.)'] as $f => $l): ?>
                                                 <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
                                                         type="number" name="finance[<?= $f ?>]" class="form-control form-control-sm"
-                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>"></div>
+                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>">
+                                                </div>
                                             <?php endforeach; ?>
                                             <div class="col-md-4"><label class="form-label-mis">Due Amount</label><input
                                                     type="text" class="form-control form-control-sm"
@@ -1187,24 +1323,23 @@ include '../../includes/header.php';
                                                     name="finance[payment_method]" class="form-select form-select-sm">
                                                     <option value="">--</option>
                                                     <?php foreach (['Cash', 'Cheque', 'Online Transfer', 'Bank Deposit'] as $pm): ?>
-                                                        <option value="<?= $pm ?>"
-                                                            <?= ($detail['payment_method'] ?? '') === $pm ? 'selected' : '' ?>><?= $pm ?>
+                                                        <option value="<?= $pm ?>" <?= ($detail['payment_method'] ?? '') === $pm ? 'selected' : '' ?>><?= $pm ?>
                                                         </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Payment Status</label><select
                                                     name="finance[payment_status_id]" class="form-select form-select-sm">
                                                     <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['payment_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['payment_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Tax Clearance
                                                     Status</label><select name="finance[tax_clearance_status_id]"
                                                     class="form-select form-select-sm">
                                                     <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Tax Clearance Date</label><input
                                                     type="date" name="finance[tax_clearance_date]"
@@ -1244,7 +1379,8 @@ include '../../includes/header.php';
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
@@ -1271,7 +1407,8 @@ include '../../includes/header.php';
                                     ?>
                                     <div
                                         style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Retail Details</div>
+                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Retail Details
+                                    </div>
                                     <form method="POST">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="save_retail" value="1">
@@ -1304,15 +1441,17 @@ include '../../includes/header.php';
                                             <div class="col-md-3"><label class="form-label-mis">File Type</label><select
                                                     name="retail[file_type_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option><?php foreach ($fileTypes as $ft): ?>
-                                                        <option value="<?= $ft['id'] ?>"
-                                                            <?= ($detail['file_type_id'] ?? '') == $ft['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ft['type_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ft['id'] ?>" <?= ($detail['file_type_id'] ?? '') == $ft['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ft['type_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3"><label class="form-label-mis">PAN / VAT</label><select
                                                     name="retail[pan_vat_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($panVatTypes as $pv): ?>
+                                                    <option value="">-- Select --</option>
+                                                    <?php foreach ($panVatTypes as $pv): ?>
                                                         <option value="<?= $pv['id'] ?>" <?= $cPanVatId == $pv['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($pv['type_name']) ?></option><?php endforeach; ?>
+                                                            <?= htmlspecialchars($pv['type_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3"><label class="form-label-mis">VAT Client</label><select
                                                     name="retail[vat_client_id]" class="form-select form-select-sm">
@@ -1332,17 +1471,17 @@ include '../../includes/header.php';
                                                         class="form-select form-select-sm">
                                                         <option value="">-- Select --</option>
                                                         <?php foreach (['D1', 'D2', 'D3', 'D4'] as $rt): ?>
-                                                            <option value="<?= $rt ?>"
-                                                                <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?>
+                                                            <option value="<?= $rt ?>" <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?>
                                                             </option><?php endforeach; ?>
                                                     </select><?php endif; ?>
                                             </div>
                                             <div class="col-md-3"><label class="form-label-mis">Audit Type</label><select
                                                     name="retail[audit_type_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($auditTypes2 as $at): ?>
-                                                        <option value="<?= $at['id'] ?>"
-                                                            <?= ($detail['audit_type_id'] ?? '') == $at['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($at['type_name']) ?></option><?php endforeach; ?>
+                                                    <option value="">-- Select --</option>
+                                                    <?php foreach ($auditTypes2 as $at): ?>
+                                                        <option value="<?= $at['id'] ?>" <?= ($detail['audit_type_id'] ?? '') == $at['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($at['type_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-3">
                                                 <label class="form-label-mis">Fiscal Year</label>
@@ -1361,8 +1500,7 @@ include '../../includes/header.php';
                                                                 class="fas fa-link me-1"></i>from
                                                             company</span><?php endif; ?></label><input type="text"
                                                     name="retail[pan_no]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cPanNo) ?>"
-                                                    <?= ($cPanNo && $task['company_id']) ? $ro : '' ?>></div>
+                                                    value="<?= htmlspecialchars($cPanNo) ?>" <?= ($cPanNo && $task['company_id']) ? $ro : '' ?>></div>
                                             <div class="col-md-4"><label class="form-label-mis">Assigned To <span
                                                         style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i
                                                             class="fas fa-link me-1"></i>from task</span></label>
@@ -1389,25 +1527,25 @@ include '../../includes/header.php';
                                                     name="retail[work_status_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Finalisation
                                                     Status</label><select name="retail[finalisation_status_id]"
                                                     class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['finalisation_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['finalisation_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Finalised By</label><select
                                                     name="retail[finalised_by]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option><?php foreach ($allStaff as $s): ?>
-                                                        <option value="<?= $s['id'] ?>"
-                                                            <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($s['full_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $s['id'] ?>" <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($s['full_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
                                                     type="date" name="retail[completed_date]"
@@ -1418,16 +1556,16 @@ include '../../includes/header.php';
                                                     class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Backup Status</label><select
                                                     name="retail[backup_status_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option><?php foreach ($yesNoOpts as $yn): ?>
-                                                        <option value="<?= $yn['id'] ?>"
-                                                            <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($yn['value']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $yn['id'] ?>" <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($yn['value']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Follow-up Date</label><input
                                                     type="date" name="retail[follow_up_date]"
@@ -1469,7 +1607,8 @@ include '../../includes/header.php';
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?></div>
+                                                    <?= $lbl ?>
+                                                </div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
@@ -1500,7 +1639,8 @@ include '../../includes/header.php';
                                     ?>
                                     <div
                                         style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Corporate Details</div>
+                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Corporate Details
+                                    </div>
                                     <form method="POST">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="save_corporate" value="1">
@@ -1529,7 +1669,8 @@ include '../../includes/header.php';
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($corpGrades as $cg): ?>
                                                         <option value="<?= $cg['id'] ?>" <?= $cf_grade == $cg['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($cg['grade_name']) ?></option><?php endforeach; ?>
+                                                            <?= htmlspecialchars($cg['grade_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select>
                                             </div>
                                             <div class="col-md-4">
@@ -1547,7 +1688,8 @@ include '../../includes/header.php';
                                                 <div class="form-control form-control-sm"
                                                     style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
                                                     <i class="fas fa-user-circle"
-                                                        style="color:#3b82f6;"></i><?= htmlspecialchars($cf_at_name) ?></div>
+                                                        style="color:#3b82f6;"></i><?= htmlspecialchars($cf_at_name) ?>
+                                                </div>
                                                 <input type="hidden" name="corporate[assigned_to]"
                                                     value="<?= htmlspecialchars($cf_at_id ?? '') ?>">
                                             </div>
@@ -1557,7 +1699,8 @@ include '../../includes/header.php';
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($allStaff as $s): ?>
                                                         <option value="<?= $s['id'] ?>" <?= $cf_fb == $s['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($s['full_name']) ?></option><?php endforeach; ?>
+                                                            <?= htmlspecialchars($s['full_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select>
                                             </div>
                                             <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
@@ -1596,7 +1739,8 @@ include '../../includes/header.php';
                             <?php foreach ($comments as $c): ?>
                                 <div class="d-flex gap-3 mb-3">
                                     <div class="avatar-circle avatar-sm flex-shrink-0">
-                                        <?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?></div>
+                                        <?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?>
+                                    </div>
                                     <div class="flex-grow-1">
                                         <div class="d-flex gap-2 align-items-center"><strong
                                                 style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong><span
@@ -1604,7 +1748,8 @@ include '../../includes/header.php';
                                         </div>
                                         <div
                                             style="font-size:.88rem;margin-top:.25rem;background:#f9fafb;padding:.6rem .9rem;border-radius:8px;">
-                                            <?= nl2br(htmlspecialchars($c['comment'])) ?></div>
+                                            <?= nl2br(htmlspecialchars($c['comment'])) ?>
+                                        </div>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
@@ -1635,23 +1780,31 @@ include '../../includes/header.php';
                                         </div>
                                         <div class="flex-grow-1">
                                             <div style="font-size:.82rem;font-weight:600;color:#1f2937;">
-                                                <?= ucwords(str_replace('_', ' ', $w['action'])) ?>        <?php if ($w['from_name']): ?>
+                                                <?= ucwords(str_replace('_', ' ', $w['action'])) ?>
+                                                <?php if ($w['from_name']): ?>
                                                     by
-                                                    <?= htmlspecialchars($w['from_name']) ?>        <?php endif; ?>        <?php if ($w['to_name']): ?>
-                                                    → <?= htmlspecialchars($w['to_name']) ?><?php endif; ?></div>
+                                                    <?= htmlspecialchars($w['from_name']) ?>         <?php endif; ?>
+                                                <?php if ($w['to_name']): ?>
+                                                    → <?= htmlspecialchars($w['to_name']) ?><?php endif; ?>
+                                            </div>
                                             <?php if ($w['from_dept'] || $w['to_dept']): ?>
                                                 <div style="font-size:.75rem;color:#8b5cf6;">
-                                                    <?= htmlspecialchars($w['from_dept'] ?? '') ?>            <?= ($w['from_dept'] && $w['to_dept']) ? ' → ' : '' ?>            <?= htmlspecialchars($w['to_dept'] ?? '') ?>
+                                                    <?= htmlspecialchars($w['from_dept'] ?? '') ?>
+                                                    <?= ($w['from_dept'] && $w['to_dept']) ? ' → ' : '' ?>
+                                                    <?= htmlspecialchars($w['to_dept'] ?? '') ?>
                                                 </div><?php endif; ?>
                                             <?php if ($w['old_status'] || $w['new_status']): ?>
                                                 <div style="font-size:.75rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($w['old_status'] ?? '') ?>            <?= ($w['old_status'] && $w['new_status']) ? ' → ' : '' ?>            <?= htmlspecialchars($w['new_status'] ?? '') ?>
+                                                    <?= htmlspecialchars($w['old_status'] ?? '') ?>
+                                                    <?= ($w['old_status'] && $w['new_status']) ? ' → ' : '' ?>
+                                                    <?= htmlspecialchars($w['new_status'] ?? '') ?>
                                                 </div><?php endif; ?>
                                             <?php if ($w['remarks']): ?>
                                                 <div style="font-size:.78rem;color:#6b7280;font-style:italic;margin-top:.2rem;">
                                                     "<?= htmlspecialchars($w['remarks']) ?>"</div><?php endif; ?>
                                             <div style="font-size:.7rem;color:#9ca3af;margin-top:.2rem;">
-                                                <?= date('d M Y, H:i', strtotime($w['created_at'])) ?></div>
+                                                <?= date('d M Y, H:i', strtotime($w['created_at'])) ?>
+                                            </div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -1677,17 +1830,17 @@ include '../../includes/header.php';
                                             <div class="col-12"><label class="form-label-mis"><?= $lbl ?></label><select
                                                     name="progress[<?= $f ?>]" class="form-select form-select-sm">
                                                     <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>"
-                                                            <?= ($detail[$f] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?>
+                                                        <option value="<?= $ts['id'] ?>" <?= ($detail[$f] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($ts['status_name']) ?>
+                                                        </option><?php endforeach; ?>
                                                 </select></div>
                                         <?php endforeach; ?>
                                         <div class="col-12"><label class="form-label-mis">Finalised By</label><select
                                                 name="progress[finalised_by]" class="form-select form-select-sm">
                                                 <option value="">--</option><?php foreach ($allStaff as $s): ?>
-                                                    <option value="<?= $s['id'] ?>"
-                                                        <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($s['full_name']) ?></option><?php endforeach; ?>
+                                                    <option value="<?= $s['id'] ?>" <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                                        <?= htmlspecialchars($s['full_name']) ?>
+                                                    </option><?php endforeach; ?>
                                             </select></div>
                                         <div class="col-12"><label class="form-label-mis">Completed Date</label><input
                                                 type="date" name="progress[completed_date]"
@@ -1696,9 +1849,9 @@ include '../../includes/header.php';
                                         <div class="col-12"><label class="form-label-mis">Backup Status</label><select
                                                 name="progress[backup_status_id]" class="form-select form-select-sm">
                                                 <option value="">--</option><?php foreach ($yesNo as $yn): ?>
-                                                    <option value="<?= $yn['id'] ?>"
-                                                        <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($yn['value']) ?></option><?php endforeach; ?>
+                                                    <option value="<?= $yn['id'] ?>" <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
+                                                        <?= htmlspecialchars($yn['value']) ?>
+                                                    </option><?php endforeach; ?>
                                             </select></div>
                                         <div class="col-12"><label class="form-label-mis">Follow-up Date</label><input
                                                 type="date" name="progress[follow_up_date]"
@@ -1725,8 +1878,8 @@ include '../../includes/header.php';
                                 <div class="mb-3">
                                     <?php foreach ($taskStatuses as $ts):
                                         $sKey = $ts['status_name'];
-                                        $sCol = TASK_STATUSES[$sKey]['color'] ?? '#9ca3af';
-                                        $sBg = TASK_STATUSES[$sKey]['bg'] ?? '#f3f4f6'; ?>
+                                        $sCol = $ts['color'] ?? '#9ca3af';
+                                        $sBg = $ts['bg_color'] ?? '#f3f4f6'; ?>
                                         <div class="form-check mb-2"><input class="form-check-input" type="radio"
                                                 name="new_status" value="<?= htmlspecialchars($sKey) ?>"
                                                 id="st_<?= $ts['id'] ?>" <?= ($task['status'] ?? '') === $sKey ? 'checked' : '' ?>><label class="form-check-label" for="st_<?= $ts['id'] ?>"><span
@@ -1742,7 +1895,8 @@ include '../../includes/header.php';
 
                     <div class="card-mis p-3" style="font-size:.8rem;color:#6b7280;border-left:3px solid var(--gold);">
                         <div class="mb-2"><strong>Task #:</strong> <?= htmlspecialchars($task['task_number']) ?></div>
-                        <div class="mb-2"><strong>Department:</strong> <?= htmlspecialchars($task['dept_name'] ?? '—') ?>
+                        <div class="mb-2"><strong>Department:</strong>
+                            <?= htmlspecialchars($task['dept_name'] ?? '—') ?>
                         </div>
                         <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($task['branch_name'] ?? '—') ?>
                         </div>
@@ -1757,4 +1911,25 @@ include '../../includes/header.php';
         </div>
     </div>
 </div>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+   document.addEventListener('DOMContentLoaded', function () {
+    new TomSelect('#bank_select', {
+        placeholder: 'Search bank or address...',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ["text"],
+
+        render: {
+            option: function(data, escape) {
+                return `<div>${escape(data.text)}</div>`;
+            },
+            item: function(data, escape) {
+                return `<div>${escape(data.text)}</div>`;
+            }
+        }
+    });
+});
+</script>
 <?php include '../../includes/footer.php'; ?>

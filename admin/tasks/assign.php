@@ -36,16 +36,18 @@ if (isExecutive()) {
     $deptStmt->execute([$adminUser['department_id']]);
     $depts = $deptStmt->fetchAll();
 
-    // Admin can see all branches
     $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 
-    // Companies from admin's own branch only
-    $companiesStmt = $db->prepare("SELECT id, company_name FROM companies WHERE is_active=1 AND branch_id = ? ORDER BY company_name");
+    $companiesStmt = $db->prepare("
+        SELECT id, company_name, pan_number, company_code FROM companies
+        WHERE is_active=1 AND branch_id = ?
+        ORDER BY company_name
+    ");
     $companiesStmt->execute([$adminUser['branch_id']]);
     $companies = $companiesStmt->fetchAll();
 }
 
-// ── Staff list — dept-wide, grouped by branch ─────────────────────────────────
+// ── Staff list ────────────────────────────────────────────────────────────────
 if (isExecutive()) {
     $staffList = $db->query("
         SELECT u.*, b.branch_name, d.dept_name FROM users u
@@ -76,15 +78,18 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
-    $title    = trim($_POST['title']       ?? '');
-    $desc     = trim($_POST['description'] ?? '');
-    $priority = $_POST['priority']         ?? 'medium';
-    $dueDate  = $_POST['due_date']         ?? null;
-    $fy       = trim($_POST['fiscal_year'] ?? $currentFy);
-    $remarks  = trim($_POST['remarks']     ?? '');
-    $assignTo = (int)($_POST['assigned_to']  ?? 0) ?: null;
-    $compId   = (int)($_POST['company_id']   ?? 0) ?: null;
-    $status   = $_POST['status']             ?? 'Not Started';
+    $title       = trim($_POST['title']       ?? '');
+    $desc        = trim($_POST['description'] ?? '');
+    $priority    = $_POST['priority']         ?? 'medium';
+    $dueDate     = $_POST['due_date']         ?? null;
+    $fy          = trim($_POST['fiscal_year'] ?? $currentFy);
+    $remarks     = trim($_POST['remarks']     ?? '');
+    $assignTo    = (int)($_POST['assigned_to']  ?? 0) ?: null;
+    $compId      = (int)($_POST['company_id']   ?? 0) ?: null;
+    $status      = $_POST['status']             ?? 'Not Started';
+    // Normalize to lowercase to match ENUM('countable','uncountable')
+    $auditNature = $_POST['audit_nature']       ? strtolower(trim($_POST['audit_nature'])) : null;
+    $auditorId   = (int)($_POST['auditor_id']   ?? 0) ?: null;
 
     if (isExecutive()) {
         $deptId   = (int)($_POST['department_id'] ?? 0);
@@ -94,19 +99,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $branchId = (int)$adminUser['branch_id'];
     }
 
-    // Dept code for task number trigger
     $deptCode = '';
     foreach ($depts as $d) {
         if ($d['id'] == $deptId) { $deptCode = $d['dept_code']; break; }
     }
 
-    // Validate
+    // ── Validate ──────────────────────────────────────────────────────────────
     if (!$title)    $errors[] = 'Task title is required.';
     if (!$deptId)   $errors[] = 'Department is required.';
     if (!$branchId) $errors[] = 'Branch is required.';
     if (!$fy)       $errors[] = 'Fiscal year is required.';
 
-    // Validate FY is in our list
     $validFys = array_column($fys, 'fy_code');
     if ($fy && !in_array($fy, $validFys)) $errors[] = 'Selected fiscal year is invalid.';
 
@@ -131,6 +134,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     );
     if (!in_array($status, $validStatuses)) $errors[] = 'Invalid status.';
 
+    // ── Auditor cap check BEFORE insert ──────────────────────────────────────
+    if (!$errors && $auditorId && $auditNature === 'countable') {
+        $fyRow = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
+
+        $capStmt = $db->prepare("
+            SELECT
+                a.auditor_name,
+                COALESCE(q.max_countable_override, a.max_countable) AS cap,
+                COALESCE(q.countable_count, 0)                      AS used
+            FROM auditors a
+            LEFT JOIN auditor_yearly_quota q
+                   ON q.auditor_id     = a.id
+                  AND q.fiscal_year_id = ?
+            WHERE a.id = ?
+        ");
+        $capStmt->execute([$fyRow ?: 0, $auditorId]);
+        $capData = $capStmt->fetch();
+
+        if ($capData && (int)$capData['used'] >= (int)$capData['cap']) {
+            $errors[] = "Auditor \"{$capData['auditor_name']}\" has reached their countable limit
+                         ({$capData['cap']}) for this fiscal year.";
+        }
+    }
+
+    // ── Insert ────────────────────────────────────────────────────────────────
     if (!$errors) {
         $statusRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
         $statusRow->execute([$status]);
@@ -140,24 +168,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             INSERT INTO tasks
             (title, description, department_id, branch_id, company_id,
              created_by, assigned_to, status_id, priority,
-             due_date, fiscal_year, remarks)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+             due_date, fiscal_year, remarks, audit_nature, auditor_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $ins->execute([
             $title, $desc, $deptId, $branchId, $compId,
             $user['id'], $assignTo, $statusId, $priority,
             $dueDate ?: null, $fy, $remarks,
+            $auditNature, $auditorId,
         ]);
         $taskId = $db->lastInsertId();
 
-        // Notify assigned staff
+        // ── NO manual auditor counter update ──────────────────────────────────
+        // DB trigger trg_auditor_quota_increment fires AFTER INSERT on tasks
+        // and handles auditor_yearly_quota automatically.
+
+        // ── Notify assigned staff ─────────────────────────────────────────────
         if ($assignTo) {
-            // Fetch task_number generated by DB trigger after insert
             $tnStmt = $db->prepare("SELECT task_number FROM tasks WHERE id = ?");
             $tnStmt->execute([$taskId]);
             $taskNumber = $tnStmt->fetchColumn() ?: "T-{$taskId}";
 
-            // Fetch company name if linked
             $companyName = '';
             if ($compId) {
                 $cnStmt = $db->prepare("SELECT company_name FROM companies WHERE id = ?");
@@ -165,12 +196,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $companyName = $cnStmt->fetchColumn() ?: '';
             }
 
-            // Fetch assigned staff name
-            $staffNameStmt = $db->prepare("SELECT full_name, email FROM users WHERE id = ?");
-            $staffNameStmt->execute([$assignTo]);
-            $staffRow = $staffNameStmt->fetch();
-
-            // Build message with full context
             $notifMessage = "Task #{$taskNumber}";
             if ($companyName) $notifMessage .= " — {$companyName}";
             $notifMessage .= " has been assigned to you";
@@ -183,7 +208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $notifMessage,
                 'task',
                 APP_URL . '/staff/tasks/view.php?id=' . $taskId,
-                true,          // send email
+                true,
                 [
                     'template'     => 'task_assigned',
                     'task_number'  => $taskNumber,
@@ -205,13 +230,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         logActivity("Assigned task: {$title}", 'tasks', "id={$taskId}");
-        setFlash('success', "Task assigned successfully! Add department-specific details below.");
+        setFlash('success', 'Task assigned successfully! Add department-specific details below.');
         header('Location: view.php?id=' . $taskId);
         exit;
     }
 }
 
-// For re-populating on validation error
 $selectedFy    = $_POST['fiscal_year'] ?? $currentFy;
 $allStatusOpts = $db->query("SELECT status_name FROM task_status ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
 
@@ -252,7 +276,6 @@ include '../../includes/header.php';
             <div class="card-mis-body">
                 <div class="row g-3">
 
-                    <!-- Title -->
                     <div class="col-12">
                         <label class="form-label-mis">Task Title <span class="required-star">*</span></label>
                         <input type="text" name="title" class="form-control"
@@ -260,14 +283,14 @@ include '../../includes/header.php';
                                value="<?= htmlspecialchars($_POST['title'] ?? '') ?>" required>
                     </div>
 
-                    <!-- Department -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Department <span class="required-star">*</span></label>
                         <?php if (isExecutive()): ?>
                         <select name="department_id" class="form-select" required>
                             <option value="">-- Select --</option>
                             <?php foreach ($depts as $d): ?>
-                            <option value="<?= $d['id'] ?>" <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
+                            <option value="<?= $d['id'] ?>"
+                                <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($d['dept_name']) ?>
                             </option>
                             <?php endforeach; ?>
@@ -280,14 +303,14 @@ include '../../includes/header.php';
                         <?php endif; ?>
                     </div>
 
-                    <!-- Branch -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Branch <span class="required-star">*</span></label>
                         <?php if (isExecutive()): ?>
                         <select name="branch_id" class="form-select" required>
                             <option value="">-- Select --</option>
                             <?php foreach ($branches as $b): ?>
-                            <option value="<?= $b['id'] ?>" <?= ($_POST['branch_id'] ?? '') == $b['id'] ? 'selected' : '' ?>>
+                            <option value="<?= $b['id'] ?>"
+                                <?= ($_POST['branch_id'] ?? '') == $b['id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($b['branch_name']) ?>
                             </option>
                             <?php endforeach; ?>
@@ -300,20 +323,31 @@ include '../../includes/header.php';
                         <?php endif; ?>
                     </div>
 
-                    <!-- Company -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Company / Client</label>
-                        <select name="company_id" class="form-select">
+                        <select name="company_id" id="company_select" class="form-select">
                             <option value="">-- None --</option>
                             <?php foreach ($companies as $c): ?>
-                            <option value="<?= $c['id'] ?>" <?= ($_POST['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
+                           <option value="<?= $c['id'] ?>"
+                                <?= ($_POST['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
+
                                 <?= htmlspecialchars($c['company_name']) ?>
+                                <?php if (!empty($c['pan_number']) || !empty($c['company_code'])): ?>
+                                    —
+                                    <?php if (!empty($c['pan_number'])): ?>
+                                         <?= htmlspecialchars($c['pan_number']) ?>
+                                    <?php endif; ?>
+
+                                    <?php if (!empty($c['company_code'])): ?>
+                                        | <?= htmlspecialchars($c['company_code']) ?>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+
                             </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
 
-                    <!-- Status -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Status</label>
                         <select name="status" class="form-select">
@@ -327,26 +361,24 @@ include '../../includes/header.php';
                         </select>
                     </div>
 
-                    <!-- Priority -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Priority</label>
                         <select name="priority" class="form-select">
                             <?php foreach (TASK_PRIORITIES as $key => $p): ?>
-                            <option value="<?= $key ?>" <?= ($_POST['priority'] ?? 'medium') === $key ? 'selected' : '' ?>>
+                            <option value="<?= $key ?>"
+                                <?= ($_POST['priority'] ?? 'medium') === $key ? 'selected' : '' ?>>
                                 <?= $p['label'] ?>
                             </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
 
-                    <!-- Due Date -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Due Date</label>
                         <input type="date" name="due_date" class="form-control"
                                value="<?= htmlspecialchars($_POST['due_date'] ?? '') ?>">
                     </div>
 
-                    <!-- ── Fiscal Year — SELECT from fiscal_years DB table ──── -->
                     <div class="col-md-4">
                         <label class="form-label-mis">
                             Fiscal Year <span class="required-star">*</span>
@@ -354,8 +386,7 @@ include '../../includes/header.php';
                         <select name="fiscal_year" class="form-select" required>
                             <option value="">-- Select FY --</option>
                             <?php foreach ($fys as $fy): ?>
-                            <option
-                                value="<?= htmlspecialchars($fy['fy_code']) ?>"
+                            <option value="<?= htmlspecialchars($fy['fy_code']) ?>"
                                 <?= $selectedFy === $fy['fy_code'] ? 'selected' : '' ?>
                                 <?= $fy['is_current'] ? 'style="font-weight:700;color:#16a34a;"' : '' ?>>
                                 <?= htmlspecialchars($fy['fy_label'] ?: $fy['fy_code']) ?>
@@ -368,12 +399,9 @@ include '../../includes/header.php';
                         </small>
                     </div>
 
-                    <!-- Assign To — dept-wide, grouped by branch -->
                     <div class="col-md-8">
-                        <label class="form-label-mis">
-                            Assign To
-                        </label>
-                        <select name="assigned_to" class="form-select">
+                        <label class="form-label-mis">Assign To</label>
+                        <select name="assigned_to" id="assigned_to_select" class="form-select">
                             <option value="">-- Unassigned --</option>
                             <?php
                             $byBranch = [];
@@ -387,36 +415,56 @@ include '../../includes/header.php';
                                 <option value="<?= $s['id'] ?>"
                                     <?= ($_POST['assigned_to'] ?? '') == $s['id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($s['full_name']) ?>
+                                    <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
                                 </option>
                                 <?php endforeach; ?>
                             </optgroup>
                             <?php endforeach; ?>
                         </select>
                     </div>
+
+                    <!-- Audit Nature — values lowercase to match ENUM -->
                     <div class="col-md-6">
-                        <label>Audit Nature</label>
-                        <select id="audit_nature" class="form-select" onchange="loadAuditors()">
+                        <label class="form-label-mis">Audit Nature</label>
+                        <select name="audit_nature" id="audit_nature"
+                                class="form-select" onchange="loadAuditors()">
                             <option value="">-- Select --</option>
-                            <option value="countable">Countable</option>
-                            <option value="uncountable">Uncountable</option>
+                            <option value="countable"
+                                <?= ($_POST['audit_nature'] ?? '') === 'countable' ? 'selected' : '' ?>>
+                                Countable
+                            </option>
+                            <option value="uncountable"
+                                <?= ($_POST['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
+                                Uncountable
+                            </option>
                         </select>
                     </div>
 
                     <div class="col-md-6">
-                        <label>Auditor</label>
-                        <select id="auditor_id" name="auditor_id" class="form-select">
+                        <label class="form-label-mis">Auditor</label>
+                        <select name="auditor_id" id="auditor_id" class="form-select">
                             <option value="">-- Select Auditor --</option>
                         </select>
+                        <div id="auditor-capacity" style="margin-top:.4rem;display:none;">
+                            <div class="d-flex justify-content-between mb-1"
+                                 style="font-size:.72rem;color:#6b7280;">
+                                <span id="capacity-label">Capacity</span>
+                                <span id="capacity-text"></span>
+                            </div>
+                            <div style="background:#f3f4f6;border-radius:99px;height:5px;">
+                                <div id="capacity-bar"
+                                     style="height:100%;border-radius:99px;background:#10b981;
+                                            transition:.3s;width:0%;"></div>
+                            </div>
+                        </div>
                     </div>
 
-                    <!-- Description -->
                     <div class="col-12">
                         <label class="form-label-mis">Description</label>
                         <textarea name="description" class="form-control" rows="2"
                                   placeholder="Brief description of the task"><?= htmlspecialchars($_POST['description'] ?? '') ?></textarea>
                     </div>
 
-                    <!-- Remarks -->
                     <div class="col-12">
                         <label class="form-label-mis">Remarks</label>
                         <textarea name="remarks" class="form-control" rows="2"
@@ -428,9 +476,7 @@ include '../../includes/header.php';
         </div>
     </div>
 
-    <!-- Sidebar -->
     <div class="col-lg-4">
-
         <div class="card-mis mb-3">
             <div class="card-mis-header"><h5>Actions</h5></div>
             <div class="card-mis-body">
@@ -443,7 +489,6 @@ include '../../includes/header.php';
             </div>
         </div>
 
-        <!-- Current FY badge -->
         <div class="card-mis mb-3" style="border-left:3px solid #16a34a;">
             <div class="card-mis-body" style="padding:.85rem 1rem;">
                 <div style="font-size:.72rem;font-weight:700;color:#16a34a;text-transform:uppercase;
@@ -459,7 +504,6 @@ include '../../includes/header.php';
             </div>
         </div>
 
-        <!-- Next steps -->
         <div class="card-mis mb-3" style="border-left:3px solid #3b82f6;">
             <div class="card-mis-body" style="padding:1rem;">
                 <p style="font-size:.8rem;font-weight:700;color:#3b82f6;margin-bottom:.6rem;">
@@ -471,69 +515,151 @@ include '../../includes/header.php';
                                      border-radius:4px;font-size:.68rem;font-weight:700;flex-shrink:0;">
                             <i class="fas fa-eye me-1"></i>VIEW
                         </span>
-                        Fill dept-specific fields (Tax details, Banking checklist, Finance payment, etc.) and update work status
+                        Fill dept-specific fields and update work status
                     </div>
                     <div style="display:flex;align-items:baseline;gap:.4rem;">
                         <span style="background:#f59e0b;color:#fff;padding:.1rem .45rem;
                                      border-radius:4px;font-size:.68rem;font-weight:700;flex-shrink:0;">
                             <i class="fas fa-pen me-1"></i>EDIT
                         </span>
-                        Change title, priority, due date, reassign staff, switch company, update remarks
+                        Change title, priority, due date, reassign staff
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Status reference -->
         <div class="card-mis p-3" style="border-left:3px solid var(--gold);">
             <p style="font-size:.8rem;font-weight:600;margin-bottom:.5rem;">Status Reference</p>
-            <?php foreach ($allStatusOpts as $sn):
-                if ($sn === 'Corporate Team') continue;
-                $col = defined('TASK_STATUSES') && isset(TASK_STATUSES[$sn]) ? TASK_STATUSES[$sn]['color'] : '#9ca3af';
-            ?>
+            <?php
+        $statusRef = $db->query("SELECT status_name, color FROM task_status ORDER BY id")->fetchAll();
+        foreach ($statusRef as $sr):
+            if ($sr['status_name'] === 'Corporate Team') continue;
+        ?>
             <div class="d-flex align-items-center gap-2 mb-1">
-                <div style="width:8px;height:8px;border-radius:50%;background:<?= $col ?>;flex-shrink:0;"></div>
-                <span style="font-size:.78rem;color:#6b7280;"><?= htmlspecialchars($sn) ?></span>
+                <div style="width:8px;height:8px;border-radius:50%;
+                            background:<?= htmlspecialchars($sr['color'] ?? '#9ca3af') ?>;flex-shrink:0;"></div>
+                <span style="font-size:.78rem;color:#6b7280;"><?= htmlspecialchars($sr['status_name']) ?></span>
             </div>
-            <?php endforeach; ?>
+        <?php endforeach; ?>
         </div>
-
     </div>
-    </div><!-- row -->
+    </div>
 </form>
 
-</div><!-- padding -->
-</div><!-- main-content -->
-</div><!-- app-wrapper -->
+</div>
+</div>
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-    function loadAuditors() {
+// ── Tom Select for searchable dropdowns ───────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function () {
+
+    new TomSelect('#assigned_to_select', {
+        placeholder: 'Search by name or employee ID...',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text']
+    });
+
+    new TomSelect('#company_select', {
+    placeholder: 'Search by name, PAN or code...',
+    allowEmptyOption: true,
+    maxOptions: 500,
+
+    render: {
+        option: function(data, escape) {
+            return `
+                <div style="padding:6px 0;">
+                    <div style="margin-left:10px; font-weight:600;">
+                        ${escape(data.text.split('—')[0])}
+                    </div>
+                    <div style="margin-left:10px; font-size:12px;color:#6b7280;">
+                        ${escape(data.text.includes('—') ? data.text.split('—')[1] : '')}
+                    </div>
+                </div>
+            `;
+        },
+        item: function(data, escape) {
+            return `<div>${escape(data.text)}</div>`;
+        }
+    }
+});
+
+});
+
+// ── Auditor loader ────────────────────────────────────────────────────────────
+function loadAuditors() {
     const nature = document.getElementById('audit_nature').value;
+    const select = document.getElementById('auditor_id');
+    const capDiv = document.getElementById('auditor-capacity');
 
-    if (!nature) return;
+    if (!nature) {
+        select.innerHTML = '<option value="">-- Select Auditor --</option>';
+        capDiv.style.display = 'none';
+        return;
+    }
 
-    fetch(`${APP_URL}/ajax/get_auditors.php?nature=${nature}`)
-        .then(res => res.json())
+    select.innerHTML = '<option value="">Loading…</option>';
+
+    fetch('<?= APP_URL ?>/ajax/get_auditors.php?nature=' + encodeURIComponent(nature))
+        .then(r => r.json())
         .then(data => {
-            const select = document.getElementById('auditor_id');
-
             select.innerHTML = '<option value="">-- Select Auditor --</option>';
-
             data.forEach(a => {
-                let count = 0;
+                const atLimit = nature === 'countable' && a.at_limit;
+                const label   = nature === 'countable'
+                    ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
+                    : `${a.auditor_name} (${a.uncountable_count} tasks)`;
 
-                if (nature === 'countable') {
-                    count = a.countable_count;
-                } else if (nature === 'uncountable') {
-                    count = a.uncountable_count;
-                }
-
-                select.innerHTML += `
-                    <option value="${a.id}">
-                        ${a.name} (${count})
-                    </option>
-                `;
+                const opt       = document.createElement('option');
+                opt.value       = a.id;
+                opt.text        = label;
+                opt.disabled    = atLimit;
+                opt.dataset.countable   = a.countable_count;
+                opt.dataset.uncountable = a.uncountable_count;
+                opt.dataset.limit       = a.max_limit;
+                select.appendChild(opt);
             });
+            updateCapacityBar();
+        })
+        .catch(() => {
+            select.innerHTML = '<option value="">Error loading auditors</option>';
         });
 }
+
+function updateCapacityBar() {
+    const nature  = document.getElementById('audit_nature').value;
+    const select  = document.getElementById('auditor_id');
+    const capDiv  = document.getElementById('auditor-capacity');
+    const opt     = select.options[select.selectedIndex];
+
+    if (!opt || !opt.value || !nature) {
+        capDiv.style.display = 'none';
+        return;
+    }
+
+    if (nature === 'uncountable') {
+        document.getElementById('capacity-label').textContent = 'Uncountable tasks';
+        document.getElementById('capacity-text').textContent  = opt.dataset.uncountable;
+        document.getElementById('capacity-bar').style.width   = '0%';
+        capDiv.style.display = 'block';
+        return;
+    }
+
+    const used  = parseInt(opt.dataset.countable  || 0);
+    const limit = parseInt(opt.dataset.limit || 0);
+    const pct   = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
+
+    document.getElementById('capacity-label').textContent    = 'Countable capacity used';
+    document.getElementById('capacity-text').textContent     = `${used} / ${limit} (${pct}%)`;
+    document.getElementById('capacity-bar').style.width      = pct + '%';
+    document.getElementById('capacity-bar').style.background = color;
+    capDiv.style.display = 'block';
+}
+
+document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
 </script>
 <?php include '../../includes/footer.php'; ?>

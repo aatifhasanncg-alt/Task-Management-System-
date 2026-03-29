@@ -63,11 +63,7 @@ $xferStmt = $db->query("
 $transferredCount = (int)$xferStmt->fetchColumn();
 
 // ── All dynamic statuses for stat cards ──────────────────────────────────────
-$allStatuses = $db->query("
-    SELECT id, status_name FROM task_status
-    WHERE status_name != 'Corporate Team'
-    ORDER BY id
-")->fetchAll();
+$allStatuses = $db->query("SELECT id, status_name, color, bg_color, icon FROM task_status ORDER BY id")->fetchAll();
 
 // ── Recent tasks — scoped ─────────────────────────────────────────────────────
 $myTasksStmt = $db->query("
@@ -138,9 +134,9 @@ include '../../includes/header.php';
     <?php foreach ($allStatuses as $st):
         $k    = $st['status_name'];
         $cnt  = $byStatus[$k] ?? 0;
-        $col  = defined('TASK_STATUSES') && isset(TASK_STATUSES[$k]) ? TASK_STATUSES[$k]['color'] : ($statusIcons[$k][0] ?? '#6b7280');
-        $bg   = defined('TASK_STATUSES') && isset(TASK_STATUSES[$k]) ? TASK_STATUSES[$k]['bg']    : ($statusIcons[$k][2] ?? '#f3f4f6');
-        $icon = $statusIcons[$k][0] ?? 'fa-circle';
+        $col  = $st['color'] ?? '#6b7280';
+        $bg   = $st['bg_color'] ?? '#f3f4f6';
+        $icon = $st['icon'] ?? 'fa-circle';
     ?>
     <div class="col-6 col-md-4 col-xl-2">
         <div class="stat-card">
