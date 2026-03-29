@@ -55,5 +55,5 @@ define('MAIL_FROM_NAME', 'ASK Global Advisory MIS');
 define('SMTP_HOST',      'smtp.gmail.com');
 define('SMTP_PORT',      587);
 define('SMTP_USER',      'askglobaladvisory@gmail.com');
-define('SMTP_PASS',      'uwrv gcad iung ajmo');  // 16-char app password
+define('SMTP_PASS',      '16-char app password');  // 16-char app password
 define('SMTP_SECURE',    'tls');
