@@ -248,24 +248,16 @@ include '../../includes/header.php';
                                         <select name="company_id" id="company_select" class="form-select">
                                             <option value="">-- None --</option>
 
-                                            <?php foreach ($companies as $c): ?>
-                                                <option value="<?= $c['id'] ?>"
-                                                    <?= ($_POST['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
-
-                                                    <?= htmlspecialchars($c['company_name']) ?>
-
-                                                    <?php if (!empty($c['pan_number']) || !empty($c['company_code'])): ?>
-                                                        —
-                                                        <?php if (!empty($c['pan_number'])): ?>
-                                                            <?= htmlspecialchars($c['pan_number']) ?>
-                                                        <?php endif; ?>
-
-                                                        <?php if (!empty($c['company_code'])): ?>
-                                                            | <?= htmlspecialchars($c['company_code']) ?>
-                                                        <?php endif; ?>
-                                                    <?php endif; ?>
-
-                                                </option>
+                                            <?php foreach ($companies as $c):
+                                                $meta = [];
+                                                if (!empty($c['pan_number']))   $meta[] = $c['pan_number'];
+                                                if (!empty($c['company_code'])) $meta[] = $c['company_code'];
+                                                $metaStr = $meta ? ' — ' . implode(' | ', $meta) : '';
+                                                $sel = ((int)($_POST['company_id'] ?? 0) === (int)$c['id']) ? 'selected' : '';
+                                            ?>
+                                            <option value="<?= $c['id'] ?>" <?= $sel ?>>
+                                                <?= htmlspecialchars($c['company_name'] . $metaStr) ?>
+                                            </option>
                                             <?php endforeach; ?>
 
                                         </select>

@@ -337,17 +337,6 @@ include '../../includes/header.php';
                             placeholder="Task #, title, company, staff..." value="<?= htmlspecialchars($search) ?>">
                     </div>
 
-                    <div class="col-md-2">
-                        <label class="form-label-mis">Staff</label>
-                        <select name="staff_id" class="form-select form-select-sm">
-                            <option value="">All Staff</option>
-                            <?php foreach ($allStaff as $s): ?>
-                                <option value="<?= $s['id'] ?>" <?= $filterStaff == $s['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($s['full_name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
 
                     <?php if ($showAll): ?>
                         <div class="col-md-2">

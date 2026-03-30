@@ -715,7 +715,6 @@ CREATE TABLE task_banking (
 
     -- Client Info — all pulled from companies table via company_id
     -- No duplicate fields, just store overrides if needed
-    contact_no VARCHAR(50),              -- override if different from company
     client_category_id INT,              -- FK bank_client_categories
 
     -- Assignment
@@ -723,8 +722,6 @@ CREATE TABLE task_banking (
     ecd DATE,
     completion_date DATE,
 
-    -- Work Status
-    work_status_id INT,                  -- FK task_status
 
     -- Checklist columns (matching screenshot exactly)
     sales_check INT DEFAULT NULL,        -- numeric as per screenshot
@@ -747,8 +744,7 @@ CREATE TABLE task_banking (
     FOREIGN KEY (task_id)              REFERENCES tasks(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id)           REFERENCES companies(id),
     FOREIGN KEY (bank_reference_id)    REFERENCES bank_references(id),
-    FOREIGN KEY (client_category_id)   REFERENCES bank_client_categories(id),
-    FOREIGN KEY (work_status_id)       REFERENCES task_status(id)
+    FOREIGN KEY (client_category_id)   REFERENCES bank_client_categories(id)
 );
 
 -- ========================

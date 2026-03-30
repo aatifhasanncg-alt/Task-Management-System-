@@ -118,49 +118,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
     $assignTo    = (int)($_POST['assigned_to']  ?? 0) ?: null;
     $compId      = (int)($_POST['company_id']   ?? 0) ?: null;
     $status      = $_POST['status']            ?? '';
-    $auditNature = $_POST['audit_nature']      ?? null;
+    $auditNature = $_POST['audit_nature'] ? strtolower(trim($_POST['audit_nature'])) : null;
     $auditorId   = (int)($_POST['auditor_id']  ?? 0) ?: null;
+
+    $oldAuditorId   = (int)($task['auditor_id']   ?? 0);
+    $oldAuditNature = strtolower($task['audit_nature'] ?? '');
+    $auditorChanged = $auditorId  !== $oldAuditorId;
+    $natureChanged  = $auditNature !== $oldAuditNature;
 
     if (!$title) $errors[] = 'Task title is required.';
 
-    if (!$errors) {
-        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
-        $stRow->execute([$status]);
-        $statusId = (int)($stRow->fetchColumn() ?: 1);
-
-        $auditNature = $_POST['audit_nature'] ? strtolower(trim($_POST['audit_nature'])) : null;
-        $auditorId   = (int)($_POST['auditor_id'] ?? 0) ?: null;
-
-        // Cap check — only when auditor or nature actually changes
-        $oldAuditorId   = (int)($task['auditor_id']   ?? 0);
-        $oldAuditNature = strtolower($task['audit_nature'] ?? '');
-        $auditorChanged = $auditorId  !== $oldAuditorId;
-        $natureChanged  = $auditNature !== $oldAuditNature;
-        if ($auditNature === 'countable' && ($auditorChanged || $natureChanged)) {
+    // Cap check — separate from brace nesting
+    if (!$errors && $auditNature === 'countable' && ($auditorChanged || $natureChanged) && $auditorId) {
         $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
-
         $capStmt = $db->prepare("
-            SELECT
-                a.auditor_name,
-                COALESCE(q.max_countable_override, a.max_countable) AS cap,
-                COALESCE(q.countable_count, 0)                      AS used
+            SELECT a.auditor_name,
+                   COALESCE(q.max_countable_override, a.max_countable) AS cap,
+                   COALESCE(q.countable_count, 0) AS used
             FROM auditors a
             LEFT JOIN auditor_yearly_quota q
-                ON q.auditor_id     = a.id
-                AND q.fiscal_year_id = ?
+                   ON q.auditor_id = a.id AND q.fiscal_year_id = ?
             WHERE a.id = ?
         ");
         $capStmt->execute([$fyId ?: 0, $auditorId]);
         $capData = $capStmt->fetch();
-
         if ($capData && (int)$capData['used'] >= (int)$capData['cap']) {
-            $errors[] = "Auditor \"{$capData['auditor_name']}\" has reached their countable limit
-                        ({$capData['cap']}) for this fiscal year.";
+            $errors[] = "Auditor \"{$capData['auditor_name']}\" has reached their countable limit ({$capData['cap']}) for this fiscal year.";
         }
     }
 
-       if (!$errors) {
-        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+    if (!$errors) {
+        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
         $stRow->execute([$status]);
         $statusId = (int)($stRow->fetchColumn() ?: 1);
 
@@ -177,31 +165,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
             $auditNature ?: null, $auditorId, $id,
         ]);
 
-         $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
+        $fyId = $db->query("SELECT id FROM fiscal_years WHERE is_current=1 LIMIT 1")->fetchColumn();
 
         if ($fyId && ($auditorChanged || $natureChanged)) {
-
-            // Decrement old auditor
             if ($oldAuditorId && $oldAuditNature) {
                 $col = $oldAuditNature === 'countable' ? 'countable_count' : 'uncountable_count';
                 $db->prepare("
                     INSERT INTO auditor_yearly_quota
                         (auditor_id, fiscal_year_id, countable_count, uncountable_count)
                     VALUES (?, ?, 0, 0)
-                    ON DUPLICATE KEY UPDATE
-                        {$col} = GREATEST(0, {$col} - 1)
+                    ON DUPLICATE KEY UPDATE {$col} = GREATEST(0, {$col} - 1)
                 ")->execute([$oldAuditorId, $fyId]);
             }
-
-            // Increment new auditor
             if ($auditorId && $auditNature) {
                 $col = $auditNature === 'countable' ? 'countable_count' : 'uncountable_count';
                 $db->prepare("
                     INSERT INTO auditor_yearly_quota
                         (auditor_id, fiscal_year_id, countable_count, uncountable_count)
                     VALUES (?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                        {$col} = {$col} + 1
+                    ON DUPLICATE KEY UPDATE {$col} = {$col} + 1
                 ")->execute([
                     $auditorId, $fyId,
                     $auditNature === 'countable'   ? 1 : 0,
@@ -210,30 +192,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
             }
         }
 
-        // Workflow log for assignment change
-       if ($assignTo && $assignTo != $task['assigned_to']) {
-        try {
-            $db->prepare("
-                INSERT INTO task_workflow
-                (task_id, action, from_user_id, to_user_id,
-                 from_dept_id, to_dept_id, old_status, new_status, remarks)
-                VALUES (?, 'assigned', ?, ?, ?, ?, ?, ?, ?)
-            ")->execute([
-                $id, $user['id'], $assignTo,
-                $task['department_id'], $task['department_id'],
-                $task['status'], $status, $remarks
-            ]);
-        } catch (Exception $e) {}
+        if ($assignTo && $assignTo != $task['assigned_to']) {
+            try {
+                $db->prepare("
+                    INSERT INTO task_workflow
+                    (task_id, action, from_user_id, to_user_id,
+                     from_dept_id, to_dept_id, old_status, new_status, remarks)
+                    VALUES (?, 'assigned', ?, ?, ?, ?, ?, ?, ?)
+                ")->execute([
+                    $id, $user['id'], $assignTo,
+                    $task['department_id'], $task['department_id'],
+                    $task['status'], $status, $remarks
+                ]);
+            } catch (Exception $e) {}
 
-        notify($assignTo, 'Task Assigned to You',
-            "Task {$task['task_number']} has been assigned to you.",
-            'task', APP_URL . '/staff/tasks/view.php?id=' . $id);
-            }
-
-            logActivity("Task updated: {$task['task_number']}", 'tasks');
-            setFlash('success', 'Task updated successfully.');
-            header("Location: edit.php?id={$id}"); exit;
+            notify($assignTo, 'Task Assigned to You',
+                "Task {$task['task_number']} has been assigned to you.",
+                'task', APP_URL . '/staff/tasks/view.php?id=' . $id);
         }
+
+        logActivity("Task updated: {$task['task_number']}", 'tasks');
+        setFlash('success', 'Task updated successfully.');
+        header("Location: edit.php?id={$id}"); exit;
     }
 }
 // ── POST: Transfer department ─────────────────────────────────────────────────
@@ -673,16 +653,16 @@ include '../../includes/header.php';
 // ── Tom Select: Company ───────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function () {
 
-    new TomSelect('#company_select', {
+    const companyTs = new TomSelect('#company_select', {
         placeholder: 'Search company, PAN or code…',
         allowEmptyOption: true,
         maxOptions: 500,
         searchField: ['text'],
         render: {
             option: function(data, escape) {
-                const parts  = data.text.split(' — ');
-                const name   = parts[0] || '';
-                const meta   = parts[1] || '';
+                const parts = data.text.split(' — ');
+                const name  = parts[0] || '';
+                const meta  = parts[1] || '';
                 return `<div style="padding:.4rem .2rem;">
                     <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
                     ${meta ? `<div style="font-size:.75rem;color:#6b7280;">${escape(meta)}</div>` : ''}
@@ -694,8 +674,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ── Tom Select: Assigned To ───────────────────────────────────────────────
-    new TomSelect('#assigned_to_sel', {
+    // Force pre-selection — Tom Select misses HTML selected attr with allowEmptyOption
+    const preCompany = '<?= (int)($task['company_id'] ?? 0) ?>';
+    if (preCompany && preCompany !== '0') companyTs.setValue(preCompany, true);
+
+    const staffTs = new TomSelect('#assigned_to_sel', {
         placeholder: 'Search staff by name or ID…',
         allowEmptyOption: true,
         maxOptions: 300,
@@ -711,11 +694,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>`;
             },
             item: function(data, escape) {
-                const name = data.text.split(' — ')[0];
-                return `<div>${escape(name)}</div>`;
+                return `<div>${escape(data.text.split(' — ')[0])}</div>`;
             }
         }
     });
+
+    const preStaff = '<?= (int)($task['assigned_to'] ?? 0) ?>';
+    if (preStaff && preStaff !== '0') staffTs.setValue(preStaff, true);
 
     // Init capacity bar on page load
     const nature = document.getElementById('audit_nature').value;

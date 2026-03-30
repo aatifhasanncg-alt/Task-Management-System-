@@ -30,7 +30,13 @@ if (!$currentFy && !empty($fys)) $currentFy = $fys[0]['fy_code'];
 if (isExecutive()) {
     $depts     = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
     $branches  = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
-    $companies = $db->query("SELECT id, company_name FROM companies WHERE is_active=1 ORDER BY company_name")->fetchAll();
+    $companies = $db->query("
+        SELECT id, company_name,
+            COALESCE(pan_number,'')   AS pan_number,
+            COALESCE(company_code,'') AS company_code
+        FROM companies WHERE is_active=1 AND branch_id = {$adminUser['branch_id']}
+        ORDER BY company_name
+    ")->fetchAll();
 } else {
     $deptStmt = $db->prepare("SELECT * FROM departments WHERE id = ? AND is_active = 1");
     $deptStmt->execute([$adminUser['department_id']]);
@@ -567,7 +573,7 @@ document.addEventListener('DOMContentLoaded', function () {
     placeholder: 'Search by name, PAN or code...',
     allowEmptyOption: true,
     maxOptions: 500,
-
+    searchField: ['text'],
     render: {
         option: function(data, escape) {
             return `

@@ -70,7 +70,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_
         header("Location: view.php?id={$id}");
         exit;
     }
-    // If errors fall through — show them below
+}
+
+// ── POST: Edit task status ────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit_task_status') {
+    verifyCsrf();
+    $taskId    = (int)($_POST['task_id'] ?? 0);
+    $statusId  = (int)($_POST['status_id'] ?? 0);
+    $remarks   = trim($_POST['remarks'] ?? '');
+
+    if ($taskId && $statusId) {
+        // Get old status for workflow log
+        $oldRow = $db->prepare("SELECT t.status_id, ts.status_name FROM tasks t LEFT JOIN task_status ts ON ts.id = t.status_id WHERE t.id = ?");
+        $oldRow->execute([$taskId]);
+        $old = $oldRow->fetch();
+        $newRow = $db->prepare("SELECT status_name FROM task_status WHERE id = ?");
+        $newRow->execute([$statusId]);
+        $newStatus = $newRow->fetchColumn();
+
+        $db->prepare("UPDATE tasks SET status_id = ?, updated_at = NOW() WHERE id = ? AND company_id = ?")
+           ->execute([$statusId, $taskId, $id]);
+
+        // Log to workflow
+        try {
+            $db->prepare("
+                INSERT INTO task_workflow (task_id, action, from_user_id, old_status, new_status, remarks, created_at)
+                VALUES (?, 'status_changed', ?, ?, ?, ?, NOW())
+            ")->execute([$taskId, $currentUser['id'], $old['status_name'] ?? '', $newStatus, $remarks]);
+        } catch (Exception $e) {}
+
+        logActivity("Changed task #$taskId status to $newStatus", 'tasks');
+        setFlash('success', 'Task status updated.');
+    }
+    header("Location: view.php?id={$id}");
+    exit;
 }
 
 // Fetch company with industry
@@ -100,10 +133,14 @@ $companyTypes  = $db->query("SELECT id, type_name FROM company_types ORDER BY ty
 $branches      = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 $allIndustries = $db->query("SELECT id, industry_name FROM industries WHERE is_active=1 ORDER BY industry_name")->fetchAll();
 
+// All task statuses for dropdown
+$allStatuses = $db->query("SELECT id, status_name, color FROM task_status ORDER BY id ASC")->fetchAll();
+
 // All tasks for this company
 $taskStmt = $db->prepare("
     SELECT t.*,
            ts.status_name AS status,
+           ts.color AS status_color,
            d.dept_name, d.dept_code, d.color,
            b.branch_name,
            cb.full_name AS created_by_name,
@@ -305,7 +342,17 @@ include '../../includes/header.php';
                                             <td style="font-size:.82rem;">
                                                 <?= htmlspecialchars($t['assigned_to_name'] ?? '—') ?>
                                             </td>
-                                            <td><span class="status-badge <?= $sClass ?>"><?= htmlspecialchars($t['status']) ?></span></td>
+                                            <td>
+                                                <!-- Editable status badge — click to open mini modal -->
+                                                <button
+                                                    onclick="openStatusModal(<?= $t['id'] ?>, <?= $t['status_id'] ?>, '<?= htmlspecialchars(addslashes($t['task_number'])) ?>', '<?= htmlspecialchars(addslashes($t['title'])) ?>')"
+                                                    class="status-badge <?= $sClass ?>"
+                                                    style="border:none;cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;"
+                                                    title="Click to change status">
+                                                    <?= htmlspecialchars($t['status']) ?>
+                                                    <i class="fas fa-pen" style="font-size:.55rem;opacity:.6;"></i>
+                                                </button>
+                                            </td>
                                             <td>
                                                 <span style="font-size:.78rem;font-weight:600;color:<?= ['urgent' => '#ef4444', 'high' => '#f59e0b', 'medium' => '#3b82f6', 'low' => '#9ca3af'][$t['priority']] ?? '#9ca3af' ?>;">
                                                     <?= ucfirst($t['priority']) ?>
@@ -392,21 +439,29 @@ include '../../includes/header.php';
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
-                                <?php foreach (TASK_STATUSES as $k => $s):
-                                    $cnt = $statusCounts[$k] ?? 0;
+
+                                <!-- Status breakdown with edit buttons -->
+                                <?php foreach ($allStatuses as $s):
+                                    $cnt = $statusCounts[$s['status_name']] ?? 0;
                                     if (!$cnt) continue;
                                     $pct = round(($cnt / $totalTasks) * 100);
+                                    $sc  = $s['color'] ?? '#9ca3af';
                                 ?>
                                     <div class="mb-2">
-                                        <div class="d-flex justify-content-between mb-1" style="font-size:.75rem;">
-                                            <span style="color:#1f2937;"><?= $s['label'] ?></span>
+                                        <div class="d-flex justify-content-between align-items-center mb-1" style="font-size:.75rem;">
+                                            <span style="color:#1f2937;display:flex;align-items:center;gap:.4rem;">
+                                                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:<?= $sc ?>;"></span>
+                                                <?= htmlspecialchars($s['status_name']) ?>
+                                            </span>
                                             <span style="color:#9ca3af;"><?= $cnt ?> (<?= $pct ?>%)</span>
                                         </div>
                                         <div style="background:#f3f4f6;border-radius:99px;height:5px;">
-                                            <div style="width:<?= $pct ?>%;background:<?= $s['color'] ?>;height:100%;border-radius:99px;"></div>
+                                            <div style="width:<?= $pct ?>%;background:<?= $sc ?>;height:100%;border-radius:99px;"></div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
+
+                                <!-- Completion donut -->
                                 <?php
                                 $doneCount      = $statusCounts['Done'] ?? 0;
                                 $completionRate = $totalTasks ? round(($doneCount / $totalTasks) * 100) : 0;
@@ -427,6 +482,7 @@ include '../../includes/header.php';
                                         </div>
                                     </div>
                                 </div>
+
                             <?php else: ?>
                                 <div class="text-center py-3" style="color:#9ca3af;font-size:.85rem;">No tasks yet</div>
                             <?php endif; ?>
@@ -493,8 +549,6 @@ include '../../includes/header.php';
             overflow-y:auto;padding:2rem 1rem;">
     <div style="background:#fff;border-radius:16px;width:100%;max-width:620px;
                 box-shadow:0 24px 60px rgba(0,0,0,.2);margin:auto;">
-
-        <!-- Modal Header -->
         <div style="padding:1.25rem 1.5rem;border-bottom:1px solid #f3f4f6;
                     display:flex;align-items:center;justify-content:space-between;">
             <h5 style="margin:0;font-size:1rem;font-weight:700;">
@@ -503,21 +557,15 @@ include '../../includes/header.php';
             <button onclick="closeEditModal()"
                 style="background:none;border:none;font-size:1.1rem;color:#9ca3af;cursor:pointer;">✕</button>
         </div>
-
-        <!-- Modal Body -->
         <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
             <input type="hidden" name="action" value="edit_company">
             <div style="padding:1.5rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-
-                <!-- Full-width: Company Name -->
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Company Name <span style="color:#ef4444;">*</span></label>
                     <input type="text" name="company_name" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['company_name']) ?>" required>
                 </div>
-
-                <!-- Company Type -->
                 <div>
                     <label class="form-label-mis">Company Type</label>
                     <select name="company_type_id" class="form-select form-select-sm">
@@ -529,8 +577,6 @@ include '../../includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-
-                <!-- Branch -->
                 <div>
                     <label class="form-label-mis">Branch</label>
                     <select name="branch_id" class="form-select form-select-sm">
@@ -542,22 +588,16 @@ include '../../includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-
-                <!-- PAN -->
                 <div>
                     <label class="form-label-mis">PAN Number</label>
                     <input type="text" name="pan_number" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['pan_number'] ?? '') ?>">
                 </div>
-
-                <!-- Reg Number -->
                 <div>
                     <label class="form-label-mis">Registration Number</label>
                     <input type="text" name="reg_number" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['reg_number'] ?? '') ?>">
                 </div>
-
-                <!-- Return Type -->
                 <div>
                     <label class="form-label-mis">Return Type</label>
                     <select name="return_type" class="form-select form-select-sm">
@@ -569,8 +609,6 @@ include '../../includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-
-                <!-- Industry -->
                 <div>
                     <label class="form-label-mis">Industry</label>
                     <select name="industry_id" class="form-select form-select-sm">
@@ -583,45 +621,32 @@ include '../../includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-
-                <!-- Contact Person -->
                 <div>
                     <label class="form-label-mis">Contact Person</label>
                     <input type="text" name="contact_person" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['contact_person'] ?? '') ?>">
                 </div>
-
-                <!-- Contact Phone -->
                 <div>
                     <label class="form-label-mis">Contact Phone</label>
                     <input type="text" name="contact_phone" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['contact_phone'] ?? '') ?>">
                 </div>
-
-                <!-- Contact Email — full width -->
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Contact Email</label>
                     <input type="email" name="contact_email" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['contact_email'] ?? '') ?>">
                 </div>
-
-                <!-- Address — full width -->
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Address</label>
                     <textarea name="address" class="form-control form-control-sm" rows="2"
                         placeholder="Street, City, District…"><?= htmlspecialchars($company['address'] ?? '') ?></textarea>
                 </div>
-
             </div>
-
-            <!-- Modal Footer -->
             <div style="padding:1rem 1.5rem;border-top:1px solid #f3f4f6;
                         display:flex;justify-content:flex-end;gap:.75rem;">
                 <button type="button" onclick="closeEditModal()"
                     style="background:#f3f4f6;color:#6b7280;border:none;border-radius:8px;
-                           padding:.55rem 1.1rem;font-size:.85rem;cursor:pointer;">
-                    Cancel
-                </button>
+                           padding:.55rem 1.1rem;font-size:.85rem;cursor:pointer;">Cancel</button>
                 <button type="submit" class="btn btn-gold btn-sm" style="padding:.55rem 1.25rem;">
                     <i class="fas fa-save me-1"></i>Save Changes
                 </button>
@@ -630,20 +655,157 @@ include '../../includes/header.php';
     </div>
 </div>
 
+<!-- ── Edit Task Status Modal ─────────────────────────────────────────────── -->
+<div id="status-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
+            z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:14px;width:100%;max-width:400px;margin:1rem;
+                box-shadow:0 20px 50px rgba(0,0,0,.2);">
+        <!-- Header -->
+        <div style="padding:1rem 1.25rem;border-bottom:1px solid #f3f4f6;
+                    display:flex;align-items:center;justify-content:space-between;">
+            <div>
+                <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">Change Status</div>
+                <div id="sm-task-label" style="font-size:.9rem;font-weight:700;color:#1f2937;margin-top:.1rem;"></div>
+            </div>
+            <button onclick="closeStatusModal()"
+                style="background:none;border:none;font-size:1.1rem;color:#9ca3af;cursor:pointer;">✕</button>
+        </div>
+        <!-- Body -->
+        <form method="POST" style="padding:1.25rem;">
+            <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+            <input type="hidden" name="action" value="edit_task_status">
+            <input type="hidden" name="task_id" id="sm-task-id">
+
+            <div class="mb-3">
+                <label class="form-label-mis mb-2">Select New Status</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+                    <?php foreach ($allStatuses as $s):
+                        $sc = $s['color'] ?? '#9ca3af';
+                    ?>
+                        <label style="cursor:pointer;">
+                            <input type="radio" name="status_id" value="<?= $s['id'] ?>"
+                                id="sr-<?= $s['id'] ?>" style="display:none;">
+                            <div class="sm-status-opt" data-id="<?= $s['id'] ?>"
+                                style="border:2px solid <?= $sc ?>33;border-radius:8px;padding:.5rem .75rem;
+                                       font-size:.78rem;font-weight:600;color:<?= $sc ?>;
+                                       background:<?= $sc ?>11;text-align:center;transition:.15s;">
+                                <?= htmlspecialchars($s['status_name']) ?>
+                            </div>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label-mis">Remarks <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+                <textarea name="remarks" class="form-control form-control-sm" rows="2"
+                    placeholder="Add a note about this change…"></textarea>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2">
+                <button type="button" onclick="closeStatusModal()"
+                    style="background:#f3f4f6;color:#6b7280;border:none;border-radius:8px;
+                           padding:.5rem 1rem;font-size:.83rem;cursor:pointer;">Cancel</button>
+                <button type="submit" class="btn btn-gold btn-sm">
+                    <i class="fas fa-check me-1"></i>Update Status
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
-    function openEditModal() {
-        const m = document.getElementById('edit-modal');
-        m.style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-    }
-    function closeEditModal() {
-        document.getElementById('edit-modal').style.display = 'none';
-        document.body.style.overflow = '';
-    }
-    document.getElementById('edit-modal').addEventListener('click', function(e) {
-        if (e.target === this) closeEditModal();
+// ── Company edit modal ──────────────────────────────────────────────────────
+function openEditModal() {
+    const m = document.getElementById('edit-modal');
+    m.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+function closeEditModal() {
+    document.getElementById('edit-modal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+document.getElementById('edit-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeEditModal();
+});
+
+// ── Task status modal ───────────────────────────────────────────────────────
+const allStatusColors = {
+    <?php foreach ($allStatuses as $s): ?>
+    "<?= $s['id'] ?>": "<?= $s['color'] ?? '#9ca3af' ?>",
+    <?php endforeach; ?>
+};
+
+function openStatusModal(taskId, currentStatusId, taskNumber, taskTitle) {
+    document.getElementById('sm-task-id').value = taskId;
+    document.getElementById('sm-task-label').textContent = taskNumber + ' — ' + taskTitle;
+
+    // Reset + highlight current
+    document.querySelectorAll('.sm-status-opt').forEach(el => {
+        const id = el.dataset.id;
+        const color = allStatusColors[id] || '#9ca3af';
+        el.style.borderColor   = color + '33';
+        el.style.background    = color + '11';
+        el.style.color         = color;
+        el.style.transform     = '';
+        el.style.boxShadow     = '';
     });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeEditModal(); });
+    const radio = document.getElementById('sr-' + currentStatusId);
+    if (radio) {
+        radio.checked = true;
+        highlightStatus(currentStatusId);
+    }
+
+    document.getElementById('status-modal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function highlightStatus(id) {
+    const color = allStatusColors[id] || '#9ca3af';
+    const opt   = document.querySelector('.sm-status-opt[data-id="' + id + '"]');
+    if (opt) {
+        opt.style.borderColor = color;
+        opt.style.background  = color + '22';
+        opt.style.transform   = 'scale(1.03)';
+        opt.style.boxShadow   = '0 0 0 3px ' + color + '33';
+    }
+}
+
+function closeStatusModal() {
+    document.getElementById('status-modal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+document.getElementById('status-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeStatusModal();
+});
+
+// Highlight on radio click
+document.querySelectorAll('input[name="status_id"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+        // Reset all
+        document.querySelectorAll('.sm-status-opt').forEach(el => {
+            const c = allStatusColors[el.dataset.id] || '#9ca3af';
+            el.style.borderColor = c + '33';
+            el.style.background  = c + '11';
+            el.style.transform   = '';
+            el.style.boxShadow   = '';
+        });
+        highlightStatus(this.value);
+    });
+});
+
+// Click on opt label also triggers radio
+document.querySelectorAll('.sm-status-opt').forEach(el => {
+    el.addEventListener('click', function() {
+        const radio = document.getElementById('sr-' + this.dataset.id);
+        if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+    });
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeEditModal(); closeStatusModal(); }
+});
 </script>
 
 <?php include '../../includes/footer.php'; ?>
