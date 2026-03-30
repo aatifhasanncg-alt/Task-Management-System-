@@ -1289,7 +1289,7 @@ class PHPMailer
      * @see https://www.andrew.cmu.edu/user/agreen1/testing/mrbs/web/Mail/RFC822.php A more careful implementation
      *
      * @param string $addrstr The address list string
-     * @param null   $useimap Unused. Argument has been deprecated in PHPMailer 6.11.0.
+     * @param string|null $useimap Unused. Argument has been deprecated in PHPMailer 6.11.0.
      *                        Previously this argument determined whether to use
      *                        the IMAP extension to parse the list and accepted a boolean value.
      * @param string $charset The charset to use when decoding the address list string.

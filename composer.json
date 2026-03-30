@@ -1,5 +1,7 @@
 {
     "require": {
-        "phpoffice/phpspreadsheet": "1.29"
+        "phpoffice/phpspreadsheet": "1.29",
+        "phpmailer/phpmailer": "^7.0",
+        "league/oauth2-client": "^2.9"
     }
 }
