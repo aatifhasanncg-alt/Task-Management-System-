@@ -51,10 +51,15 @@ include '../../includes/header.php';
                                 <?php endif; ?>
                             </div>
                             <button class="editBranchBtn" data-id="<?= $b['id'] ?>"
-                                data-name="<?= htmlspecialchars($b['branch_name']) ?>" data-status="<?= $b['is_active'] ?>"
-                                data-bs-toggle="modal" data-bs-target="#editBranchModal" style="background:#eff6ff;color:#3b82f6;border:none;
-                   border-radius:6px;padding:.3rem .6rem;
-                   font-size:.75rem;cursor:pointer;">
+                                data-name="<?= htmlspecialchars($b['branch_name']) ?>"
+                                data-city="<?= htmlspecialchars($b['city']) ?>"
+                                data-address="<?= htmlspecialchars($b['address']) ?>"
+                                data-phone="<?= htmlspecialchars($b['phone']) ?>"
+                                data-email="<?= htmlspecialchars($b['email']) ?>" data-head="<?= $b['is_head_office'] ?>"
+                                data-status="<?= $b['is_active'] ?>" data-bs-toggle="modal"
+                                data-bs-target="#editBranchModal" style="background:#eff6ff;color:#3b82f6;border:none;
+                                border-radius:6px;padding:.3rem .6rem;
+                                font-size:.75rem;cursor:pointer;">
                                 <i class="fas fa-pen"></i>
                             </button>
                         </div>
@@ -75,9 +80,38 @@ include '../../includes/header.php';
             </div>
 
             <div class="modal-body">
+
                 <div class="mb-2">
-                    <label>Branch Name</label>
+                    <label>Branch Name *</label>
                     <input type="text" name="branch_name" class="form-control" required>
+                </div>
+
+                <div class="mb-2">
+                    <label>City</label>
+                    <input type="text" name="city" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Address</label>
+                    <textarea name="address" class="form-control"></textarea>
+                </div>
+
+                <div class="mb-2">
+                    <label>Phone</label>
+                    <input type="text" name="phone" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Email</label>
+                    <input type="email" name="email" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Head Office</label>
+                    <select name="is_head_office" class="form-control">
+                        <option value="0">No</option>
+                        <option value="1">Yes</option>
+                    </select>
                 </div>
 
                 <div class="mb-2">
@@ -87,6 +121,7 @@ include '../../includes/header.php';
                         <option value="0">Inactive</option>
                     </select>
                 </div>
+
             </div>
 
             <div class="modal-footer">
@@ -110,8 +145,36 @@ include '../../includes/header.php';
                 <input type="hidden" name="id" id="edit_branch_id">
 
                 <div class="mb-2">
-                    <label>Branch Name</label>
+                    <label>Branch Name *</label>
                     <input type="text" name="branch_name" id="edit_branch_name" class="form-control" required>
+                </div>
+
+                <div class="mb-2">
+                    <label>City</label>
+                    <input type="text" name="city" id="edit_city" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Address</label>
+                    <textarea name="address" id="edit_address" class="form-control"></textarea>
+                </div>
+
+                <div class="mb-2">
+                    <label>Phone</label>
+                    <input type="text" name="phone" id="edit_phone" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Email</label>
+                    <input type="email" name="email" id="edit_email" class="form-control">
+                </div>
+
+                <div class="mb-2">
+                    <label>Head Office</label>
+                    <select name="is_head_office" id="edit_head_office" class="form-control">
+                        <option value="0">No</option>
+                        <option value="1">Yes</option>
+                    </select>
                 </div>
 
                 <div class="mb-2">
@@ -136,6 +199,11 @@ include '../../includes/header.php';
         btn.addEventListener('click', function () {
             document.getElementById('edit_branch_id').value = this.dataset.id;
             document.getElementById('edit_branch_name').value = this.dataset.name;
+            document.getElementById('edit_city').value = this.dataset.city || '';
+            document.getElementById('edit_address').value = this.dataset.address || '';
+            document.getElementById('edit_phone').value = this.dataset.phone || '';
+            document.getElementById('edit_email').value = this.dataset.email || '';
+            document.getElementById('edit_head_office').value = this.dataset.head;
             document.getElementById('edit_branch_status').value = this.dataset.status;
         });
     });
