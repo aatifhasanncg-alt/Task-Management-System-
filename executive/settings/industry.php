@@ -18,47 +18,48 @@ include '../../includes/header.php';
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
 
-        <div class="card-mis">
-            <div class="card-mis-header d-flex justify-content-between">
-                <h5><i class="fas fa-industry"></i> Industries</h5>
-
-                <!-- Add Industry Button -->
+        <div class="page-hero">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <div class="page-hero-badge"><i class="fas fa-industry"></i> Settings</div>
+                    <h4>Industries</h4>
+                    <p>Manage industry categories used across companies.</p>
+                </div>
                 <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addIndustryModal">
-                    <i class="fas fa-plus"></i> Add Industry
+                    <i class="fas fa-plus me-1"></i>Add Industry
                 </button>
             </div>
+        </div>
 
-            <div class="table-responsive">
-                <table class="table-mis w-100">
-                    <thead>
-                        <tr>
-                            <th>Industry Name</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-
-                    <tbody>
-                        <?php foreach ($industries as $i): ?>
-                            <tr>
-                                <td><?= htmlspecialchars($i['industry_name']) ?></td>
-                                <td><?= $i['is_active'] ? 'Active' : 'Inactive' ?></td>
-                                <td>
-                                    <button class="btn btn-sm btn-primary editBtn"
-                                        data-id="<?= $i['id'] ?>"
-                                        data-name="<?= htmlspecialchars($i['industry_name']) ?>"
-                                        data-status="<?= $i['is_active'] ?>"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#editIndustryModal">
-                                        Edit
-                                    </button>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-
+        <div class="row g-3">
+            <?php foreach ($industries as $i): ?>
+                <div class="col-md-6 col-lg-4">
+                    <div style="background:#fff;border-radius:12px;border:1px solid #f3f4f6;
+                padding:1rem 1.1rem;display:flex;align-items:center;
+                justify-content:space-between;gap:.75rem;">
+                        <div style="display:flex;align-items:center;gap:.6rem;">
+                            <span style="background:<?= $i['is_active'] ? '#f0fdf4' : '#f9fafb' ?>;
+                         color:<?= $i['is_active'] ? '#16a34a' : '#9ca3af' ?>;
+                         padding:.25rem .8rem;border-radius:99px;
+                         font-size:.78rem;font-weight:700;">
+                                <i class="fas fa-industry me-1"></i>
+                                <?= htmlspecialchars($i['industry_name']) ?>
+                            </span>
+                            <?php if (!$i['is_active']): ?>
+                                <span style="font-size:.68rem;color:#9ca3af;background:#f3f4f6;
+                             padding:.15rem .5rem;border-radius:99px;">Inactive</span>
+                            <?php endif; ?>
+                        </div>
+                        <button class="editBtn" data-id="<?= $i['id'] ?>"
+                            data-name="<?= htmlspecialchars($i['industry_name']) ?>" data-status="<?= $i['is_active'] ?>"
+                            data-bs-toggle="modal" data-bs-target="#editIndustryModal" style="background:#eff6ff;color:#3b82f6;border:none;
+                   border-radius:6px;padding:.3rem .6rem;
+                   font-size:.75rem;cursor:pointer;">
+                            <i class="fas fa-pen"></i>
+                        </button>
+                    </div>
+                </div>
+            <?php endforeach; ?>
         </div>
     </div>
 </div>
@@ -67,11 +68,10 @@ include '../../includes/header.php';
 <div class="modal fade" id="addIndustryModal" tabindex="-1">
     <div class="modal-dialog">
         <form method="POST" action="save_industry.php" class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Add Industry</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            <div class="modal-header" style="background:#0a0f1e;">
+                <h5 class="modal-title text-white">Add Industry</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-
             <div class="modal-body">
                 <div class="mb-2">
                     <label>Industry Name</label>
@@ -99,9 +99,9 @@ include '../../includes/header.php';
 <div class="modal fade" id="editIndustryModal" tabindex="-1">
     <div class="modal-dialog">
         <form method="POST" action="update_industry.php" class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Edit Industry</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            <div class="modal-header" style="background:#0a0f1e;">
+                <h5 class="modal-title text-white">Edit Industry</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
 
             <div class="modal-body">
@@ -130,13 +130,13 @@ include '../../includes/header.php';
 </div>
 
 <script>
-document.querySelectorAll('.editBtn').forEach(btn => {
-    btn.addEventListener('click', function () {
-        document.getElementById('edit_id').value = this.dataset.id;
-        document.getElementById('edit_name').value = this.dataset.name;
-        document.getElementById('edit_status').value = this.dataset.status;
+    document.querySelectorAll('.editBtn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            document.getElementById('edit_id').value = this.dataset.id;
+            document.getElementById('edit_name').value = this.dataset.name;
+            document.getElementById('edit_status').value = this.dataset.status;
+        });
     });
-});
 </script>
 
 <?php include '../../includes/footer.php'; ?>
