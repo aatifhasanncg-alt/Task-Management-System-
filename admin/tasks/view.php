@@ -1030,9 +1030,7 @@ include '../../includes/header.php';
                                                     Address</label><input type="text" name="tax[assigned_office_address]"
                                                     class="form-control form-control-sm" list="office_address_list"
                                                     value="<?= htmlspecialchars($currentOfficeAddr) ?>"
-                                                    placeholder="e.g. Lazimpat, Kathmandu"><small
-                                                    style="font-size:.65rem;color:#9ca3af;">Previously used addresses appear as
-                                                    suggestions</small></div>
+                                                    placeholder="e.g. Lazimpat, Kathmandu"></div>
                                             <div class="col-md-3"><label class="form-label-mis">Tax Type</label><select
                                                     name="tax[tax_type_id]" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option><?php foreach ($taxTypes as $tt): ?>
