@@ -216,7 +216,13 @@ $allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 
 
 // ── Status tab counts ─────────────────────────────────────────────────────────
 $tabCounts = [];
-$allStatuses = $db->query("SELECT id, status_name, color, bg_color FROM task_status ORDER BY id")->fetchAll();
+$allStatuses = $db->query("
+    SELECT id, status_name,
+           COALESCE(color,    '#9ca3af') AS color,
+           COALESCE(bg_color, '#f3f4f6') AS bg_color,
+           COALESCE(icon,     'fa-circle-dot') AS icon
+    FROM task_status ORDER BY id
+")->fetchAll();
 
 $tabCounts = [];
 foreach ($allStatuses as $st) {
@@ -240,7 +246,6 @@ foreach ($allStatuses as $st) {
     ");
     $cntSt->execute(array_merge($tabParams, [$k]));
     $tabCounts[$k] = (int) $cntSt->fetchColumn();
-   $tabCounts[$k] = (int) $cntSt->fetchColumn();
 }
 $fiscalYears = $db->query("
     SELECT fy_code 
@@ -305,18 +310,29 @@ include '../../includes/header.php';
             <!-- Status Tabs -->
             <div class="d-flex gap-2 flex-wrap mb-3">
                 <a href="?<?= http_build_query(array_merge(array_diff_key($_GET, ['status' => '', 'page' => '']), $showAll ? ['show_all' => '1'] : [])) ?>"
-                    class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>">
+                    class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>"> <i class="fas fa-list"></i>
                     All (<?= $total ?>)
                 </a>
-               <?php foreach ($allStatuses as $st):
+                <?php foreach ($allStatuses as $st):
                     $k = $st['status_name'];
                     $col = $st['color'] ?? '#9ca3af';
-                ?>
+                    $bg = $st['bg_color'] ?? '#f3f4f6';
+                    $icon = $st['icon'] ?? 'fa-circle-dot';
+                    $active = $filterStatus === $k;
+                    ?>
                     <a href="?<?= http_build_query(array_merge($_GET, ['status' => $k, 'page' => 1])) ?>" class="btn btn-sm"
-                        style="border:1px solid <?= $col ?>;
-                               color:<?= $filterStatus === $k ? '#fff' : $col ?>;
-                               background:<?= $filterStatus === $k ? $col : 'transparent' ?>;">
-                        <?= htmlspecialchars($k) ?> (<?= $tabCounts[$k] ?? 0 ?>)
+                        style="border-color: <?= $col ?>;
+               background: <?= $active ? $col : $bg ?>;
+               color: <?= $active ? '#fff' : $col ?>;">
+                        <i class="fas <?= htmlspecialchars($icon) ?>"
+                            style="color:<?= $active ? '#fff' : $col ?>;"></i>
+                        <?= htmlspecialchars($k) ?>
+                        <span style="background:<?= $active ? 'rgba(255,255,255,.25)' : $col ?>33;
+                     color:<?= $active ? '#fff' : $col ?>;
+                     padding:.05rem .4rem;border-radius:99px;
+                     font-weight:700;">
+                            <?= $tabCounts[$k] ?? 0 ?>
+                        </span>
                     </a>
                 <?php endforeach; ?>
             </div>

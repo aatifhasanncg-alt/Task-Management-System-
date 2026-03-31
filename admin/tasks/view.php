@@ -1061,7 +1061,7 @@ include '../../includes/header.php';
                                                 <div class="input-group input-group-sm"><input type="text"
                                                         name="tax[submission_number]" class="form-control"
                                                         value="<?= htmlspecialchars($detail['submission_number'] ?? '') ?>"><a
-                                                        href="https://ird.gov.np" target="_blank"
+                                                        href="https://taxpayerportal.ird.gov.np/taxpayer/app.html" target="_blank"
                                                         class="btn btn-outline-primary btn-sm"><i
                                                             class="fas fa-external-link-alt"></i></a></div>
                                             </div>
@@ -1070,7 +1070,7 @@ include '../../includes/header.php';
                                                 <div class="input-group input-group-sm"><input type="text" name="tax[udin_no]"
                                                         class="form-control"
                                                         value="<?= htmlspecialchars($detail['udin_no'] ?? '') ?>"><a
-                                                        href="https://udin.icai.org" target="_blank"
+                                                        href="https://udin.ican.org.np/" target="_blank"
                                                         class="btn btn-outline-secondary btn-sm"><i
                                                             class="fas fa-external-link-alt"></i></a></div>
                                             </div>
