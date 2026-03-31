@@ -10,9 +10,12 @@ require_once '../../config/config.php';
 require_once '../../config/session.php';
 requireExecutive();
 
-$db        = getDB();
-$companyId = (int)($_GET['company_id'] ?? 0);
-if (!$companyId) { echo '<p style="color:#ef4444;text-align:center;padding:1rem;">Invalid company.</p>'; exit; }
+$db = getDB();
+$companyId = (int) ($_GET['company_id'] ?? 0);
+if (!$companyId) {
+    echo '<p style="color:#ef4444;text-align:center;padding:1rem;">Invalid company.</p>';
+    exit;
+}
 
 // Tasks
 $taskSt = $db->prepare("
@@ -36,27 +39,27 @@ if (empty($tasks)) {
 }
 
 $actionColors = [
-    'created'          => '#3b82f6',
-    'assigned'         => '#f59e0b',
-    'status_changed'   => '#8b5cf6',
-    'transferred_staff'=> '#06b6d4',
+    'created' => '#3b82f6',
+    'assigned' => '#f59e0b',
+    'status_changed' => '#8b5cf6',
+    'transferred_staff' => '#06b6d4',
     'transferred_dept' => '#ec4899',
-    'completed'        => '#10b981',
-    'remarked'         => '#9ca3af',
+    'completed' => '#10b981',
+    'remarked' => '#9ca3af',
 ];
 $actionLabels = [
-    'created'          => 'Created',
-    'assigned'         => 'Assigned',
-    'status_changed'   => 'Status Updated',
-    'transferred_staff'=> 'Transferred',
+    'created' => 'Created',
+    'assigned' => 'Assigned',
+    'status_changed' => 'Status Updated',
+    'transferred_staff' => 'Transferred',
     'transferred_dept' => 'Dept Transfer',
-    'completed'        => 'Completed',
-    'remarked'         => 'Remarked',
+    'completed' => 'Completed',
+    'remarked' => 'Remarked',
 ];
 ?>
 <div style="padding:.25rem 0;">
     <?php foreach ($tasks as $t):
-        $sClass  = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
+        $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
         $overdue = $t['due_date'] && strtotime($t['due_date']) < time() && $t['status'] !== 'Done';
 
         // Workflow for this task
@@ -80,7 +83,7 @@ $actionLabels = [
         } catch (Exception $e) {
             $workflow = [];
         }
-    ?>
+        ?>
         <div style="border-bottom:1px solid #f3f4f6;padding:.85rem .5rem;<?= $overdue ? 'background:#fef8f8;' : '' ?>">
 
             <!-- Task header row -->
@@ -108,7 +111,7 @@ $actionLabels = [
                 <div class="d-flex gap-2 align-items-center">
                     <span style="font-size:.7rem;color:#9ca3af;"><?= date('d M Y', strtotime($t['created_at'])) ?></span>
                     <a href="<?= APP_URL ?>/executive/tasks/view.php?id=<?= $t['id'] ?>"
-                       class="btn btn-sm btn-outline-secondary" style="padding:.2rem .5rem;">
+                        class="btn btn-sm btn-outline-secondary" style="padding:.2rem .5rem;">
                         <i class="fas fa-eye" style="font-size:.7rem;"></i>
                     </a>
                 </div>
@@ -121,7 +124,7 @@ $actionLabels = [
                         $isLast = ($i === count($workflow) - 1);
                         $aColor = $actionColors[$w['action']] ?? '#9ca3af';
                         $aLabel = $actionLabels[$w['action']] ?? ucwords(str_replace('_', ' ', $w['action']));
-                    ?>
+                        ?>
                         <div style="background:<?= $isLast ? $aColor . '14' : '#f9fafb' ?>;
                                     border:1px solid <?= $isLast ? $aColor : '#e5e7eb' ?>;
                                     border-radius:8px;padding:.4rem .65rem;text-align:center;min-width:88px;">

@@ -222,7 +222,7 @@ include '../../includes/header.php';
                             <i class="fas fa-pen me-1"></i>Edit Company
                         </button>
                     <?php endif; ?>
-                    <a href="<?= APP_URL ?>/admin/tasks/assign.php?company_id=<?= $id ?>"
+                    <a href="<?= APP_URL ?>/executive/tasks/assign.php?company_id=<?= $id ?>"
                         class="btn btn-outline-secondary btn-sm">
                         <i class="fas fa-plus me-1"></i>Assign Task
                     </a>

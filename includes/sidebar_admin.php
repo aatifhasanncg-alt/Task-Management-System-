@@ -6,7 +6,8 @@ $__db = getDB();
 if (!function_exists('isActive')) {
     function isActive(string $path): string
     {
-        return strpos($_SERVER['REQUEST_URI'], $path) !== false ? 'active' : '';
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        return (strpos($uri, $path) !== false) ? 'active' : '';
     }
 }
 

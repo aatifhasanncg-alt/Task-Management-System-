@@ -419,7 +419,7 @@ CREATE TABLE notifications (
     user_id INT NOT NULL,
     title VARCHAR(200),
     message TEXT,
-    type ENUM('task','transfer','status','system','reminder') DEFAULT 'task',
+     ENUM('task','transfer','status','system','reminder') DEFAULT 'task',
     link VARCHAR(300),
     is_read TINYINT(1) DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

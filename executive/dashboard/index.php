@@ -115,12 +115,26 @@ $topStaff = $db->query("
 include '../../includes/header.php';
 ?>
 <style>
-    * { overflow: visible !important; }
+    * {
+        overflow: visible !important;
+    }
 
     /* Clickable stat cards */
-    a.stat-card-link { text-decoration: none; color: inherit; display: block; }
-    a.stat-card-link .stat-card { transition: transform .15s, box-shadow .15s; cursor: pointer; }
-    a.stat-card-link:hover .stat-card { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.1); }
+    a.stat-card-link {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+    }
+
+    a.stat-card-link .stat-card {
+        transition: transform .15s, box-shadow .15s;
+        cursor: pointer;
+    }
+
+    a.stat-card-link:hover .stat-card {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, .1);
+    }
 
     /* Dept status pill */
     .dept-status-pill {
@@ -132,18 +146,32 @@ include '../../includes/header.php';
         padding: .12rem .38rem;
         border-radius: 99px;
     }
+
     .dept-status-zero-border {
-    border: 1px dashed #d1d5db;
-    color: #9ca3af;
-    background: transparent;
-    padding: 2px 6px;
-    border-radius: 10px;
-    font-size: 0.7rem;
-}
+        border: 1px dashed #d1d5db;
+        color: #9ca3af;
+        background: transparent;
+        padding: 2px 6px;
+        border-radius: 10px;
+        font-size: 0.7rem;
+    }
+
     /* Recent tasks overflow */
-    .rt-table { table-layout: fixed; width: 100%; }
-    .rt-table td { vertical-align: middle; }
-    .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+    .rt-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+
+    .rt-table td {
+        vertical-align: middle;
+    }
+
+    .ellipsis {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+    }
 </style>
 
 <div class="app-wrapper">
@@ -163,25 +191,98 @@ include '../../includes/header.php';
                         <p>Overview of all tasks, branches, and staff across ASK Global Advisory.</p>
                     </div>
                     <div class="d-flex gap-2">
-                        <a href="<?= APP_URL ?>/executive/tasks/assign.php" class="btn-gold btn d-flex align-items-center gap-2">
+                        <a href="<?= APP_URL ?>/executive/tasks/assign.php"
+                            class="btn-gold btn d-flex align-items-center gap-2">
                             <i class="fas fa-plus"></i> Assign Task
                         </a>
-                        <a href="<?= APP_URL ?>/executive/reports/index.php" class="btn btn-outline-light btn-sm d-flex align-items-center gap-2">
+                        <a href="<?= APP_URL ?>/executive/reports/index.php"
+                            class="btn btn-outline-light btn-sm d-flex align-items-center gap-2">
                             <i class="fas fa-chart-bar"></i> Reports
                         </a>
                         <?php if (isCoreAdmin()): ?>
                             <div class="dropdown">
                                 <button class="btn btn-outline-light btn-sm dropdown-toggle d-flex align-items-center gap-2"
-                                    type="button" data-bs-toggle="dropdown">
-                                    <i class="fas fa-cog"></i> Settings
+                                    type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                    <i class="fas fa-cog"></i>
+                                    <span>Settings</span>
                                 </button>
-                                <ul class="dropdown-menu dropdown-menu-end shadow">
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/task_status.php"><i class="fas fa-sliders me-2 text-primary"></i>Task Status</a></li>
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/corporate_grades.php"><i class="fas fa-chart-line me-2 text-success"></i>Corporate Grades</a></li>
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/fiscal_year.php"><i class="fas fa-calendar-alt me-2 text-warning"></i>Fiscal Year</a></li>
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/industry.php"><i class="fas fa-building me-2 text-secondary"></i>Industry</a></li>
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/department.php"><i class="fas fa-sitemap me-2 text-primary"></i>Departments</a></li>
-                                    <li><a class="dropdown-item" href="<?= APP_URL ?>/executive/settings/branch.php"><i class="fas fa-code-branch me-2 text-success"></i>Branches</a></li>
+
+                                <ul class="dropdown-menu dropdown-menu-end shadow p-2" style="min-width:220px;">
+
+                                    <!-- Header -->
+                                    <li class="px-3 py-2 text-muted small fw-semibold">
+                                        <i class="fas fa-sliders-h me-1"></i> System Configuration
+                                    </li>
+
+                                    <li>
+                                        <hr class="dropdown-divider">
+                                    </li>
+
+                                    <!-- Items -->
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/task_status.php">
+                                            <i class="fas fa-tasks text-primary"></i>
+                                            <span>Task Status</span>
+                                        </a>
+                                    </li>
+
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/corporate_grades.php">
+                                            <i class="fas fa-chart-line text-success"></i>
+                                            <span>Corporate Grades</span>
+                                        </a>
+                                    </li>
+
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/fiscal_year.php">
+                                            <i class="fas fa-calendar-alt text-warning"></i>
+                                            <span>Fiscal Year</span>
+                                        </a>
+                                    </li>
+
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/industry.php">
+                                            <i class="fas fa-building text-secondary"></i>
+                                            <span>Industry</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/type.php">
+                                            <i class="fas fa-tags text-info"></i>
+                                            <span>Company Type</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <hr class="dropdown-divider">
+                                    </li>
+
+                                    <li class="px-3 py-1 text-muted small fw-semibold">
+                                        <i class="fas fa-sitemap me-1"></i> Organization
+                                    </li>
+
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/department.php">
+                                            <i class="fas fa-layer-group"></i>
+                                            <span>Departments</span>
+                                        </a>
+                                    </li>
+
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/executive/settings/branch.php">
+                                            <i class="fas fa-code-branch text-success"></i>
+                                            <span>Branches</span>
+                                        </a>
+                                    </li>
+
+
+
                                 </ul>
                             </div>
                         <?php endif; ?>
@@ -193,20 +294,23 @@ include '../../includes/header.php';
             <h5 class="mb-3">Task Status</h5>
             <div class="row g-3 mb-4">
                 <?php foreach ($statusRows as $sr):
-                    $cnt     = $byStatus[$sr['status_name']] ?? 0;
-                    $color   = $sr['color']    ?: '#6b7280';
-                    $bg      = $sr['bg_color'] ?: '#f3f4f6';
+                    $cnt = $byStatus[$sr['status_name']] ?? 0;
+                    $color = $sr['color'] ?: '#6b7280';
+                    $bg = $sr['bg_color'] ?: '#f3f4f6';
                     $rawIcon = trim($sr['icon'] ?: 'fa-circle');
-                    $iClass  = str_starts_with($rawIcon, 'fa') ? $rawIcon : 'fa-' . $rawIcon;
-                    $link    = APP_URL . '/executive/tasks/index.php?status=' . urlencode($sr['status_name']);
-                ?>
+                    $iClass = str_starts_with($rawIcon, 'fa') ? $rawIcon : 'fa-' . $rawIcon;
+                    $link = APP_URL . '/executive/tasks/index.php?status=' . urlencode($sr['status_name']);
+                    ?>
                     <div class="col-6 col-md-3 col-xl-2">
                         <a href="<?= $link ?>" class="stat-card-link">
                             <div class="stat-card">
-                                <div class="stat-card-icon" style="background:<?= htmlspecialchars($bg) ?>;color:<?= htmlspecialchars($color) ?>;">
+                                <div class="stat-card-icon"
+                                    style="background:<?= htmlspecialchars($bg) ?>;color:<?= htmlspecialchars($color) ?>;">
                                     <i class="fas <?= htmlspecialchars($iClass) ?>"></i>
                                 </div>
-                                <div class="stat-card-value" style="color:<?= htmlspecialchars($color) ?>;"><?= number_format($cnt) ?></div>
+                                <div class="stat-card-value" style="color:<?= htmlspecialchars($color) ?>;">
+                                    <?= number_format($cnt) ?>
+                                </div>
                                 <div class="stat-card-label"><?= htmlspecialchars($sr['status_name']) ?></div>
                             </div>
                         </a>
@@ -220,9 +324,9 @@ include '../../includes/header.php';
                 <?php
                 $otherCards = [
                     ['Tasks Total', $stats['total_tasks'], 'fa-layer-group', '#2563eb', '#eff6ff', APP_URL . '/executive/tasks/index.php'],
-                    ['Companies',   $stats['companies'],   'fa-building',    '#0ea5e9', '#ecfeff', APP_URL . '/executive/companies/index.php'],
-                    ['Staff',       $stats['staff'],       'fa-users',       '#14b8a6', '#f0fdfa', APP_URL . '/executive/staff/index.php?role=staff'],
-                    ['Admins',      $stats['admins'],      'fa-user-shield', '#db2777', '#fdf2f8', APP_URL . '/executive/staff/index.php?role=admin'],
+                    ['Companies', $stats['companies'], 'fa-building', '#0ea5e9', '#ecfeff', APP_URL . '/executive/companies/index.php'],
+                    ['Staff', $stats['staff'], 'fa-users', '#14b8a6', '#f0fdfa', APP_URL . '/executive/staff/index.php?role=staff'],
+                    ['Admins', $stats['admins'], 'fa-user-shield', '#db2777', '#fdf2f8', APP_URL . '/executive/staff/index.php?role=admin'],
                 ];
                 foreach ($otherCards as [$label, $val, $icon, $color, $bg, $link]): ?>
                     <div class="col-6 col-md-3 col-xl-3">
@@ -255,7 +359,8 @@ include '../../includes/header.php';
                                     <?php foreach ($statusRows as $sr):
                                         $sc = $sr['color'] ?: '#9ca3af'; ?>
                                         <th class="text-center" style="width:60px;">
-                                            <span style="color:<?= htmlspecialchars($sc) ?>;font-size:.65rem;font-weight:700;white-space:nowrap;">
+                                            <span
+                                                style="color:<?= htmlspecialchars($sc) ?>;font-size:.65rem;font-weight:700;white-space:nowrap;">
                                                 <?= htmlspecialchars($sr['status_name']) ?>
                                             </span>
                                         </th>
@@ -265,27 +370,30 @@ include '../../includes/header.php';
                             </thead>
                             <tbody>
                                 <?php foreach ($deptTasks as $dt):
-                                    $doneVal = (int)($dt['done'] ?? 0);
-                                    $pct     = $dt['total'] ? round(($doneVal / $dt['total']) * 100) : 0;
-                                ?>
+                                    $doneVal = (int) ($dt['done'] ?? 0);
+                                    $pct = $dt['total'] ? round(($doneVal / $dt['total']) * 100) : 0;
+                                    ?>
                                     <tr>
                                         <td>
                                             <div class="d-flex align-items-center gap-2">
-                                                <div style="width:8px;height:8px;border-radius:50%;background:<?= htmlspecialchars($dt['color']) ?>;flex-shrink:0;"></div>
-                                                <span style="font-weight:500;"><?= htmlspecialchars($dt['dept_name']) ?></span>
+                                                <div
+                                                    style="width:8px;height:8px;border-radius:50%;background:<?= htmlspecialchars($dt['color']) ?>;flex-shrink:0;">
+                                                </div>
+                                                <span
+                                                    style="font-weight:500;"><?= htmlspecialchars($dt['dept_name']) ?></span>
                                             </div>
                                         </td>
                                         <td class="text-center fw-bold"><?= $dt['total'] ?></td>
                                         <?php foreach ($statusRows as $sr):
                                             $colKey = 'status_' . $sr['id'];
-                                            $colVal = (int)($dt[$colKey] ?? 0);
-                                            $sc     = $sr['color']    ?: '#9ca3af';
-                                            $sbg    = $sr['bg_color'] ?: '#f3f4f6';
-                                        ?>
+                                            $colVal = (int) ($dt[$colKey] ?? 0);
+                                            $sc = $sr['color'] ?: '#9ca3af';
+                                            $sbg = $sr['bg_color'] ?: '#f3f4f6';
+                                            ?>
                                             <td class="text-center">
                                                 <?php if ($colVal > 0): ?>
                                                     <span class="dept-status-pill"
-                                                          style="background:<?= htmlspecialchars($sbg) ?>;color:<?= htmlspecialchars($sc) ?>;">
+                                                        style="background:<?= htmlspecialchars($sbg) ?>;color:<?= htmlspecialchars($sc) ?>;">
                                                         <?= $colVal ?>
                                                     </span>
                                                 <?php else: ?>
@@ -295,14 +403,20 @@ include '../../includes/header.php';
                                         <?php endforeach; ?>
                                         <td>
                                             <div style="background:#f3f4f6;border-radius:50px;height:5px;overflow:hidden;">
-                                                <div style="width:<?= $pct ?>%;background:<?= htmlspecialchars($dt['color']) ?>;height:5px;border-radius:50px;transition:width .4s;"></div>
+                                                <div
+                                                    style="width:<?= $pct ?>%;background:<?= htmlspecialchars($dt['color']) ?>;height:5px;border-radius:50px;transition:width .4s;">
+                                                </div>
                                             </div>
-                                            <div style="font-size:.65rem;color:#9ca3af;margin-top:2px;"><?= $pct ?>% done</div>
+                                            <div style="font-size:.65rem;color:#9ca3af;margin-top:2px;"><?= $pct ?>% done
+                                            </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
                                 <?php if (empty($deptTasks)): ?>
-                                    <tr><td colspan="<?= 3 + count($statusRows) ?>" class="empty-state">No department data</td></tr>
+                                    <tr>
+                                        <td colspan="<?= 3 + count($statusRows) ?>" class="empty-state">No department data
+                                        </td>
+                                    </tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
@@ -315,19 +429,20 @@ include '../../includes/header.php';
                 <div class="card-mis">
                     <div class="card-mis-header">
                         <h5><i class="fas fa-clock text-warning me-2"></i>Recent Tasks</h5>
-                        <a href="<?= APP_URL ?>/executive/tasks/index.php" class="btn btn-sm btn-outline-secondary">View All</a>
+                        <a href="<?= APP_URL ?>/executive/tasks/index.php" class="btn btn-sm btn-outline-secondary">View
+                            All</a>
                     </div>
                     <div class="table-responsive">
                         <table class="table-mis rt-table">
-                            
+
                             <colgroup>
-                                    <col>   <!-- Task # -->
-                                    <col>                        <!-- Title (flex) -->
-                                    <col style="width:90px;">   <!-- Dept -->
-                                    <col style="width:120px;">   <!-- Branch -->
-                                    <col style="width:120px;">   <!-- Assigned -->
-                                    <col style="width:150px;">   <!-- Status -->
-                                </colgroup>
+                                <col> <!-- Task # -->
+                                <col> <!-- Title (flex) -->
+                                <col style="width:90px;"> <!-- Dept -->
+                                <col style="width:120px;"> <!-- Branch -->
+                                <col style="width:120px;"> <!-- Assigned -->
+                                <col style="width:150px;"> <!-- Status -->
+                            </colgroup>
                             <thead>
                                 <tr>
                                     <th>Task #</th>
@@ -340,68 +455,74 @@ include '../../includes/header.php';
                             </thead>
                             <tbody>
                                 <?php if (empty($recentTasks)): ?>
-                                    <tr><td colspan="6" class="empty-state"><i class="fas fa-list-check"></i>No tasks yet</td></tr>
+                                    <tr>
+                                        <td colspan="6" class="empty-state"><i class="fas fa-list-check"></i>No tasks yet
+                                        </td>
+                                    </tr>
                                 <?php endif; ?>
                                 <?php foreach ($recentTasks as $t):
-                                    $sClass  = 'status-' . strtolower(str_replace(' ', '-', $t['status']));
-                                    $sMeta   = $statusMeta[$t['status']] ?? null;
-                                    $rawIco  = trim($sMeta['icon'] ?? 'fa-circle');
-                                    $sIco    = str_starts_with($rawIco, 'fa') ? $rawIco : 'fa-' . $rawIco;
-                                ?>
+                                    $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status']));
+                                    $sMeta = $statusMeta[$t['status']] ?? null;
+                                    $rawIco = trim($sMeta['icon'] ?? 'fa-circle');
+                                    $sIco = str_starts_with($rawIco, 'fa') ? $rawIco : 'fa-' . $rawIco;
+                                    ?>
                                     <tr>
                                         <td>
                                             <span class="task-number ellipsis" style="font-size:.74rem;"
-                                                  title="<?= htmlspecialchars($t['task_number']) ?>">
+                                                title="<?= htmlspecialchars($t['task_number']) ?>">
                                                 <?= htmlspecialchars($t['task_number']) ?>
                                             </span>
                                         </td>
                                         <td>
                                             <div class="ellipsis" style="font-size:.85rem;font-weight:500;"
-                                                 title="<?= htmlspecialchars($t['title']) ?>">
+                                                title="<?= htmlspecialchars($t['title']) ?>">
                                                 <?= htmlspecialchars($t['title']) ?>
                                             </div>
                                             <?php if ($t['company_name']): ?>
                                                 <div class="ellipsis" style="font-size:.7rem;color:#9ca3af;"
-                                                     title="<?= htmlspecialchars($t['company_name']) ?>">
+                                                    title="<?= htmlspecialchars($t['company_name']) ?>">
                                                     <?= htmlspecialchars($t['company_name']) ?>
                                                 </div>
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <span class="ellipsis" style="font-size:.7rem;
+                                            <span class="ellipsis"
+                                                style="font-size:.7rem;
                                                   background:<?= htmlspecialchars($t['color'] ?? '#ccc') ?>22;
                                                   color:<?= htmlspecialchars($t['color'] ?? '#666') ?>;
                                                   padding:.18rem .42rem;border-radius:99px;display:inline-block;max-width:100%;"
-                                                  title="<?= htmlspecialchars($t['dept_name'] ?? '') ?>">
+                                                title="<?= htmlspecialchars($t['dept_name'] ?? '') ?>">
                                                 <?= htmlspecialchars($t['dept_name'] ?? '—') ?>
                                             </span>
                                         </td>
                                         <td>
                                             <span class="ellipsis" style="font-size:.78rem;"
-                                                  title="<?= htmlspecialchars($t['branch_name'] ?? '') ?>">
-                                                <?= htmlspecialchars( strtok($t['branch_name'],' ') ?? '—') ?>
+                                                title="<?= htmlspecialchars($t['branch_name'] ?? '') ?>">
+                                                <?= htmlspecialchars(strtok($t['branch_name'], ' ') ?? '—') ?>
                                             </span>
                                         </td>
                                         <td>
                                             <?php if ($t['assigned_to_name']): ?>
                                                 <div class="d-flex align-items-center gap-1" style="min-width:0;">
-                                                    <div class="avatar-circle" style="width:20px;height:20px;font-size:.55rem;flex-shrink:0;">
+                                                    <div class="avatar-circle"
+                                                        style="width:20px;height:20px;font-size:.55rem;flex-shrink:0;">
                                                         <?= strtoupper(substr($t['assigned_to_name'], 0, 2)) ?>
                                                     </div>
                                                     <span class="ellipsis" style="font-size:.78rem;"
-                                                          title="<?= htmlspecialchars($t['assigned_to_name']) ?>">
+                                                        title="<?= htmlspecialchars($t['assigned_to_name']) ?>">
                                                         <?= htmlspecialchars(explode(' ', $t['assigned_to_name'])[0]) ?>
                                                     </span>
                                                 </div>
                                             <?php else: ?>
-                                                <span style="color:#9ca3af;font-size:.75rem;"><i class="fas fa-minus"></i></span>
+                                                <span style="color:#9ca3af;font-size:.75rem;"><i
+                                                        class="fas fa-minus"></i></span>
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <span class="status-badge <?= $sClass ?>"
-                                                  style="display:inline-flex;align-items:center;gap:.25rem;
+                                            <span class="status-badge <?= $sClass ?>" style="display:inline-flex;align-items:center;gap:.25rem;
                                                          font-size:.67rem;white-space:nowrap;">
-                                                <i class="fas <?= htmlspecialchars($sIco) ?>" style="font-size:.52rem;flex-shrink:0;"></i>
+                                                <i class="fas <?= htmlspecialchars($sIco) ?>"
+                                                    style="font-size:.52rem;flex-shrink:0;"></i>
                                                 <span class="ellipsis"><?= htmlspecialchars($t['status']) ?></span>
                                             </span>
                                         </td>
@@ -427,11 +548,12 @@ include '../../includes/header.php';
                                 <div class="empty-state"><i class="fas fa-users"></i>No staff data</div>
                             <?php endif; ?>
                             <?php foreach ($topStaff as $i => $s):
-                                $pct    = $s['total'] ? round(($s['done'] / $s['total']) * 100) : 0;
+                                $pct = $s['total'] ? round(($s['done'] / $s['total']) * 100) : 0;
                                 $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
-                            ?>
+                                ?>
                                 <div class="d-flex align-items-center gap-3 mb-3">
-                                    <div style="width:26px;text-align:center;font-weight:700;font-size:.9rem;color:<?= $medals[$i] ?? '#6b7280' ?>;">
+                                    <div
+                                        style="width:26px;text-align:center;font-weight:700;font-size:.9rem;color:<?= $medals[$i] ?? '#6b7280' ?>;">
                                         #<?= $i + 1 ?>
                                     </div>
                                     <div class="avatar-circle avatar-sm">
@@ -443,10 +565,14 @@ include '../../includes/header.php';
                                         </div>
                                         <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;">
                                             <?= htmlspecialchars($s['branch_name'] ?? '') ?>
-                                            <?php if ($s['dept_name']): ?> · <?= htmlspecialchars($s['dept_name']) ?><?php endif; ?>
+                                            <?php if ($s['dept_name']): ?> ·
+                                                <?= htmlspecialchars($s['dept_name']) ?>     <?php endif; ?>
                                         </div>
-                                        <div style="background:#f3f4f6;border-radius:50px;height:4px;margin-top:.3rem;overflow:hidden;">
-                                            <div style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:4px;border-radius:50px;"></div>
+                                        <div
+                                            style="background:#f3f4f6;border-radius:50px;height:4px;margin-top:.3rem;overflow:hidden;">
+                                            <div
+                                                style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:4px;border-radius:50px;">
+                                            </div>
                                         </div>
                                     </div>
                                     <div style="text-align:right;flex-shrink:0;">
@@ -468,30 +594,35 @@ include '../../includes/header.php';
                         <div class="card-mis-body">
                             <?php foreach ($branchTasks as $bt):
                                 $pct = $bt['total'] ? round(($bt['done'] / $bt['total']) * 100) : 0;
-                            ?>
+                                ?>
                                 <div class="d-flex align-items-center gap-3 mb-3 pb-3 border-bottom">
                                     <div style="width:40px;height:40px;border-radius:10px;
                                                 background:<?= $bt['is_head_office'] ? '#fef9ec' : '#f0f4f8' ?>;
                                                 display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                         <i class="fas <?= $bt['is_head_office'] ? 'fa-building-columns' : 'fa-map-marker-alt' ?>"
-                                           style="color:<?= $bt['is_head_office'] ? '#c9a84c' : '#6b7280' ?>;font-size:.85rem;"></i>
+                                            style="color:<?= $bt['is_head_office'] ? '#c9a84c' : '#6b7280' ?>;font-size:.85rem;"></i>
                                     </div>
                                     <div class="flex-grow-1">
                                         <div class="d-flex justify-content-between align-items-center">
                                             <span style="font-weight:600;font-size:.88rem;">
                                                 <?= htmlspecialchars($bt['branch_name']) ?>
                                                 <?php if ($bt['is_head_office']): ?>
-                                                    <span class="ms-1" style="font-size:.65rem;background:#fefce8;color:#ca8a04;border-radius:50px;padding:.1rem .45rem;font-weight:600;">HO</span>
+                                                    <span class="ms-1"
+                                                        style="font-size:.65rem;background:#fefce8;color:#ca8a04;border-radius:50px;padding:.1rem .45rem;font-weight:600;">HO</span>
                                                 <?php endif; ?>
                                             </span>
                                             <span style="font-weight:700;font-size:.9rem;"><?= $bt['total'] ?></span>
                                         </div>
-                                        <div style="background:#f3f4f6;border-radius:50px;height:5px;margin:.4rem 0;overflow:hidden;">
-                                            <div style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:5px;border-radius:50px;"></div>
+                                        <div
+                                            style="background:#f3f4f6;border-radius:50px;height:5px;margin:.4rem 0;overflow:hidden;">
+                                            <div
+                                                style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:5px;border-radius:50px;">
+                                            </div>
                                         </div>
                                         <div class="d-flex gap-3 flex-wrap" style="font-size:.72rem;color:#9ca3af;">
                                             <span>WIP: <strong style="color:#f59e0b;"><?= $bt['wip'] ?></strong></span>
-                                            <span>Pending: <strong style="color:#ef4444;"><?= $bt['pending'] ?></strong></span>
+                                            <span>Pending: <strong
+                                                    style="color:#ef4444;"><?= $bt['pending'] ?></strong></span>
                                             <span>Done: <strong style="color:#10b981;"><?= $bt['done'] ?></strong></span>
                                             <span style="margin-left:auto;color:#6b7280;"><?= $pct ?>% complete</span>
                                         </div>

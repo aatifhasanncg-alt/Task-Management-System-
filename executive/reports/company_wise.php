@@ -7,29 +7,29 @@ requireExecutive();
 $db = getDB();
 $pageTitle = 'Company-wise Report';
 
-$search    = trim($_GET['search']    ?? '');
-$filterB   = (int) ($_GET['branch_id'] ?? 0);
+$search = trim($_GET['search'] ?? '');
+$filterB = (int) ($_GET['branch_id'] ?? 0);
 $companyId = (int) ($_GET['company_id'] ?? 0); // direct link or expand
-$page      = max(1, (int) ($_GET['page'] ?? 1));
-$perPage   = 20;
-$offset    = ($page - 1) * $perPage;
+$page = max(1, (int) ($_GET['page'] ?? 1));
+$perPage = 20;
+$offset = ($page - 1) * $perPage;
 
-$where  = ['c.is_active = 1'];
+$where = ['c.is_active = 1'];
 $params = [];
 
 if ($search) {
     // Search by name, PAN, OR company code
-    $where[]  = '(c.company_name LIKE ? OR c.pan_number LIKE ? OR c.company_code LIKE ?)';
+    $where[] = '(c.company_name LIKE ? OR c.pan_number LIKE ? OR c.company_code LIKE ?)';
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
 }
 if ($filterB) {
-    $where[]  = 'c.branch_id = ?';
+    $where[] = 'c.branch_id = ?';
     $params[] = $filterB;
 }
 if ($companyId) {
-    $where[]  = 'c.id = ?';
+    $where[] = 'c.id = ?';
     $params[] = $companyId;
 }
 
@@ -91,6 +91,21 @@ if ($companyId && count($companies) === 1) {
 
 include '../../includes/header.php';
 ?>
+<style>
+    .badge {
+        font-size: .7rem;
+        padding: .25rem .55rem;
+        border-radius: 999px;
+    }
+
+    .bg-primary-soft {
+        background: rgba(59, 130, 246, 0.12);
+    }
+
+    .bg-danger-soft {
+        background: rgba(239, 68, 68, 0.12);
+    }
+</style>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
@@ -108,14 +123,7 @@ include '../../includes/header.php';
                         <a href="index.php" class="btn btn-outline-light btn-sm">
                             <i class="fas fa-arrow-left me-1"></i>Back
                         </a>
-                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=company_wise&search=<?= urlencode($search) ?>&branch_id=<?= $filterB ?>"
-                            class="btn btn-success btn-sm">
-                            <i class="fas fa-file-excel me-1"></i>Export Excel
-                        </a>
-                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=company_wise&search=<?= urlencode($search) ?>&branch_id=<?= $filterB ?>"
-                            class="btn btn-danger btn-sm">
-                            <i class="fas fa-file-pdf me-1"></i>Export PDF
-                        </a>
+
                     </div>
                 </div>
             </div>
@@ -129,10 +137,10 @@ include '../../includes/header.php';
                         <label class="form-label-mis">Search</label>
                         <div style="position:relative;">
                             <input type="text" name="search" class="form-control form-control-sm"
-                                placeholder="Company name, PAN, or Code…"
-                                value="<?= htmlspecialchars($search) ?>"
+                                placeholder="Company name, PAN, or Code…" value="<?= htmlspecialchars($search) ?>"
                                 style="padding-left:2rem;">
-                            <i class="fas fa-search" style="position:absolute;left:.6rem;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:.75rem;pointer-events:none;"></i>
+                            <i class="fas fa-search"
+                                style="position:absolute;left:.6rem;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:.75rem;pointer-events:none;"></i>
                         </div>
                     </div>
                     <div class="col-md-2">
@@ -174,122 +182,151 @@ include '../../includes/header.php';
                 <div class="card-mis mb-3 p-3">
                     <div class="d-flex gap-4 flex-wrap" style="font-size:.82rem;">
                         <?php
-                        $totalTasks   = array_sum(array_column($companies, 'task_count'));
-                        $totalDone    = array_sum(array_column($companies, 'done_count'));
+                        $totalTasks = array_sum(array_column($companies, 'task_count'));
+                        $totalDone = array_sum(array_column($companies, 'done_count'));
                         $totalOverdue = array_sum(array_column($companies, 'overdue_count'));
                         ?>
-                        <div><span style="color:#9ca3af;">Companies:</span> <strong><?= number_format($total) ?></strong></div>
-                        <div><span style="color:#9ca3af;">Tasks:</span> <strong><?= number_format($totalTasks) ?></strong></div>
-                        <div><span style="color:#10b981;">Done:</span> <strong><?= number_format($totalDone) ?></strong></div>
+                        <div><span style="color:#9ca3af;">Companies:</span> <strong><?= number_format($total) ?></strong>
+                        </div>
+                        <div><span style="color:#9ca3af;">Tasks:</span> <strong><?= number_format($totalTasks) ?></strong>
+                        </div>
+                        <div><span style="color:#10b981;">Done:</span> <strong><?= number_format($totalDone) ?></strong>
+                        </div>
                         <?php if ($totalOverdue > 0): ?>
-                        <div><span style="color:#ef4444;">Overdue:</span> <strong><?= number_format($totalOverdue) ?></strong></div>
+                            <div><span style="color:#ef4444;">Overdue:</span>
+                                <strong><?= number_format($totalOverdue) ?></strong>
+                            </div>
                         <?php endif; ?>
                     </div>
                 </div>
 
                 <!-- Company cards (accordion-style) -->
                 <div id="company-list">
-                <?php foreach ($companies as $co):
-                    $isExpanded   = ($companyId === (int)$co['id']);
-                    $hasOverdue   = (int)$co['overdue_count'] > 0;
-                    $completionPct = $co['task_count'] > 0 ? round(($co['done_count'] / $co['task_count']) * 100) : 0;
-                ?>
-                    <div class="company-card card-mis mb-2" id="co-<?= $co['id'] ?>">
+                    <?php foreach ($companies as $co):
+                        $isExpanded = ($companyId === (int) $co['id']);
+                        $hasOverdue = (int) $co['overdue_count'] > 0;
+                        $completionPct = $co['task_count'] > 0 ? round(($co['done_count'] / $co['task_count']) * 100) : 0;
+                        ?>
+                        <div class="company-card card-mis mb-2" id="co-<?= $co['id'] ?>">
 
-                        <!-- Company Row (clickable header) -->
-                        <div class="company-row"
-                            onclick="toggleCompany(<?= $co['id'] ?>)"
-                            style="display:flex;align-items:center;justify-content:space-between;
+                            <!-- Company Row (clickable header) -->
+                            <div class="company-row" onclick="toggleCompany(<?= $co['id'] ?>)" style="display:flex;align-items:center;justify-content:space-between;
                                    padding:.9rem 1.25rem;cursor:pointer;gap:1rem;flex-wrap:wrap;
                                    border-radius:inherit;transition:background .15s;"
-                            onmouseenter="this.style.background='#f9fafb'"
-                            onmouseleave="this.style.background='transparent'">
+                                onmouseenter="this.style.background='#f9fafb'"
+                                onmouseleave="this.style.background='transparent'">
 
-                            <!-- Left: avatar + info -->
-                            <div class="d-flex align-items-center gap-3">
-                                <div style="width:40px;height:40px;border-radius:10px;background:#0a0f1e;color:#c9a84c;
+                                <!-- Left: avatar + info -->
+                                <div class="d-flex align-items-center gap-3">
+                                    <div style="width:40px;height:40px;border-radius:10px;background:#0a0f1e;color:#c9a84c;
                                     display:flex;align-items:center;justify-content:center;
                                     font-weight:700;font-size:.8rem;flex-shrink:0;">
-                                    <?= strtoupper(substr($co['company_name'], 0, 2)) ?>
-                                </div>
-                                <div>
-                                    <div style="font-weight:600;font-size:.9rem;color:#1f2937;">
-                                        <?= htmlspecialchars($co['company_name']) ?>
+                                        <?= strtoupper(substr($co['company_name'], 0, 2)) ?>
                                     </div>
-                                    <div class="d-flex gap-3 flex-wrap" style="font-size:.72rem;color:#9ca3af;margin-top:.15rem;">
-                                        <?php if ($co['company_code']): ?>
-                                            <span><i class="fas fa-hashtag me-1"></i><?= htmlspecialchars($co['company_code']) ?></span>
-                                        <?php endif; ?>
-                                        <?php if ($co['pan_number']): ?>
-                                            <span><i class="fas fa-id-card me-1"></i><?= htmlspecialchars($co['pan_number']) ?></span>
-                                        <?php endif; ?>
-                                        <?php if ($co['branch_name']): ?>
-                                            <span><i class="fas fa-map-marker-alt me-1"></i><?= htmlspecialchars($co['branch_name']) ?></span>
-                                        <?php endif; ?>
-                                        <?php if ($co['company_type_name']): ?>
-                                            <span><i class="fas fa-tag me-1"></i><?= htmlspecialchars($co['company_type_name']) ?></span>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Right: stats + chevron -->
-                            <div class="d-flex align-items-center gap-3">
-                                <?php if ($co['task_count'] > 0): ?>
-                                    <!-- Mini progress bar -->
-                                    <div style="min-width:80px;">
-                                        <div class="d-flex justify-content-between mb-1" style="font-size:.65rem;color:#9ca3af;">
-                                            <span><?= $co['done_count'] ?>/<?= $co['task_count'] ?></span>
-                                            <span><?= $completionPct ?>%</span>
+                                    <div>
+                                        <div style="font-weight:600;font-size:.9rem;color:#1f2937;">
+                                            <?= htmlspecialchars($co['company_name']) ?>
                                         </div>
-                                        <div style="background:#f3f4f6;border-radius:99px;height:4px;width:80px;">
-                                            <div style="width:<?= $completionPct ?>%;background:#10b981;height:100%;border-radius:99px;"></div>
+                                        <div class="d-flex gap-3 flex-wrap"
+                                            style="font-size:.72rem;color:#9ca3af;margin-top:.15rem;">
+                                            <?php if ($co['company_code']): ?>
+                                                <span><i
+                                                        class="fas fa-hashtag me-1"></i><?= htmlspecialchars($co['company_code']) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($co['pan_number']): ?>
+                                                <span><i
+                                                        class="fas fa-id-card me-1"></i><?= htmlspecialchars($co['pan_number']) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($co['branch_name']): ?>
+                                                <span><i
+                                                        class="fas fa-map-marker-alt me-1"></i><?= htmlspecialchars($co['branch_name']) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($co['company_type_name']): ?>
+                                                <span><i
+                                                        class="fas fa-tag me-1"></i><?= htmlspecialchars($co['company_type_name']) ?></span>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
-                                <?php endif; ?>
+                                </div>
 
-                                <div class="d-flex gap-1 align-items-center">
+                                <!-- Right: stats + chevron -->
+                                <div class="d-flex align-items-center gap-3">
                                     <?php if ($co['task_count'] > 0): ?>
-                                        <span style="background:#eff6ff;color:#3b82f6;font-size:.7rem;padding:.2rem .55rem;border-radius:99px;font-weight:600;">
-                                            <?= $co['task_count'] ?> tasks
-                                        </span>
-                                    <?php else: ?>
-                                        <span style="background:#f3f4f6;color:#9ca3af;font-size:.7rem;padding:.2rem .55rem;border-radius:99px;">
-                                            No tasks
-                                        </span>
+                                        <!-- Mini progress bar -->
+                                        <div style="min-width:80px;">
+                                            <div class="d-flex justify-content-between mb-1"
+                                                style="font-size:.65rem;color:#9ca3af;">
+                                                <span><?= $co['done_count'] ?>/<?= $co['task_count'] ?></span>
+                                                <span><?= $completionPct ?>%</span>
+                                            </div>
+                                            <div style="background:#f3f4f6;border-radius:99px;height:4px;width:80px;">
+                                                <div
+                                                    style="width:<?= $completionPct ?>%;background:#10b981;height:100%;border-radius:99px;">
+                                                </div>
+                                            </div>
+                                        </div>
                                     <?php endif; ?>
-                                    <?php if ($hasOverdue): ?>
-                                        <span style="background:#fef2f2;color:#ef4444;font-size:.7rem;padding:.2rem .55rem;border-radius:99px;font-weight:600;">
-                                            ⚠ <?= $co['overdue_count'] ?> overdue
-                                        </span>
-                                    <?php endif; ?>
-                                    <a href="<?= APP_URL ?>/executive/companies/view.php?id=<?= $co['id'] ?>"
-                                       class="btn btn-sm btn-outline-secondary"
-                                       onclick="event.stopPropagation();" title="View company page">
-                                        <i class="fas fa-external-link-alt" style="font-size:.65rem;"></i>
-                                    </a>
-                                </div>
 
-                                <i class="fas fa-chevron-down chevron-icon" id="chev-<?= $co['id'] ?>"
-                                    style="color:#9ca3af;font-size:.75rem;transition:transform .25s;
+                                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+
+                                        <!-- Left: Status Info -->
+                                        <div class="d-flex gap-1 align-items-center">
+                                            <?php if ($co['task_count'] > 0): ?>
+                                                <span class="badge bg-primary-soft text-primary fw-semibold">
+                                                    <?= $co['task_count'] ?> tasks
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="badge bg-light text-muted">
+                                                    No tasks
+                                                </span>
+                                            <?php endif; ?>
+
+                                            <?php if ($hasOverdue): ?>
+                                                <span class="badge bg-danger-soft text-danger fw-semibold">
+                                                    ⚠ <?= $co['overdue_count'] ?> overdue
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <!-- Right: Actions -->
+                                        <div class="d-flex align-items-center gap-2">
+
+                                            <!-- Export Excel -->
+                                            <a href="<?= APP_URL ?>/exports/export_excel.php?module=company_wise&company_id=<?= $co['id'] ?>"
+                                                class="btn btn-sm btn-outline-success d-flex align-items-center gap-1"
+                                                onclick="event.stopPropagation();" title="Export to Excel">
+                                                <i class="fas fa-file-excel"></i>
+                                                <span class="d-none d-md-inline">Excel</span>
+                                            </a>
+
+                                            <!-- View Company -->
+                                            <a href="<?= APP_URL ?>/executive/companies/view.php?id=<?= $co['id'] ?>"
+                                                class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();"
+                                                title="View company">
+                                                <i class="fas fa-external-link-alt"></i>
+                                            </a>
+
+                                        </div>
+                                    </div>
+
+                                    <i class="fas fa-chevron-down chevron-icon" id="chev-<?= $co['id'] ?>" style="color:#9ca3af;font-size:.75rem;transition:transform .25s;
                                     <?= $isExpanded ? 'transform:rotate(180deg);' : '' ?>"></i>
-                            </div>
-                        </div>
-
-                        <!-- Expandable workflow panel -->
-                        <div class="workflow-panel" id="panel-<?= $co['id'] ?>"
-                            style="display:<?= $isExpanded ? 'block' : 'none' ?>;
-                                   border-top:1px solid #f3f4f6;">
-                            <div class="workflow-inner p-3" id="inner-<?= $co['id'] ?>">
-                                <!-- Loaded via JS -->
-                                <div class="text-center py-4" style="color:#9ca3af;font-size:.83rem;">
-                                    <i class="fas fa-spinner fa-spin me-1"></i> Loading workflow…
                                 </div>
                             </div>
-                        </div>
 
-                    </div>
-                <?php endforeach; ?>
+                            <!-- Expandable workflow panel -->
+                            <div class="workflow-panel" id="panel-<?= $co['id'] ?>" style="display:<?= $isExpanded ? 'block' : 'none' ?>;
+                                   border-top:1px solid #f3f4f6;">
+                                <div class="workflow-inner p-3" id="inner-<?= $co['id'] ?>">
+                                    <!-- Loaded via JS -->
+                                    <div class="text-center py-4" style="color:#9ca3af;font-size:.83rem;">
+                                        <i class="fas fa-spinner fa-spin me-1"></i> Loading workflow…
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    <?php endforeach; ?>
                 </div>
 
                 <!-- Pagination -->
@@ -302,17 +339,20 @@ include '../../includes/header.php';
                             <ul class="pagination pagination-sm mb-0">
                                 <?php if ($page > 1): ?>
                                     <li class="page-item">
-                                        <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a>
+                                        <a class="page-link"
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a>
                                     </li>
                                 <?php endif; ?>
                                 <?php for ($p = max(1, $page - 2); $p <= min($pages, $page + 2); $p++): ?>
                                     <li class="page-item <?= $p == $page ? 'active' : '' ?>">
-                                        <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a>
+                                        <a class="page-link"
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a>
                                     </li>
                                 <?php endfor; ?>
                                 <?php if ($page < $pages): ?>
                                     <li class="page-item">
-                                        <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a>
+                                        <a class="page-link"
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a>
                                     </li>
                                 <?php endif; ?>
                             </ul>
@@ -329,37 +369,37 @@ include '../../includes/header.php';
 
 <!-- Inline workflow loader (AJAX-like via fetch to workflow_ajax.php) -->
 <script>
-const loadedPanels = new Set();
+    const loadedPanels = new Set();
 
-function toggleCompany(id) {
-    const panel = document.getElementById('panel-' + id);
-    const chev  = document.getElementById('chev-' + id);
-    const inner = document.getElementById('inner-' + id);
+    function toggleCompany(id) {
+        const panel = document.getElementById('panel-' + id);
+        const chev = document.getElementById('chev-' + id);
+        const inner = document.getElementById('inner-' + id);
 
-    const isOpen = panel.style.display === 'block';
+        const isOpen = panel.style.display === 'block';
 
-    if (isOpen) {
-        panel.style.display = 'none';
-        chev.style.transform = '';
-    } else {
-        panel.style.display = 'block';
-        chev.style.transform = 'rotate(180deg)';
+        if (isOpen) {
+            panel.style.display = 'none';
+            chev.style.transform = '';
+        } else {
+            panel.style.display = 'block';
+            chev.style.transform = 'rotate(180deg)';
 
-        // Load workflow only once
-        if (!loadedPanels.has(id)) {
-            loadedPanels.add(id);
-            fetch('workflow_panel.php?company_id=' + id)
-                .then(r => r.text())
-                .then(html => { inner.innerHTML = html; })
-                .catch(() => { inner.innerHTML = '<p class="text-center py-3" style="color:#ef4444;">Failed to load. Please try again.</p>'; });
+            // Load workflow only once
+            if (!loadedPanels.has(id)) {
+                loadedPanels.add(id);
+                fetch('workflow_panel.php?company_id=' + id)
+                    .then(r => r.text())
+                    .then(html => { inner.innerHTML = html; })
+                    .catch(() => { inner.innerHTML = '<p class="text-center py-3" style="color:#ef4444;">Failed to load. Please try again.</p>'; });
+            }
         }
     }
-}
 
-// Auto-expand if company_id was passed in URL
-<?php if ($companyId && !empty($companies)): ?>
-window.addEventListener('DOMContentLoaded', () => {
-    toggleCompany(<?= $companyId ?>);
-});
-<?php endif; ?>
+    // Auto-expand if company_id was passed in URL
+    <?php if ($companyId && !empty($companies)): ?>
+        window.addEventListener('DOMContentLoaded', () => {
+            toggleCompany(<?= $companyId ?>);
+        });
+    <?php endif; ?>
 </script>
