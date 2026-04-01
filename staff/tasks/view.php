@@ -89,11 +89,11 @@ if ($task['dept_code'] === 'RETAIL') {
     }
 } else {
     $detailTableMap = [
-        'TAX' => 'task_tax',
+        'TAX'  => 'task_tax',
         'BANK' => 'task_banking',
         'CORP' => 'task_finance',
-        'HR' => 'task_hr',
-        'OPS' => 'task_operations',
+        'HR'   => 'task_hr',
+        'OPS'  => 'task_operations',
     ];
     $detailTable = $detailTableMap[$task['dept_code']] ?? null;
     if ($detailTable) {
@@ -107,8 +107,12 @@ if ($task['dept_code'] === 'RETAIL') {
     }
 }
 
-// Load task statuses
-$taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
+// ── Load task statuses WITH color & icon from DB ──────────────
+$taskStatuses = $db->query("
+    SELECT id, status_name, color, bg_color, icon
+    FROM task_status
+    ORDER BY id ASC
+")->fetchAll();
 
 // Staff in same branch & dept for transfer
 $sameBranchStaff = $db->prepare("
@@ -169,88 +173,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_work_status'])
     $workNotes = trim($_POST['work_notes'] ?? '');
 
     if ($newWorkStatusId && $task['dept_code'] === 'RETAIL') {
-
-        // Get status name to sync main task
         $stNameStmt = $db->prepare("SELECT status_name FROM task_status WHERE id = ?");
         $stNameStmt->execute([$newWorkStatusId]);
         $newWorkStatusName = $stNameStmt->fetchColumn();
 
-        // Update retail work status + notes
-        $db->prepare("
-            UPDATE task_retail SET
-                work_status_id = ?,
-                notes          = ?
-            WHERE task_id = ?
-        ")->execute([$newWorkStatusId, $workNotes ?: null, $id]);
+        $db->prepare("UPDATE task_retail SET work_status_id=?, notes=? WHERE task_id=?")
+           ->execute([$newWorkStatusId, $workNotes ?: null, $id]);
 
-        // Sync main task status to match work status
-        $db->prepare("
-            UPDATE tasks SET status_id = ?, updated_at = NOW() WHERE id = ?
-        ")->execute([$newWorkStatusId, $id]);
+        $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")
+           ->execute([$newWorkStatusId, $id]);
 
-        // If Done — set completed_date
         if ($newWorkStatusName === 'Done') {
-            $db->prepare("
-                UPDATE task_retail SET completed_date = CURDATE() WHERE task_id = ?
-            ")->execute([$id]);
+            $db->prepare("UPDATE task_retail SET completed_date=CURDATE() WHERE task_id=?")
+               ->execute([$id]);
         }
 
-        // Log workflow
         try {
-            $db->prepare("
-                INSERT INTO task_workflow
-                (task_id, action, from_user_id, old_status, new_status, remarks)
-                VALUES (?, 'status_changed', ?, ?, ?, ?)
-            ")->execute([
-                        $id,
-                        $user['id'],
-                        $task['status'],
-                        $newWorkStatusName,
-                        $workNotes
-                    ]);
-        } catch (Exception $e) {
-        }
+            $db->prepare("INSERT INTO task_workflow (task_id,action,from_user_id,old_status,new_status,remarks) VALUES (?,?,?,?,?,?)")
+               ->execute([$id, 'status_changed', $user['id'], $task['status'], $newWorkStatusName, $workNotes]);
+        } catch (Exception $e) {}
 
-        // Notify admin if Done
-        // Notify admin on every status change
         if (!empty($task['created_by'])) {
             $workMsg = "Task #{$task['task_number']}";
-            if (!empty($task['company_name']))
-                $workMsg .= " ({$task['company_name']})";
+            if (!empty($task['company_name'])) $workMsg .= " ({$task['company_name']})";
             $workMsg .= " — work status updated to \"{$newWorkStatusName}\" by {$staffProfile['full_name']}.";
-            if ($workNotes)
-                $workMsg .= "\n\nNote: {$workNotes}";
-            if ($newWorkStatusName === 'Done') {
-                $workMsg .= "\n\nYou can now review and transfer this task to another department if needed.";
-            }
+            if ($workNotes) $workMsg .= "\n\nNote: {$workNotes}";
 
             notify(
                 (int) $task['created_by'],
-                $newWorkStatusName === 'Done'
-                ? "Task Completed: {$task['task_number']}"
-                : "Work Status Updated: {$task['task_number']}",
-                $workMsg,
-                'status',
-                APP_URL . '/admin/tasks/view.php?id=' . $id,
-                true,
-                [
-                    'template' => 'task_status_changed',
-                    'task' => [
-                        'id' => $id,
-                        'task_number' => $task['task_number'],
-                        'title' => $task['title'],
-                        'old_status' => $task['status'],
-                        'new_status' => $newWorkStatusName,
-                        'due_date' => $task['due_date'] ?? null,
-                        'company' => $task['company_name'] ?? '',
-                        'priority' => $task['priority'] ?? '',
-                    ],
-                ]
+                $newWorkStatusName === 'Done' ? "Task Completed: {$task['task_number']}" : "Work Status Updated: {$task['task_number']}",
+                $workMsg, 'status',
+                APP_URL . '/admin/tasks/view.php?id=' . $id, true,
+                ['template'=>'task_status_changed','task'=>['id'=>$id,'task_number'=>$task['task_number'],'title'=>$task['title'],'old_status'=>$task['status'],'new_status'=>$newWorkStatusName,'due_date'=>$task['due_date']??null,'company'=>$task['company_name']??'','priority'=>$task['priority']??'']]
             );
         }
 
         logActivity("Work status updated: {$task['task_number']} → {$newWorkStatusName}", 'tasks');
-        setFlash('success', 'Work status updated.' . ($newWorkStatusName === 'Done' ? ' Admin has been notified.' : ''));
+        setFlash('success', 'Work status updated.');
         header("Location: view.php?id={$id}");
         exit;
     }
@@ -259,205 +218,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_work_status'])
 // ── HANDLE: Transfer to another staff ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_staff'])) {
     verifyCsrf();
-    $newStaffId = (int) ($_POST['new_staff_id'] ?? 0);
+    $newStaffId   = (int) ($_POST['new_staff_id'] ?? 0);
     $transferNote = trim($_POST['transfer_note'] ?? '');
 
     if (!$newStaffId) {
         setFlash('error', 'Please select a staff member.');
-        header("Location: view.php?id={$id}");
-        exit;
+        header("Location: view.php?id={$id}"); exit;
     }
 
-    // Verify staff is same branch & dept
-    $verifyStmt = $db->prepare("
-        SELECT id, full_name, email FROM users
-        WHERE id = ? AND branch_id = ? AND department_id = ? AND is_active = 1
-    ");
-    $verifyStmt->execute([
-        $newStaffId,
-        $staffProfile['branch_id'],
-        $staffProfile['department_id']
-    ]);
+    $verifyStmt = $db->prepare("SELECT id, full_name FROM users WHERE id=? AND branch_id=? AND department_id=? AND is_active=1");
+    $verifyStmt->execute([$newStaffId, $staffProfile['branch_id'], $staffProfile['department_id']]);
     $newStaff = $verifyStmt->fetch();
 
     if (!$newStaff) {
         setFlash('error', 'Invalid staff selection.');
-        header("Location: view.php?id={$id}");
-        exit;
+        header("Location: view.php?id={$id}"); exit;
     }
 
-    // Update assigned_to AND save transfer note as remarks on the task
-    $db->prepare("
-        UPDATE tasks SET
-            assigned_to = ?,
-            remarks     = ?,
-            updated_at  = NOW()
-        WHERE id = ?
-    ")->execute([
-                $newStaffId,
-                $transferNote ?: $task['remarks'],
-                $id
-            ]);
+    $db->prepare("UPDATE tasks SET assigned_to=?, remarks=?, updated_at=NOW() WHERE id=?")
+       ->execute([$newStaffId, $transferNote ?: $task['remarks'], $id]);
 
-    // Log workflow
     try {
-        $db->prepare("
-            INSERT INTO task_workflow
-            (task_id, action, from_user_id, to_user_id,
-             from_dept_id, to_dept_id, old_status, new_status, remarks)
-            VALUES (?, 'transferred_staff', ?, ?, ?, ?, ?, ?, ?)
-        ")->execute([
-                    $id,
-                    $user['id'],
-                    $newStaffId,
-                    $task['department_id'],
-                    $task['department_id'],
-                    $task['status'],
-                    $task['status'],
-                    $transferNote
-                ]);
-    } catch (Exception $e) {
-    }
+        $db->prepare("INSERT INTO task_workflow (task_id,action,from_user_id,to_user_id,from_dept_id,to_dept_id,old_status,new_status,remarks) VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$id,'transferred_staff',$user['id'],$newStaffId,$task['department_id'],$task['department_id'],$task['status'],$task['status'],$transferNote]);
+    } catch (Exception $e) {}
 
-    // Notify new staff with the note as their work instruction
-    notify(
-        $newStaffId,
-        'Task Assigned to You',
+    notify($newStaffId, 'Task Assigned to You',
         "Task {$task['task_number']} — \"{$task['title']}\" has been transferred to you by {$staffProfile['full_name']}." .
         ($transferNote ? "\n\n📋 Work Instructions:\n{$transferNote}" : ''),
-        'transfer',
-        APP_URL . '/staff/tasks/view.php?id=' . $id
-    );
+        'transfer', APP_URL . '/staff/tasks/view.php?id=' . $id);
 
-    logActivity("Task transferred to staff: {$task['task_number']}", 'tasks');
+    logActivity("Task transferred: {$task['task_number']}", 'tasks');
     setFlash('success', "Task transferred to {$newStaff['full_name']} successfully.");
     header('Location: index.php');
     exit;
 }
 
-// ── HANDLE: Mark as completed ──
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_completed'])) {
-    verifyCsrf();
-    $completionNote = trim($_POST['completion_note'] ?? '');
-
-    // Get Done status id
-    $doneId = $db->query("SELECT id FROM task_status WHERE status_name = 'Done'")->fetchColumn();
-
-    // Update main task status
-    $db->prepare("
-        UPDATE tasks SET
-            status_id  = ?,
-            remarks    = ?,
-            updated_at = NOW()
-        WHERE id = ?
-    ")->execute([
-                $doneId,
-                $completionNote ?: $task['remarks'],
-                $id
-            ]);
-
-    // Update retail detail if applicable
-    if ($task['dept_code'] === 'RETAIL' && $detail) {
-        // Get Done status for retail fields too
-        $db->prepare("
-            UPDATE task_retail SET
-                work_status_id         = ?,
-                finalisation_status_id = ?,
-                completed_date         = CURDATE(),
-                notes                  = ?
-            WHERE task_id = ?
-        ")->execute([
-                    $doneId,
-                    $doneId,
-                    $completionNote ?: $detail['notes'],
-                    $id
-                ]);
-    }
-
-    // Log workflow
-    try {
-        $db->prepare("
-            INSERT INTO task_workflow
-            (task_id, action, from_user_id, old_status, new_status, remarks)
-            VALUES (?, 'completed', ?, ?, 'Done', ?)
-        ")->execute([
-                    $id,
-                    $user['id'],
-                    $task['status'],
-                    $completionNote
-                ]);
-    } catch (Exception $e) {
-    }
-
-    // Notify admin
-    notify(
-        $task['created_by'],
-        'Task Completed ✓',
-        "Task {$task['task_number']} — \"{$task['title']}\" has been completed by {$staffProfile['full_name']}." .
-        ($completionNote ? "\n\n📋 Completion Note:\n{$completionNote}" : '') .
-        "\n\nPlease review and transfer to the next department if required.",
-        'status',
-        APP_URL . '/admin/tasks/view.php?id=' . $id
-    );
-
-    logActivity("Task completed: {$task['task_number']}", 'tasks');
-    setFlash('success', 'Task marked as completed. Admin has been notified.');
-    header("Location: view.php?id={$id}");
-    exit;
-}
 // ── HANDLE: Update main status ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
     verifyCsrf();
     $newStatus = $_POST['new_status'] ?? '';
-    // Validate against DB — not TASK_STATUSES keys which may differ
-    $validStatuses = array_column(
-        $db->query("SELECT status_name FROM task_status")->fetchAll(),
-        'status_name'
-    );
+    $validStatuses = array_column($db->query("SELECT status_name FROM task_status")->fetchAll(), 'status_name');
+
     if (in_array($newStatus, $validStatuses)) {
-        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name = ?");
+        $stRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
         $stRow->execute([$newStatus]);
         $newStatusId = (int) ($stRow->fetchColumn() ?: 1);
+
         $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")
-            ->execute([$newStatusId, $id]);
+           ->execute([$newStatusId, $id]);
 
-        // Log workflow
         try {
-            $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)
-                          VALUES(?,?,?,?,?)")
-                ->execute([$id, 'status_changed', $user['id'], $task['status'], $newStatus]);
-        } catch (Exception $e) {
-        }
+            $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status) VALUES(?,?,?,?,?)")
+               ->execute([$id,'status_changed',$user['id'],$task['status'],$newStatus]);
+        } catch (Exception $e) {}
 
-        // Build notification message
-        $msg = "Task #{$task['task_number']}";
-        if (!empty($task['company_name']))
-            $msg .= " ({$task['company_name']})";
-        $msg .= " — status changed from \"{$task['status']}\" to \"{$newStatus}\" by {$staffProfile['full_name']}.";
-
-        // Notify task creator/admin
         if (!empty($task['created_by']) && $task['created_by'] != $user['id']) {
-            notify(
-                (int) $task['created_by'],
-                "Status Updated: {$task['task_number']}",
-                $msg,
-                'status',
-                APP_URL . '/admin/tasks/view.php?id=' . $id,
-                true,
-                [
-                    'template' => 'task_status_changed',
-                    'task' => [
-                        'id' => $id,
-                        'task_number' => $task['task_number'],
-                        'title' => $task['title'],
-                        'old_status' => $task['status'],
-                        'new_status' => $newStatus,
-                        'due_date' => $task['due_date'] ?? null,
-                        'company' => $task['company_name'] ?? '',
-                        'priority' => $task['priority'] ?? '',
-                    ],
-                ]
-            );
+            $msg = "Task #{$task['task_number']}";
+            if (!empty($task['company_name'])) $msg .= " ({$task['company_name']})";
+            $msg .= " — status changed from \"{$task['status']}\" to \"{$newStatus}\" by {$staffProfile['full_name']}.";
+            notify((int)$task['created_by'], "Status Updated: {$task['task_number']}", $msg, 'status',
+                APP_URL . '/admin/tasks/view.php?id=' . $id, true,
+                ['template'=>'task_status_changed','task'=>['id'=>$id,'task_number'=>$task['task_number'],'title'=>$task['title'],'old_status'=>$task['status'],'new_status'=>$newStatus,'due_date'=>$task['due_date']??null,'company'=>$task['company_name']??'','priority'=>$task['priority']??'']]);
         }
 
         logActivity("Status update: {$task['task_number']} → {$newStatus}", 'tasks');
@@ -474,18 +296,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_comment'])) {
     if ($comment) {
         try {
             $db->prepare("INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)")
-                ->execute([$id, $user['id'], $comment]);
-        } catch (Exception $e) {
-        }
+               ->execute([$id, $user['id'], $comment]);
+        } catch (Exception $e) {}
         header("Location: view.php?id={$id}#comments");
         exit;
     }
 }
 
 $pageTitle = 'Task: ' . $task['task_number'];
-$sClass = 'status-' . strtolower(str_replace(' ', '-', $task['status'] ?? ''));
-$isMyTask = $task['assigned_to'] == $user['id'];
-$isDone = $task['status'] === 'Done';
+$sClass    = 'status-' . strtolower(str_replace(' ', '-', $task['status'] ?? ''));
+$isMyTask  = $task['assigned_to'] == $user['id'];
+$isDone    = $task['status'] === 'Done';
 
 include '../../includes/header.php';
 ?>
@@ -517,38 +338,32 @@ include '../../includes/header.php';
                     <div class="card-mis mb-4">
                         <div class="card-mis-header">
                             <div>
-                                <span
-                                    class="task-number d-block mb-1"><?= htmlspecialchars($task['task_number']) ?></span>
+                                <span class="task-number d-block mb-1"><?= htmlspecialchars($task['task_number']) ?></span>
                                 <h5 style="font-size:1.1rem;"><?= htmlspecialchars($task['title']) ?></h5>
                             </div>
-                            <?php
-                            $isOverdue = $task['due_date'] && strtotime($task['due_date']) < time() && !$isDone;
+                            <?php $isOverdue = $task['due_date'] && strtotime($task['due_date']) < time() && !$isDone;
                             if ($isOverdue): ?>
-                                <span class="badge" style="background:#fef2f2;color:#ef4444;font-size:.75rem;">
-                                    ⚠️ OVERDUE
-                                </span>
+                                <span class="badge" style="background:#fef2f2;color:#ef4444;font-size:.75rem;">⚠️ OVERDUE</span>
                             <?php endif; ?>
                         </div>
                         <div class="card-mis-body">
                             <div class="row g-3">
                                 <?php
                                 $infoFields = [
-                                    'Department' => htmlspecialchars($task['dept_name'] ?? '—'),
-                                    'Branch' => htmlspecialchars($task['branch_name'] ?? '—'),
-                                    'Company' => htmlspecialchars($task['company_name'] ?? '—'),
+                                    'Department'  => htmlspecialchars($task['dept_name'] ?? '—'),
+                                    'Branch'      => htmlspecialchars($task['branch_name'] ?? '—'),
+                                    'Company'     => htmlspecialchars($task['company_name'] ?? '—'),
                                     'Assigned By' => htmlspecialchars($task['created_by_name'] ?? '—'),
                                     'Assigned To' => htmlspecialchars($task['assigned_to_name'] ?? 'Unassigned'),
-                                    'Priority' => '<span class="status-badge priority-' . $task['priority'] . '">' . ucfirst($task['priority']) . '</span>',
-                                    'Due Date' => '<span style="' . ($isOverdue ? 'color:#ef4444;font-weight:600;' : '') . '">' .
-                                        ($task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—') . '</span>',
+                                    'Priority'    => '<span class="status-badge priority-' . $task['priority'] . '">' . ucfirst($task['priority']) . '</span>',
+                                    'Due Date'    => '<span style="' . ($isOverdue ? 'color:#ef4444;font-weight:600;' : '') . '">' .
+                                                     ($task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—') . '</span>',
                                     'Fiscal Year' => htmlspecialchars($task['fiscal_year'] ?? '—'),
-                                    'Created' => date('d M Y, H:i', strtotime($task['created_at'])),
+                                    'Created'     => date('d M Y, H:i', strtotime($task['created_at'])),
                                 ];
-                                foreach ($infoFields as $label => $val):
-                                    ?>
+                                foreach ($infoFields as $label => $val): ?>
                                     <div class="col-md-4">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
                                             <?= $label ?>
                                         </div>
                                         <div style="font-size:.9rem;margin-top:.2rem;"><?= $val ?></div>
@@ -557,30 +372,21 @@ include '../../includes/header.php';
 
                                 <?php if ($task['description']): ?>
                                     <div class="col-12">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            Description</div>
-                                        <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['description'])) ?>
-                                        </div>
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Description</div>
+                                        <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($task['description'])) ?></div>
                                     </div>
                                 <?php endif; ?>
-
                                 <?php if ($task['remarks']): ?>
                                     <div class="col-12">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            Remarks</div>
-                                        <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['remarks'])) ?>
-                                        </div>
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Remarks</div>
+                                        <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($task['remarks'])) ?></div>
                                     </div>
                                 <?php endif; ?>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Retail Details (read-only) -->
+                    <!-- Retail Details -->
                     <?php if ($task['dept_code'] === 'RETAIL' && $detail): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
@@ -590,35 +396,31 @@ include '../../includes/header.php';
                                 <div class="row g-3">
                                     <?php
                                     $retailFields = [
-                                        'Firm Name' => $detail['firm_name'] ?? '—',
-                                        'Company Type' => $detail['company_type_name'] ?? '—',
-                                        'File Type' => $detail['file_type_name'] ?? '—',
-                                        'PAN / VAT' => $detail['pan_vat_name'] ?? '—',
-                                        'VAT Client' => $detail['vat_client_value'] ?? '—',
-                                        'Return Type' => $detail['return_type'] ?? '—',
-                                        'Fiscal Year' => $detail['fiscal_year'] ?? '—',
-                                        'No. of Audit Years' => $detail['no_of_audit_year'] ?? '—',
-                                        'PAN No' => $detail['pan_no'] ?? '—',
-                                        'Assigned Date' => $detail['assigned_date'] ? date('d M Y', strtotime($detail['assigned_date'])) : '—',
-                                        'Audit Type' => $detail['audit_type_name'] ?? '—',
-                                        'ECD' => $detail['ecd'] ? date('d M Y', strtotime($detail['ecd'])) : '—',
-                                        'Opening Due' => $detail['opening_due'] ?? '—',
-                                        'Work Status' => $detail['work_status_name'] ?? '—',
-                                        'Finalisation Status' => $detail['finalisation_status_name'] ?? '—',
-                                        'Finalised By' => $detail['finalised_by_name'] ?? '—',
-                                        'Completed Date' => $detail['completed_date'] ? date('d M Y', strtotime($detail['completed_date'])) : '—',
-                                        'Tax Clearance Status' => $detail['tax_clearance_status_name'] ?? '—',
-                                        'Backup Status' => $detail['backup_status_value'] ?? '—',
-                                        'Follow-up Date' => $detail['follow_up_date'] ? date('d M Y', strtotime($detail['follow_up_date'])) : '—',
-                                        'Notes' => $detail['notes'] ?? '—',
+                                        'Firm Name'            => $detail['firm_name']                ?? '—',
+                                        'Company Type'         => $detail['company_type_name']        ?? '—',
+                                        'File Type'            => $detail['file_type_name']           ?? '—',
+                                        'PAN / VAT'            => $detail['pan_vat_name']             ?? '—',
+                                        'VAT Client'           => $detail['vat_client_value']         ?? '—',
+                                        'Return Type'          => $detail['return_type']              ?? '—',
+                                        'Fiscal Year'          => $detail['fiscal_year']              ?? '—',
+                                        'No. of Audit Years'   => $detail['no_of_audit_year']         ?? '—',
+                                        'PAN No'               => $detail['pan_no']                   ?? '—',
+                                        'Assigned Date'        => $detail['assigned_date'] ? date('d M Y', strtotime($detail['assigned_date'])) : '—',
+                                        'Audit Type'           => $detail['audit_type_name']          ?? '—',
+                                        'ECD'                  => $detail['ecd'] ? date('d M Y', strtotime($detail['ecd'])) : '—',
+                                        'Opening Due'          => $detail['opening_due']              ?? '—',
+                                        'Work Status'          => $detail['work_status_name']         ?? '—',
+                                        'Finalisation Status'  => $detail['finalisation_status_name'] ?? '—',
+                                        'Finalised By'         => $detail['finalised_by_name']        ?? '—',
+                                        'Completed Date'       => $detail['completed_date'] ? date('d M Y', strtotime($detail['completed_date'])) : '—',
+                                        'Tax Clearance Status' => $detail['tax_clearance_status_name']?? '—',
+                                        'Backup Status'        => $detail['backup_status_value']      ?? '—',
+                                        'Follow-up Date'       => $detail['follow_up_date'] ? date('d M Y', strtotime($detail['follow_up_date'])) : '—',
+                                        'Notes'                => $detail['notes']                    ?? '—',
                                     ];
-                                    foreach ($retailFields as $label => $val):
-                                        ?>
+                                    foreach ($retailFields as $label => $val): ?>
                                         <div class="col-md-4">
-                                            <div
-                                                style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
-                                                <?= $label ?>
-                                            </div>
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;"><?= $label ?></div>
                                             <div style="font-size:.88rem;margin-top:.2rem;"><?= htmlspecialchars($val) ?></div>
                                         </div>
                                     <?php endforeach; ?>
@@ -629,22 +431,16 @@ include '../../includes/header.php';
                     <?php elseif ($detail): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
-                                <h5><i
-                                        class="fas fa-table text-warning me-2"></i><?= htmlspecialchars($task['dept_name']) ?>
-                                    Details</h5>
+                                <h5><i class="fas fa-table text-warning me-2"></i><?= htmlspecialchars($task['dept_name']) ?> Details</h5>
                             </div>
                             <div class="card-mis-body">
                                 <div class="row g-3">
                                     <?php foreach ($detail as $key => $val):
-                                        if (in_array($key, ['id', 'task_id']) || $val === null || $val === '')
-                                            continue;
+                                        if (in_array($key, ['id','task_id']) || $val === null || $val === '') continue;
                                         $label = ucwords(str_replace('_', ' ', $key));
-                                        ?>
+                                    ?>
                                         <div class="col-md-4">
-                                            <div
-                                                style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
-                                                <?= $label ?>
-                                            </div>
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;"><?= $label ?></div>
                                             <div style="font-size:.88rem;margin-top:.2rem;"><?= htmlspecialchars($val) ?></div>
                                         </div>
                                     <?php endforeach; ?>
@@ -662,22 +458,14 @@ include '../../includes/header.php';
                             <div class="card-mis-body">
                                 <div style="padding-left:1rem;">
                                     <?php foreach ($workflow as $w): ?>
-                                        <div
-                                            style="position:relative;margin-bottom:1rem;padding-left:1.2rem;border-left:2px solid #f3f4f6;">
-                                            <div
-                                                style="position:absolute;left:-6px;top:4px;width:10px;height:10px;border-radius:50%;background:#c9a84c;border:2px solid #fff;">
-                                            </div>
-                                            <div
-                                                style="font-size:.82rem;font-weight:600;color:#1f2937;text-transform:capitalize;">
+                                        <div style="position:relative;margin-bottom:1rem;padding-left:1.2rem;border-left:2px solid #f3f4f6;">
+                                            <div style="position:absolute;left:-6px;top:4px;width:10px;height:10px;border-radius:50%;background:#c9a84c;border:2px solid #fff;"></div>
+                                            <div style="font-size:.82rem;font-weight:600;color:#1f2937;text-transform:capitalize;">
                                                 <?= htmlspecialchars(str_replace('_', ' ', $w['action'])) ?>
                                             </div>
                                             <div style="font-size:.75rem;color:#6b7280;margin-top:.1rem;">
-                                                <?php if ($w['from_user_name']): ?>
-                                                    by <?= htmlspecialchars($w['from_user_name']) ?>
-                                                <?php endif; ?>
-                                                <?php if ($w['to_user_name']): ?>
-                                                    → <?= htmlspecialchars($w['to_user_name']) ?>
-                                                <?php endif; ?>
+                                                <?php if ($w['from_user_name']): ?>by <?= htmlspecialchars($w['from_user_name']) ?><?php endif; ?>
+                                                <?php if ($w['to_user_name']): ?>→ <?= htmlspecialchars($w['to_user_name']) ?><?php endif; ?>
                                                 <?php if ($w['from_dept_name'] && $w['to_dept_name'] && $w['from_dept_name'] !== $w['to_dept_name']): ?>
                                                     · <?= htmlspecialchars($w['from_dept_name']) ?>
                                                     <i class="fas fa-arrow-right mx-1" style="font-size:.65rem;"></i>
@@ -685,9 +473,7 @@ include '../../includes/header.php';
                                                 <?php endif; ?>
                                             </div>
                                             <?php if ($w['remarks']): ?>
-                                                <div style="font-size:.73rem;color:#9ca3af;font-style:italic;margin-top:.1rem;">
-                                                    "<?= htmlspecialchars($w['remarks']) ?>"
-                                                </div>
+                                                <div style="font-size:.73rem;color:#9ca3af;font-style:italic;margin-top:.1rem;">"<?= htmlspecialchars($w['remarks']) ?>"</div>
                                             <?php endif; ?>
                                             <div style="font-size:.7rem;color:#d1d5db;margin-top:.1rem;">
                                                 <?= date('d M Y, H:i', strtotime($w['created_at'])) ?>
@@ -712,13 +498,10 @@ include '../../includes/header.php';
                                     </div>
                                     <div class="flex-grow-1">
                                         <div class="d-flex gap-2 align-items-center">
-                                            <strong
-                                                style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong>
-                                            <span
-                                                style="font-size:.72rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span>
+                                            <strong style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong>
+                                            <span style="font-size:.72rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span>
                                         </div>
-                                        <div
-                                            style="font-size:.88rem;margin-top:.2rem;background:#f9fafb;padding:.6rem .9rem;border-radius:8px;">
+                                        <div style="font-size:.88rem;margin-top:.2rem;background:#f9fafb;padding:.6rem .9rem;border-radius:8px;">
                                             <?= nl2br(htmlspecialchars($c['comment'])) ?>
                                         </div>
                                     </div>
@@ -730,8 +513,7 @@ include '../../includes/header.php';
                             <form method="POST" class="mt-3 d-flex gap-2">
                                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                 <input type="hidden" name="add_comment" value="1">
-                                <input type="text" name="comment" class="form-control" placeholder="Add a comment…"
-                                    required>
+                                <input type="text" name="comment" class="form-control" placeholder="Add a comment…" required>
                                 <button type="submit" class="btn btn-gold btn-sm flex-shrink-0">Post</button>
                             </form>
                         </div>
@@ -744,7 +526,7 @@ include '../../includes/header.php';
 
                     <?php if ($isMyTask && !$isDone): ?>
 
-                        <!-- 1. Update Work Status -->
+                        <!-- Update Work Status (RETAIL) -->
                         <?php if ($task['dept_code'] === 'RETAIL' && $detail): ?>
                             <div class="card-mis mb-3" style="border-left:3px solid #f59e0b;">
                                 <div class="card-mis-header">
@@ -759,7 +541,8 @@ include '../../includes/header.php';
                                             <select name="work_status_id" class="form-select form-select-sm" required>
                                                 <option value="">-- Select --</option>
                                                 <?php foreach ($taskStatuses as $ts): ?>
-                                                    <option value="<?= $ts['id'] ?>" <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
+                                                    <option value="<?= $ts['id'] ?>"
+                                                        <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
                                                         <?= htmlspecialchars($ts['status_name']) ?>
                                                     </option>
                                                 <?php endforeach; ?>
@@ -776,8 +559,9 @@ include '../../includes/header.php';
                                     </form>
                                 </div>
                             </div>
+
                         <?php else: ?>
-                            <!-- Non-retail status update -->
+                            <!-- Non-retail: status radio list with DB colors & icons -->
                             <div class="card-mis mb-3" style="border-left:3px solid #f59e0b;">
                                 <div class="card-mis-header">
                                     <h5><i class="fas fa-circle-dot text-warning me-2"></i>Update Status</h5>
@@ -788,37 +572,37 @@ include '../../includes/header.php';
                                         <input type="hidden" name="update_status" value="1">
                                         <div class="mb-3">
                                             <?php foreach ($taskStatuses as $ts):
-                                                $statusKey = strtolower(str_replace(' ', '-', $ts['status_name']));
-                                                $isChecked = ($task['status'] ?? '') === $ts['status_name'];
-                                                $statusColor = $ts['color'] ?? '#9ca3af';
-                                                ?>
-                                                <div class="form-check mb-2">
-                                                    <input class="form-check-input" type="radio" name="new_status"
-                                                        value="<?= htmlspecialchars($ts['status_name']) ?>" id="st_<?= $ts['id'] ?>"
-                                                        <?= $isChecked ? 'checked' : '' ?>>
-                                                    <label class="form-check-label d-flex align-items-center gap-2"
-                                                        for="st_<?= $ts['id'] ?>">
-                                                        <span style="
-                        display:inline-flex;
-                        align-items:center;
-                        gap:.4rem;
-                        font-size:.78rem;
-                        font-weight:600;
-                        color:<?= $statusColor ?>;
-                        background:<?= $statusColor ?>18;
-                        padding:.25rem .65rem;
-                        border-radius:99px;
-                        border:1px solid <?= $statusColor ?>44;
-                    ">
-                                                            <span
-                                                                style="width:6px;height:6px;border-radius:50%;background:<?= $statusColor ?>;flex-shrink:0;"></span>
+                                                $isChecked  = ($task['status'] ?? '') === $ts['status_name'];
+                                                $sc         = $ts['color']    ?: '#9ca3af';
+                                                $sbg        = $ts['bg_color'] ?: $sc . '18';
+                                                $rawIco     = trim($ts['icon'] ?: 'fa-circle');
+                                                $iClass     = str_starts_with($rawIco, 'fa') ? $rawIco : 'fa-' . $rawIco;
+                                            ?>
+                                                <label style="display:block;cursor:pointer;margin-bottom:.5rem;">
+                                                    <input type="radio" name="new_status"
+                                                           value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                           id="st_<?= $ts['id'] ?>"
+                                                           <?= $isChecked ? 'checked' : '' ?>
+                                                           style="display:none;"
+                                                           class="status-radio">
+                                                    <div class="status-radio-tile <?= $isChecked ? 'is-selected' : '' ?>"
+                                                         data-color="<?= htmlspecialchars($sc) ?>"
+                                                         data-bg="<?= htmlspecialchars($sbg) ?>"
+                                                         style="display:flex;align-items:center;gap:.6rem;
+                                                                padding:.5rem .75rem;border-radius:8px;
+                                                                border:1.5px solid <?= $isChecked ? $sc : $sc . '44' ?>;
+                                                                background:<?= $isChecked ? $sbg : 'transparent' ?>;
+                                                                transition:.15s;">
+                                                        <i class="fas <?= htmlspecialchars($iClass) ?>"
+                                                           style="font-size:.75rem;color:<?= htmlspecialchars($sc) ?>;flex-shrink:0;width:14px;text-align:center;"></i>
+                                                        <span style="font-size:.8rem;font-weight:600;color:<?= htmlspecialchars($sc) ?>;flex:1;">
                                                             <?= htmlspecialchars($ts['status_name']) ?>
                                                         </span>
                                                         <?php if ($isChecked): ?>
-                                                            <span style="font-size:.68rem;color:#9ca3af;">(current)</span>
+                                                            <span style="font-size:.65rem;color:#9ca3af;font-weight:400;">current</span>
                                                         <?php endif; ?>
-                                                    </label>
-                                                </div>
+                                                    </div>
+                                                </label>
                                             <?php endforeach; ?>
                                         </div>
                                         <button type="submit" class="btn btn-gold w-100 btn-sm">
@@ -829,7 +613,7 @@ include '../../includes/header.php';
                             </div>
                         <?php endif; ?>
 
-                        <!-- 2. Transfer to Another Staff -->
+                        <!-- Transfer to Another Staff -->
                         <?php if (!empty($sameBranchStaff)): ?>
                             <div class="card-mis mb-3" style="border-left:3px solid #3b82f6;">
                                 <div class="card-mis-header">
@@ -868,35 +652,9 @@ include '../../includes/header.php';
                             </div>
                         <?php endif; ?>
 
-                        <!-- 3. Mark as Completed — notifies admin -->
-                        <div class="card-mis mb-3" style="border-left:3px solid #10b981;">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-check-double me-2" style="color:#10b981;"></i>Mark as Completed</h5>
-                            </div>
-                            <div class="card-mis-body">
-                                <p style="font-size:.77rem;color:#9ca3af;margin-bottom:.75rem;">
-                                    Mark this task as fully completed. The admin will be notified and can then transfer it
-                                    to the next department if needed.
-                                </p>
-                                <form method="POST"
-                                    onsubmit="return confirm('Mark this task as completed? Admin will be notified.');">
-                                    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                                    <input type="hidden" name="mark_completed" value="1">
-                                    <div class="mb-2">
-                                        <label class="form-label-mis">Completion Note</label>
-                                        <textarea name="completion_note" class="form-control form-control-sm" rows="2"
-                                            placeholder="Summary of work completed..."></textarea>
-                                    </div>
-                                    <button type="submit" class="btn w-100 btn-sm"
-                                        style="background:#10b981;color:#fff;border:none;border-radius:8px;padding:.5rem;">
-                                        <i class="fas fa-check-double me-1"></i>Complete & Notify Admin
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
+                        <!-- ✅ "Mark as Completed" card REMOVED as requested -->
 
                     <?php elseif ($isDone): ?>
-                        <!-- Task is completed -->
                         <div class="card-mis mb-3" style="border-left:3px solid #10b981;">
                             <div class="card-mis-body text-center py-4">
                                 <i class="fas fa-check-circle fa-2x mb-2 d-block" style="color:#10b981;"></i>
@@ -908,7 +666,6 @@ include '../../includes/header.php';
                         </div>
 
                     <?php else: ?>
-                        <!-- Task assigned to someone else — read only -->
                         <div class="card-mis mb-3" style="border-left:3px solid #9ca3af;">
                             <div class="card-mis-body text-center py-4">
                                 <i class="fas fa-eye fa-2x mb-2 d-block" style="color:#9ca3af;"></i>
@@ -923,12 +680,9 @@ include '../../includes/header.php';
                     <!-- Task Meta -->
                     <div class="card-mis p-3" style="font-size:.8rem;color:#6b7280;">
                         <div class="mb-2"><strong>Task #:</strong> <?= htmlspecialchars($task['task_number']) ?></div>
-                        <div class="mb-2"><strong>Dept:</strong> <?= htmlspecialchars($task['dept_name'] ?? '—') ?>
-                        </div>
+                        <div class="mb-2"><strong>Dept:</strong> <?= htmlspecialchars($task['dept_name'] ?? '—') ?></div>
                         <div class="mb-2"><strong>Priority:</strong>
-                            <span class="status-badge priority-<?= $task['priority'] ?>">
-                                <?= ucfirst($task['priority']) ?>
-                            </span>
+                            <span class="status-badge priority-<?= $task['priority'] ?>"><?= ucfirst($task['priority']) ?></span>
                         </div>
                         <div class="mb-2"><strong>Due Date:</strong>
                             <span style="<?= $isOverdue ? 'color:#ef4444;font-weight:600;' : '' ?>">
@@ -936,13 +690,41 @@ include '../../includes/header.php';
                                 <?= $isOverdue ? ' ⚠️' : '' ?>
                             </span>
                         </div>
-                        <div class="mb-2"><strong>Created:</strong> <?= date('d M Y', strtotime($task['created_at'])) ?>
-                        </div>
+                        <div class="mb-2"><strong>Created:</strong> <?= date('d M Y', strtotime($task['created_at'])) ?></div>
                         <div><strong>Updated:</strong> <?= date('d M Y', strtotime($task['updated_at'])) ?></div>
                     </div>
 
                 </div><!-- end col-lg-4 -->
-
             </div><!-- end row -->
         </div>
         <?php include '../../includes/footer.php'; ?>
+    </div>
+</div>
+
+<script>
+// Highlight selected status tile on click
+document.querySelectorAll('.status-radio').forEach(radio => {
+    radio.addEventListener('change', function () {
+        document.querySelectorAll('.status-radio-tile').forEach(tile => {
+            const c  = tile.dataset.color;
+            const bg = tile.dataset.bg;
+            tile.style.borderColor = c + '44';
+            tile.style.background  = 'transparent';
+            tile.classList.remove('is-selected');
+        });
+        const tile = this.nextElementSibling;
+        tile.style.borderColor = tile.dataset.color;
+        tile.style.background  = tile.dataset.bg;
+        tile.classList.add('is-selected');
+    });
+});
+
+// Clicking the tile also selects the radio
+document.querySelectorAll('.status-radio-tile').forEach(tile => {
+    tile.addEventListener('click', function () {
+        const radio = this.previousElementSibling;
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change'));
+    });
+});
+</script>

@@ -89,11 +89,11 @@ if (!function_exists('isActiveExec')) {
         <!-- ── Tasks ── -->
         <div class="nav-section-label">Tasks</div>
 
-        <a href="<?= APP_URL ?>/executive/tasks/index.php" class="nav-item <?= isActiveExec('/tasks/index') ?>">
+        <a href="<?= APP_URL ?>/executive/tasks/index.php" class="nav-item <?= isActiveExec('/tasks/index') ?><?= isActiveExec('/tasks/view') ?><?= isActiveExec('/tasks/edit') ?>">
             <i class="fas fa-list-check"></i><span>All Tasks</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/tasks/assign.php" class="nav-item <?= isActiveExec('/tasks/assign') ?>">
+        <a href="<?= APP_URL ?>/executive/tasks/assign.php" class="nav-item <?= isActiveExec('/tasks/assign/') ?>">
             <i class="fas fa-plus-circle"></i><span>Assign Task</span>
         </a>
 

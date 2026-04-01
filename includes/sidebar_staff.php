@@ -1,8 +1,12 @@
 <?php
 // includes/sidebar_staff.php
 $__u = currentUser();
-function isActiveStaff(string $path): string {
-    return strpos($_SERVER['REQUEST_URI'], $path) !== false ? 'active' : '';
+if (!function_exists('isActiveStaff')) {
+    function isActiveStaff(string $path): string
+    {
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        return (strpos($uri, $path) !== false) ? 'active' : '';
+    }
 }
 // Count tasks due today, pending, overdue
 $db = getDB();
@@ -42,7 +46,7 @@ $todayCnt   = (function() use ($db,$__u,$today){
         <a href="<?= APP_URL ?>/staff/tasks/tomorrow.php" class="nav-item <?= isActiveStaff('/staff/tasks/tomorrow') ?>">
             <i class="fas fa-forward"></i><span>Tomorrow</span>
         </a>
-        <a href="<?= APP_URL ?>/staff/tasks/index.php" class="nav-item <?= isActiveStaff('/staff/tasks/index') ?>">
+        <a href="<?= APP_URL ?>/staff/tasks/index.php" class="nav-item <?= isActiveStaff('/staff/tasks/index') ?><?= isActiveStaff('/staff/tasks/view') ?>">
             <i class="fas fa-list-check"></i><span>All My Tasks</span>
             <?php if($pendingCnt>0): ?><span class="nav-badge"><?= $pendingCnt ?></span><?php endif; ?>
         </a>

@@ -132,7 +132,7 @@ try {
         <!-- Tasks -->
         <div class="nav-section-label">Tasks</div>
 
-        <a href="<?= APP_URL ?>/admin/tasks/index.php" class="nav-item <?= isActive('/admin/tasks/index') ?>">
+        <a href="<?= APP_URL ?>/admin/tasks/index.php" class="nav-item <?= isActive('/admin/tasks/index') ?><?= isActive('/admin/tasks/view') ?><?= isActive('/admin/tasks/edit') ?>">
             <i class="fas fa-list-check"></i>
             <span>All Tasks</span>
             <?php if ($__taskCount > 0): ?>

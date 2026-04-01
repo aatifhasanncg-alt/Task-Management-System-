@@ -13,7 +13,9 @@ $db = getDB();
 $user = currentUser();
 $pageTitle = "Today's Tasks";
 $today = date('Y-m-d');
-
+$staffProfileStmt = $db->prepare("SELECT * FROM users WHERE id = ?");
+$staffProfileStmt->execute([$user['id']]);
+$staffProfile = $staffProfileStmt->fetch();
 $tasks = $db->prepare("
     SELECT t.*, 
            ts.status_name AS status,
@@ -168,8 +170,9 @@ include '../../includes/header.php';
                                         <?php
                                         $allStatuses = $db->query("SELECT id, status_name, color FROM task_status ORDER BY id")->fetchAll();
                                         foreach ($allStatuses as $s):
-                                            if ($s['status_name'] === $t['status']) continue;
-                                        ?>
+                                            if ($s['status_name'] === $t['status'])
+                                                continue;
+                                            ?>
                                             <li>
                                                 <a class="dropdown-item" href="#" style="font-size:.82rem;"
                                                     onclick="quickStatus(<?= $t['id'] ?>,'<?= htmlspecialchars($s['status_name']) ?>',this);return false;">
@@ -225,13 +228,21 @@ include '../../includes/header.php';
                                 <?php
                                 // Only fetch staff in the same department and branch as the logged-in user
                                 $stmt = $db->prepare("
-                            SELECT id, full_name 
-                            FROM users 
-                            WHERE role_id = (SELECT id FROM roles WHERE role_name='staff') 
-                              AND department_id = ? 
-                              AND branch_id = ?
-                        ");
-                                $stmt->execute([$user['department_id'], $user['branch_id']]);
+                                    SELECT u.id, u.full_name, u.employee_id
+                                    FROM users u
+                                    LEFT JOIN roles r ON r.id = u.role_id
+                                    WHERE r.role_name = 'staff'
+                                    AND u.is_active = 1
+                                    AND u.branch_id = ?
+                                    AND u.department_id = ?
+                                    AND u.id != ?
+                                    ORDER BY u.full_name
+                                ");
+                                $stmt->execute([
+                                    $staffProfile['branch_id'],
+                                    $staffProfile['department_id'],
+                                    $user['id']
+                                ]);
                                 $staffList = $stmt->fetchAll();
                                 foreach ($staffList as $s):
                                     echo '<option value="' . $s['id'] . '">' . htmlspecialchars($s['full_name']) . '</option>';
@@ -261,11 +272,8 @@ include '../../includes/header.php';
 
                 if (!confirm(`Change status to "${newStatus}"?`)) return;
 
-                const remarks = prompt('Add a remark (optional):') || '';
-
                 updateTaskStatus(taskId, 'status_change', {
                     new_status: newStatus,
-                    remarks: remarks
                 }).then(r => {
                     if (r.ok) {
                         alert(r.msg);

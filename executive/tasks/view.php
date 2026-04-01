@@ -178,7 +178,7 @@ if ($detailTable) {
 }
 
 // ── Lookups ───────────────────────────────────────────────────────────────────
-$taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
+$taskStatuses = $db->query("SELECT id, status_name, color, bg_color  FROM task_status ORDER BY id")->fetchAll();
 $yesNo = $db->query("SELECT id, value FROM yes_no ORDER BY id")->fetchAll();
 $allStaff = $db->query("
     SELECT u.id, u.full_name FROM users u
