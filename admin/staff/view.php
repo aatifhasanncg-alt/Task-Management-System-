@@ -36,13 +36,10 @@ if (!$staff) {
 
 // Security: admin can only view staff from their branch & dept
 if (!isExecutive()) {
-    $adminStmt = $db->prepare("SELECT branch_id, department_id FROM users WHERE id = ?");
+    $adminStmt = $db->prepare("SELECT department_id FROM users WHERE id = ?");
     $adminStmt->execute([$user['id']]);
     $adminUser = $adminStmt->fetch();
-    if (
-        $staff['branch_id'] != $adminUser['branch_id'] ||
-        $staff['department_id'] != $adminUser['department_id']
-    ) {
+    if ($staff['department_id'] != $adminUser['department_id']) {
         setFlash('error', 'Access denied.');
         header('Location: index.php');
         exit;

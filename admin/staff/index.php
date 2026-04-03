@@ -27,8 +27,6 @@ $where  = ['r.role_name = \'staff\'', 'u.is_active = 1'];
 $params = [];
 
 if (!isExecutive()) {
-    $where[]  = 'u.branch_id = ?';
-    $params[] = $adminUser['branch_id'];
     $where[]  = 'u.department_id = ?';
     $params[] = $adminUser['department_id'];
 }
@@ -63,17 +61,18 @@ $staffStmt = $db->prepare("
            SUM(CASE WHEN ts.status_name NOT IN ('Done','Next Year') THEN 1 ELSE 0 END) AS open_tasks,
            SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END) AS done_tasks
     FROM users u
-    LEFT JOIN roles r       ON r.id  = u.role_id
-    LEFT JOIN departments d ON d.id  = u.department_id
-    LEFT JOIN branches b    ON b.id  = u.branch_id
-    LEFT JOIN users m       ON m.id  = u.managed_by
-    LEFT JOIN tasks t       ON t.assigned_to = u.id AND t.is_active = 1
+    LEFT JOIN roles r        ON r.id = u.role_id
+    LEFT JOIN departments d  ON d.id = u.department_id
+    LEFT JOIN branches b     ON b.id = u.branch_id
+    LEFT JOIN users m        ON m.id = u.managed_by
+    LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
     LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE {$ws}
     GROUP BY u.id
     ORDER BY u.full_name ASC
     LIMIT {$perPage} OFFSET {$offset}
 ");
+
 $staffStmt->execute($params);
 $staffList = $staffStmt->fetchAll();
 

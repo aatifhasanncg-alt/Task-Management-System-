@@ -439,6 +439,7 @@ include '../../includes/header.php';
                     </div>
 
                         <!-- ── Audit Nature ── -->
+                         <?php if (($task['dept_code'] ?? '') !== 'FIN'): ?>
                         <div class="col-md-4">
                             <label class="form-label-mis">Audit Nature</label>
                             <select name="audit_nature" id="audit_nature"
@@ -496,7 +497,7 @@ include '../../includes/header.php';
                                 </div>
                             </div>
                         </div>
-
+                        <?php endif; ?>
                         <div class="col-12">
                             <label class="form-label-mis">Description</label>
                             <textarea name="description" class="form-control"

@@ -296,6 +296,7 @@ include '../../includes/header.php';
                             <option value="">-- Select --</option>
                             <?php foreach ($depts as $d): ?>
                             <option value="<?= $d['id'] ?>"
+                                data-code="<?= htmlspecialchars($d['dept_code']) ?>"
                                 <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($d['dept_name']) ?>
                             </option>
@@ -428,8 +429,10 @@ include '../../includes/header.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
-
+                    <div id="audit-fields-wrapper" style="display:contents;">
                     <!-- Audit Nature — values lowercase to match ENUM -->
+                     <?php $deptCodeForAudit = $depts[0]['dept_code'] ?? ''; ?>
+                    <?php if ($deptCodeForAudit !== 'FIN'): ?>
                     <div class="col-md-6">
                         <label class="form-label-mis">Audit Nature</label>
                         <select name="audit_nature" id="audit_nature"
@@ -463,8 +466,9 @@ include '../../includes/header.php';
                                             transition:.3s;width:0%;"></div>
                             </div>
                         </div>
+                      </div>
+                    <?php endif; ?>
                     </div>
-
                     <div class="col-12">
                         <label class="form-label-mis">Description</label>
                         <textarea name="description" class="form-control" rows="2"
@@ -594,7 +598,23 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 });
+// Toggle audit fields based on department
+function toggleAuditFields(deptCode) {
+    const auditSection = document.getElementById('audit-fields-wrapper');
+    if (auditSection) {
+        auditSection.style.display = deptCode === 'FIN' ? 'none' : '';
+    }
+}
 
+const deptSelect = document.querySelector('[name="department_id"]');
+if (deptSelect && deptSelect.tagName === 'SELECT') {
+    deptSelect.addEventListener('change', function() {
+        const code = this.options[this.selectedIndex]?.dataset?.code ?? '';
+        toggleAuditFields(code);
+    });
+    // trigger on load
+    toggleAuditFields(deptSelect.options[deptSelect.selectedIndex]?.dataset?.code ?? '');
+}
 // ── Auditor loader ────────────────────────────────────────────────────────────
 function loadAuditors() {
     const nature = document.getElementById('audit_nature').value;
@@ -665,7 +685,13 @@ function updateCapacityBar() {
     document.getElementById('capacity-bar').style.background = color;
     capDiv.style.display = 'block';
 }
-
+// Hide audit fields for Finance dept
+document.querySelector('[name="department_id"]')?.addEventListener('change', function() {
+    const sel = this;
+    const code = sel.options[sel.selectedIndex]?.dataset?.code ?? '';
+    const auditWrap = document.querySelector('.col-md-6:has(#audit_nature)');
+    // handled via PHP for non-executive; for executive use data attribute
+});
 document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
 </script>
 <?php include '../../includes/footer.php'; ?>

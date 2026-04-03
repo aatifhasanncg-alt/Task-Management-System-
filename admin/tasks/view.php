@@ -215,13 +215,12 @@ if ($detailTable) {
                 $dSt = $db->prepare("
                     SELECT tb.*,
                            br.bank_name,
-                           bcc.category_name AS client_category_name, ws.status_name AS work_status_name,
+                           bcc.category_name AS client_category_name,
                            c.company_name, c.contact_person, c.contact_phone,
                            c.pan_number AS company_pan, ct.type_name AS company_type_name
                     FROM task_banking tb
                     LEFT JOIN bank_references br         ON br.id=tb.bank_reference_id
                     LEFT JOIN bank_client_categories bcc ON bcc.id=tb.client_category_id
-                    LEFT JOIN task_status ws             ON ws.id=tb.work_status_id
                     LEFT JOIN companies c                ON c.id=tb.company_id
                     LEFT JOIN company_types ct           ON ct.id=c.company_type_id
                     WHERE tb.task_id = ?");
@@ -232,11 +231,10 @@ if ($detailTable) {
             case 'FIN':
                 $dSt = $db->prepare("
                     SELECT tf.*,
-                           fst.service_name AS service_type_name,
                            ps.status_name   AS payment_status_name,
                            tcs.status_name  AS tax_clearance_status_name
                     FROM task_finance tf
-                    LEFT JOIN finance_service_types fst ON fst.id=tf.service_type_id
+    
                     LEFT JOIN task_status ps            ON ps.id=tf.payment_status_id
                     LEFT JOIN task_status tcs           ON tcs.id=tf.tax_clearance_status_id
                     WHERE tf.task_id = ?");
@@ -259,7 +257,14 @@ $allStaff = $db->query("
     WHERE r.role_name IN ('staff','admin') AND u.is_active=1
       AND (d.dept_code IS NULL OR d.dept_code != 'CORE')
     ORDER BY r.role_name, u.full_name")->fetchAll();
-
+$allFinal = $db->query("
+    SELECT u.id, u.full_name, u.employee_id, r.role_name FROM users u
+    LEFT JOIN departments d ON d.id = u.department_id
+    JOIN roles r ON r.id = u.role_id
+    WHERE u.is_active = 1
+      AND (d.dept_code IS NULL OR d.dept_code != 'CORE') AND r.role_name IN ('admin','executive')
+    ORDER BY u.full_name ASC
+")->fetchAll();
 // ── Company data ──────────────────────────────────────────────────────────────
 $companyData = null;
 if ($task['company_id']) {
@@ -300,7 +305,19 @@ try {
     $workflow = $w2->fetchAll();
 } catch (Exception $e) {
 }
-
+// ── Follow-up history ─────────────────────────────────────────────────────
+$followupHistory = [];
+if ($task['dept_code'] === 'RETAIL') {
+    $fuStmt = $db->prepare("
+        SELECT tf.*, u.full_name AS added_by_name
+        FROM task_followups tf
+        LEFT JOIN users u ON u.id = tf.created_by
+        WHERE tf.task_id = ?
+        ORDER BY tf.created_at ASC
+    ");
+    $fuStmt->execute([$id]);
+    $followupHistory = $fuStmt->fetchAll();
+}
 // ── Extra lookups for editing ─────────────────────────────────────────────────
 $taxOfficeTypes = $taxTypes = $financeServiceTypes = $allBanks = $allCats = $allAuditors = [];
 $companyTypes = $fileTypes = $panVatTypes = $yesNoOpts = $auditTypes2 = $corpGrades = [];
@@ -504,6 +521,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
     $r2 = $_POST['retail'] ?? [];
     $retFy = trim($r2['fiscal_year'] ?? '');
     $retFyId = getFiscalYearId($db, $retFy);
+    // ── Track follow-up history ───────────────────────────────────────────────
+    $newFollowUpDate = $r2['follow_up_date'] ?? '';
+    $newFollowUpNote = trim($r2['follow_up_note'] ?? '');
+
+    if ($newFollowUpDate) {
+        // Only insert if date is different from last recorded one
+        $lastFu = $db->prepare("
+        SELECT followup_date FROM task_followups
+        WHERE task_id = ?
+        ORDER BY created_at DESC LIMIT 1
+    ");
+        $lastFu->execute([$id]);
+        $lastDate = $lastFu->fetchColumn();
+
+        if ($lastDate !== $newFollowUpDate) {
+            $db->prepare("
+            INSERT INTO task_followups (task_id, followup_date, notes, created_by)
+            VALUES (?, ?, ?, ?)
+        ")->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
+        }
+    }
     // Ensure columns exist before saving
     try {
         $db->query("SELECT fiscal_year FROM task_retail LIMIT 1");
@@ -605,13 +643,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_finance']) && $c
         } catch (Exception $e2) {
         }
     }
-    $p = [$task['company_id'], ($f['service_type_id'] ?? '') !== '' ? (int) $f['service_type_id'] : null, $finFy, $finFyId, ($f['total_amount'] ?? '') !== '' ? (float) $f['total_amount'] : 0, ($f['paid_amount'] ?? '') !== '' ? (float) $f['paid_amount'] : 0, $f['payment_date'] ?: null, trim($f['payment_method'] ?? ''), ($f['tax_clearance_status_id'] ?? '') !== '' ? (int) $f['tax_clearance_status_id'] : null, $f['tax_clearance_date'] ?: null, ($f['payment_status_id'] ?? '') !== '' ? (int) $f['payment_status_id'] : null, isset($f['is_completed']) ? 1 : 0, trim($f['remarks'] ?? '')];
+    $p = [$task['company_id'], $finFy, $finFyId, ($f['total_amount'] ?? '') !== '' ? (float) $f['total_amount'] : 0, ($f['paid_amount'] ?? '') !== '' ? (float) $f['paid_amount'] : 0, $f['payment_date'] ?: null, trim($f['payment_method'] ?? ''), ($f['tax_clearance_status_id'] ?? '') !== '' ? (int) $f['tax_clearance_status_id'] : null, $f['tax_clearance_date'] ?: null, ($f['payment_status_id'] ?? '') !== '' ? (int) $f['payment_status_id'] : null, isset($f['is_completed']) ? 1 : 0, trim($f['remarks'] ?? '')];
+
     $ex = $db->prepare("SELECT id FROM task_finance WHERE task_id=?");
     $ex->execute([$id]);
+
     if ($ex->fetch()) {
-        $db->prepare("UPDATE task_finance SET company_id=?,service_type_id=?,fiscal_year=?,fiscal_year_id=?,total_amount=?,paid_amount=?,payment_date=?,payment_method=?,tax_clearance_status_id=?,tax_clearance_date=?,payment_status_id=?,is_completed=?,remarks=? WHERE task_id=?")->execute(array_merge($p, [$id]));
+        $db->prepare("
+        UPDATE task_finance SET
+            company_id=?, fiscal_year=?, fiscal_year_id=?,
+            total_amount=?, paid_amount=?, payment_date=?,
+            payment_method=?, tax_clearance_status_id=?, tax_clearance_date=?,
+            payment_status_id=?, is_completed=?, remarks=?
+        WHERE task_id=?
+    ")->execute(array_merge($p, [$id]));
     } else {
-        $db->prepare("INSERT INTO task_finance(task_id,company_id,service_type_id,fiscal_year,fiscal_year_id,total_amount,paid_amount,payment_date,payment_method,tax_clearance_status_id,tax_clearance_date,payment_status_id,is_completed,remarks)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
+        $db->prepare("
+        INSERT INTO task_finance(
+            task_id, company_id, fiscal_year, fiscal_year_id,
+            total_amount, paid_amount, payment_date,
+            payment_method, tax_clearance_status_id, tax_clearance_date,
+            payment_status_id, is_completed, remarks
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ")->execute(array_merge([$id], $p));
     }
     if (isset($f['is_completed'])) {
         $did = $db->query("SELECT id FROM task_status WHERE status_name='Done'")->fetchColumn();
@@ -670,6 +724,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
     }
     // Checkbox
     $b['bill_issued'] = !empty($b['bill_issued']) ? 1 : 0;
+    $bankRefId = ($b['bank_reference_id'] ?? '') !== '' ? (int) $b['bank_reference_id'] : null;
+    $catId = ($b['client_category_id'] ?? '') !== '' ? (int) $b['client_category_id'] : null;
 
     if ($ex->fetch()) {
         $stmt = $db->prepare("
@@ -677,10 +733,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
             company_id=?,
             bank_reference_id=?,
             client_category_id=?,
-            assigned_date=?,
             ecd=?,
             completion_date=?,
-            work_status_id=?,
             sales_check=?,
             audit_check=?,
             provisional_financial_statement=?,
@@ -720,20 +774,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
         $db->prepare("
         INSERT INTO task_banking(
             task_id, company_id, bank_reference_id, client_category_id,
-            assigned_date, ecd, completion_date, work_status_id,
+            ecd, completion_date,
             sales_check, audit_check, provisional_financial_statement, projected,
             consulting, nta, salary_certificate, ca_certification, etds,
             bill_issued, remarks
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ")->execute([
                     $task['id'],
-                    $task['company_id'],
+                    $task['company_id'] ?? null,
                     $b['bank_reference_id'] ?? null,
                     $b['client_category_id'] ?? null,
-                    $b['assigned_date'],
                     $b['ecd'],
                     $b['completion_date'],
-                    $b['work_status_id'] ?? null,
                     $b['sales_check'],
                     $b['audit_check'],
                     $b['provisional_financial_statement'],
@@ -1061,8 +1113,8 @@ include '../../includes/header.php';
                                                 <div class="input-group input-group-sm"><input type="text"
                                                         name="tax[submission_number]" class="form-control"
                                                         value="<?= htmlspecialchars($detail['submission_number'] ?? '') ?>"><a
-                                                        href="https://taxpayerportal.ird.gov.np/taxpayer/app.html" target="_blank"
-                                                        class="btn btn-outline-primary btn-sm"><i
+                                                        href="https://taxpayerportal.ird.gov.np/taxpayer/app.html"
+                                                        target="_blank" class="btn btn-outline-primary btn-sm"><i
                                                             class="fas fa-external-link-alt"></i></a></div>
                                             </div>
                                             <div class="col-md-6"><label class="form-label-mis">UDIN Number <span
@@ -1151,7 +1203,7 @@ include '../../includes/header.php';
                                         <i class="fas fa-building me-1"></i>Client Info
                                     </div>
                                     <div class="row g-2">
-                                        <?php foreach (['Company' => $detail['company_name'] ?? ($task['company_name'] ?? '—'), 'Contact' => $detail['contact_person'] ?? '—', 'Phone' => $detail['contact_phone'] ?? '—', 'PAN' => $detail['company_pan'] ?? '—', 'Type' => $detail['company_type_name'] ?? '—', 'Bank' => $detail['bank_name'] ?? '—', 'Category' => $detail['client_category_name'] ?? '—', 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Completion' => ($detail['completion_date'] ?? '') ? date('d M Y', strtotime($detail['completion_date'])) : '—'] as $lbl => $val): ?>
+                                        <?php foreach (['Company' => $detail['company_name'] ?? ($task['company_name'] ?? '—'), 'Contact' => $detail['contact_person'] ?? '—', 'Phone' => $detail['contact_phone'] ?? '—', 'PAN' => $detail['company_pan'] ?? '—', 'Type' => $detail['company_type_name'] ?? '—', 'Bank' => $detail['bank_name'] ?? '—', 'Category' => $detail['client_category_name'] ?? '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Completion' => ($detail['completion_date'] ?? '') ? date('d M Y', strtotime($detail['completion_date'])) : '—'] as $lbl => $val): ?>
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
@@ -1218,7 +1270,7 @@ include '../../includes/header.php';
                                                         </option>
                                                     <?php endforeach; ?>
                                                 </select></div>
-                                            <?php foreach (['assigned_date' => 'Assigned Date', 'ecd' => 'ECD', 'completion_date' => 'Completion Date'] as $f => $l): ?>
+                                            <?php foreach (['ecd' => 'ECD', 'completion_date' => 'Completion Date'] as $f => $l): ?>
                                                 <div class="col-md-3"><label class="form-label-mis"><?= $l ?></label><input
                                                         type="date" name="banking[<?= $f ?>]" class="form-control form-control-sm"
                                                         value="<?= htmlspecialchars($detail[$f] ?? '') ?>"></div>
@@ -1266,7 +1318,7 @@ include '../../includes/header.php';
                             <div class="card-mis-body">
                                 <?php if ($detail): ?>
                                     <div class="row g-3 mb-4">
-                                        <?php foreach (['Service Type' => htmlspecialchars($detail['service_type_name'] ?? '—'), 'Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Total Amount' => 'Rs. ' . number_format($detail['total_amount'] ?? 0, 2), 'Paid Amount' => 'Rs. ' . number_format($detail['paid_amount'] ?? 0, 2), 'Due Amount' => 'Rs. ' . number_format($detail['due_amount'] ?? 0, 2), 'Payment Date' => ($detail['payment_date'] ?? '') ? date('d M Y', strtotime($detail['payment_date'])) : '—', 'Method' => htmlspecialchars($detail['payment_method'] ?? '—'), 'Payment Status' => htmlspecialchars($detail['payment_status_name'] ?? '—'), 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'TC Date' => ($detail['tax_clearance_date'] ?? '') ? date('d M Y', strtotime($detail['tax_clearance_date'])) : '—', 'Completed' => ($detail['is_completed'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
+                                        <?php foreach (['Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Total Amount' => 'Rs. ' . number_format($detail['total_amount'] ?? 0, 2), 'Paid Amount' => 'Rs. ' . number_format($detail['paid_amount'] ?? 0, 2), 'Due Amount' => 'Rs. ' . number_format($detail['due_amount'] ?? 0, 2), 'Payment Date' => ($detail['payment_date'] ?? '') ? date('d M Y', strtotime($detail['payment_date'])) : '—', 'Method' => htmlspecialchars($detail['payment_method'] ?? '—'), 'Payment Status' => htmlspecialchars($detail['payment_status_name'] ?? '—'), 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'TC Date' => ($detail['tax_clearance_date'] ?? '') ? date('d M Y', strtotime($detail['tax_clearance_date'])) : '—', 'Completed' => ($detail['is_completed'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
                                             <div class="col-md-4">
                                                 <div
                                                     style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
@@ -1291,14 +1343,6 @@ include '../../includes/header.php';
                                     <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
                                             type="hidden" name="save_finance" value="1">
                                         <div class="row g-3">
-                                            <div class="col-md-6"><label class="form-label-mis">Service Type</label><select
-                                                    name="finance[service_type_id]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($financeServiceTypes as $fst): ?>
-                                                        <option value="<?= $fst['id'] ?>" <?= ($detail['service_type_id'] ?? '') == $fst['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($fst['service_name']) ?>
-                                                        </option>
-                                                    <?php endforeach; ?>
-                                                </select></div>
                                             <div class="col-md-3">
                                                 <label class="form-label-mis">Fiscal Year</label>
                                                 <?= fiscalYearSelect('finance[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?>
@@ -1509,11 +1553,7 @@ include '../../includes/header.php';
                                                 </div><input type="hidden" name="retail[assigned_to]"
                                                     value="<?= $taskAssignedToId ?>">
                                             </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Assigned Date</label><input
-                                                    type="date" name="retail[assigned_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['assigned_date'] ?? date('Y-m-d')) ?>">
-                                            </div>
+
                                             <div class="col-md-4"><label class="form-label-mis">ECD</label><input type="date"
                                                     name="retail[ecd]" class="form-control form-control-sm"
                                                     value="<?= htmlspecialchars($detail['ecd'] ?? '') ?>"></div>
@@ -1538,13 +1578,20 @@ include '../../includes/header.php';
                                                             <?= htmlspecialchars($ts['status_name']) ?>
                                                         </option><?php endforeach; ?>
                                                 </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Finalised By</label><select
-                                                    name="retail[finalised_by]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($allStaff as $s): ?>
-                                                        <option value="<?= $s['id'] ?>" <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                            <div class="col-md-4"><label class="form-label-mis">Finalised By</label>
+                                                <select name="retail[finalised_by]" id="retail_finalised_by"
+                                                    class="form-select form-select-sm">
+                                                    <option value="">-- Select --</option>
+                                                    <?php foreach ($allFinal as $s): ?>
+                                                        <option value="<?= $s['id'] ?>"
+                                                            data-branch="<?= htmlspecialchars($s['branch_name'] ?? '') ?>"
+                                                            <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
                                                             <?= htmlspecialchars($s['full_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
+                                                            <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
                                             <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
                                                     type="date" name="retail[completed_date]"
                                                     class="form-control form-control-sm"
@@ -1565,10 +1612,19 @@ include '../../includes/header.php';
                                                             <?= htmlspecialchars($yn['value']) ?>
                                                         </option><?php endforeach; ?>
                                                 </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Follow-up Date</label><input
-                                                    type="date" name="retail[follow_up_date]"
+                                            <div class="col-md-3"><label class="form-label-mis">Follow-up Date</label>
+                                                <input type="date" name="retail[follow_up_date]"
                                                     class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['follow_up_date'] ?? '') ?>"></div>
+                                                    value="<?= htmlspecialchars($detail['follow_up_date'] ?? '') ?>">
+                                            </div>
+                                            <div class="col-md-4"><label class="form-label-mis">Follow-up Note
+                                                    <span style="font-size:.65rem;color:#9ca3af;">(optional, logged on date
+                                                        change)</span>
+                                                </label>
+                                                <input type="text" name="retail[follow_up_note]"
+                                                    class="form-control form-control-sm"
+                                                    placeholder="e.g. Called client, waiting for docs...">
+                                            </div>
                                             <div class="col-12"><label class="form-label-mis">Notes</label><textarea
                                                     name="retail[notes]" class="form-control form-control-sm"
                                                     rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
@@ -1576,6 +1632,55 @@ include '../../includes/header.php';
                                                         class="fas fa-save me-1"></i>Save Retail Details</button></div>
                                         </div>
                                     </form>
+                                <?php endif; ?>
+                                <?php if (!empty($followupHistory)): ?>
+                                    <div
+                                        style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+                                        <div
+                                            style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
+                                            <i class="fas fa-clock-rotate-left me-1"></i>
+                                            Follow-up History
+                                            <span
+                                                style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;">
+                                                <?= count($followupHistory) ?> times
+                                            </span>
+                                        </div>
+                                        <div style="position:relative;">
+                                            <!-- vertical line -->
+                                            <div
+                                                style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;">
+                                            </div>
+                                            <?php foreach ($followupHistory as $i => $fu): ?>
+                                                <div style="display:flex;gap:.75rem;margin-bottom:.75rem;position:relative;">
+                                                    <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;
+                        display:flex;align-items:center;justify-content:center;font-size:.68rem;
+                        font-weight:700;flex-shrink:0;z-index:1;">
+                                                        <?= $i + 1 ?>
+                                                    </div>
+                                                    <div style="background:white;border:1px solid #fde68a;border-radius:8px;
+                        padding:.5rem .75rem;flex:1;">
+                                                        <div style="font-size:.82rem;font-weight:700;color:#92400e;">
+                                                            <?= date('d M Y', strtotime($fu['followup_date'])) ?>
+                                                            <span
+                                                                style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">
+                                                                set on
+                                                                <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
+                                                                by
+                                                                <?= htmlspecialchars($fu['added_by_name']) ?>
+                                                            </span>
+                                                        </div>
+                                                        <?php if ($fu['notes']): ?>
+                                                            <div
+                                                                style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
+                                                                "
+                                                                <?= htmlspecialchars($fu['notes']) ?>"
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -1912,22 +2017,52 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-   document.addEventListener('DOMContentLoaded', function () {
-    new TomSelect('#bank_select', {
-        placeholder: 'Search bank or address...',
-        allowEmptyOption: true,
-        maxOptions: 500,
-        searchField: ["text"],
+    document.addEventListener('DOMContentLoaded', function () {
 
-        render: {
-            option: function(data, escape) {
-                return `<div>${escape(data.text)}</div>`;
-            },
-            item: function(data, escape) {
-                return `<div>${escape(data.text)}</div>`;
-            }
+        if (document.getElementById('retail_finalised_by')) {
+            new TomSelect('#retail_finalised_by', {
+                placeholder: 'Search by name or employee ID...',
+                allowEmptyOption: true,
+                maxOptions: 500,
+                searchField: ['text'],
+                render: {
+                    option: function (data, escape) {
+                        const branch = data.$option ? data.$option.dataset.branch : '';
+                        return `
+                        <div style="padding:6px 0;">
+                            <div style="margin-left:10px; font-weight:600;">
+                                ${escape(data.text)}
+                            </div>
+                            ${branch ? `<div style="margin-left:10px; font-size:11px; color:#6b7280;">
+                                <i class="fas fa-code-branch" style="font-size:10px;"></i> ${escape(branch)}
+                            </div>` : ''}
+                        </div>
+                    `;
+                    },
+                    item: function (data, escape) {
+                        return `<div>${escape(data.text)}</div>`;
+                    }
+                }
+            });
         }
+
+        if (document.getElementById('bank_select')) {
+            new TomSelect('#bank_select', {
+                placeholder: 'Search bank or address...',
+                allowEmptyOption: true,
+                maxOptions: 500,
+                searchField: ['text'],
+                render: {
+                    option: function (data, escape) {
+                        return `<div>${escape(data.text)}</div>`;
+                    },
+                    item: function (data, escape) {
+                        return `<div>${escape(data.text)}</div>`;
+                    }
+                }
+            });
+        }
+
     });
-});
 </script>
 <?php include '../../includes/footer.php'; ?>
