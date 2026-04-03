@@ -1796,14 +1796,18 @@ include '../../includes/header.php';
                                                 <input type="hidden" name="corporate[assigned_to]"
                                                     value="<?= htmlspecialchars($cf_at_id ?? '') ?>">
                                             </div>
-                                            <div class="col-md-4">
-                                                <label class="form-label-mis">Finalised By</label>
-                                                <select name="corporate[finalised_by]" class="form-select form-select-sm">
+                                            <div class="col-md-4"><label class="form-label-mis">Finalised By</label>
+                                                <select name="retail[finalised_by]" id="retail_finalised_by"
+                                                    class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
-                                                    <?php foreach ($allStaff as $s): ?>
-                                                        <option value="<?= $s['id'] ?>" <?= $cf_fb == $s['id'] ? 'selected' : '' ?>>
+                                                    <?php foreach ($allFinal as $s): ?>
+                                                        <option value="<?= $s['id'] ?>"
+                                                            data-branch="<?= htmlspecialchars($s['branch_name'] ?? '') ?>"
+                                                            <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
                                                             <?= htmlspecialchars($s['full_name']) ?>
-                                                        </option><?php endforeach; ?>
+                                                            <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
                                                 </select>
                                             </div>
                                             <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
@@ -1919,57 +1923,6 @@ include '../../includes/header.php';
 
                 <!-- Right Column -->
                 <div class="col-lg-4">
-
-                    <?php if ($task['dept_code'] === 'RETAIL' && $detail && $canEditDept): ?>
-                        <div class="card-mis mb-3">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-tasks text-warning me-2"></i>Work Progress</h5>
-                            </div>
-                            <div class="card-mis-body">
-                                <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
-                                        type="hidden" name="update_progress" value="1">
-                                    <div class="row g-3">
-                                        <?php foreach ([['Work Status', 'work_status_id'], ['Finalisation Status', 'finalisation_status_id'], ['Tax Clearance Status', 'tax_clearance_status_id']] as [$lbl, $f]): ?>
-                                            <div class="col-12"><label class="form-label-mis"><?= $lbl ?></label><select
-                                                    name="progress[<?= $f ?>]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail[$f] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                        <?php endforeach; ?>
-                                        <div class="col-12"><label class="form-label-mis">Finalised By</label><select
-                                                name="progress[finalised_by]" class="form-select form-select-sm">
-                                                <option value="">--</option><?php foreach ($allStaff as $s): ?>
-                                                    <option value="<?= $s['id'] ?>" <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($s['full_name']) ?>
-                                                    </option><?php endforeach; ?>
-                                            </select></div>
-                                        <div class="col-12"><label class="form-label-mis">Completed Date</label><input
-                                                type="date" name="progress[completed_date]"
-                                                class="form-control form-control-sm"
-                                                value="<?= htmlspecialchars($detail['completed_date'] ?? '') ?>"></div>
-                                        <div class="col-12"><label class="form-label-mis">Backup Status</label><select
-                                                name="progress[backup_status_id]" class="form-select form-select-sm">
-                                                <option value="">--</option><?php foreach ($yesNo as $yn): ?>
-                                                    <option value="<?= $yn['id'] ?>" <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
-                                                        <?= htmlspecialchars($yn['value']) ?>
-                                                    </option><?php endforeach; ?>
-                                            </select></div>
-                                        <div class="col-12"><label class="form-label-mis">Follow-up Date</label><input
-                                                type="date" name="progress[follow_up_date]"
-                                                class="form-control form-control-sm"
-                                                value="<?= htmlspecialchars($detail['follow_up_date'] ?? '') ?>"></div>
-                                        <div class="col-12"><label class="form-label-mis">Notes</label><textarea
-                                                name="progress[notes]" class="form-control form-control-sm"
-                                                rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
-                                        <div class="col-12"><button type="submit" class="btn btn-gold w-100 btn-sm"><i
-                                                    class="fas fa-save me-1"></i>Update Progress</button></div>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    <?php endif; ?>
 
                     <div class="card-mis mb-3">
                         <div class="card-mis-header">
