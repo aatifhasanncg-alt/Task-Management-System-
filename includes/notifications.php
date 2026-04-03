@@ -7,14 +7,38 @@ $__u = currentUser();
 $db = getDB();
 $pageTitle = 'Notifications';
 
-// Fetch notifications — do NOT mark as read in PHP (causes flash)
+$search = $_GET['search'] ?? '';
+$fromDate = $_GET['from_date'] ?? '';
+$toDate = $_GET['to_date'] ?? '';
+
+$where = "WHERE user_id = ?";
+$params = [$__u['id']];
+
+// Search filter
+if (!empty($search)) {
+    $where .= " AND (title LIKE ? OR message LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+}
+
+// Date filters
+if (!empty($fromDate)) {
+    $where .= " AND DATE(created_at) >= ?";
+    $params[] = $fromDate;
+}
+
+if (!empty($toDate)) {
+    $where .= " AND DATE(created_at) <= ?";
+    $params[] = $toDate;
+}
+
 try {
     $stmt = $db->prepare("
         SELECT * FROM notifications
-        WHERE user_id = ?
+        $where
         ORDER BY created_at DESC
     ");
-    $stmt->execute([$__u['id']]);
+    $stmt->execute($params);
     $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $notifications = [];
@@ -128,6 +152,7 @@ switch ($role) {
                         <span style="color:#6b7280;"><?= count($notifications) ?> total</span>
                     </p>
                 </div>
+
                 <?php if ($unreadCount): ?>
                     <button onclick="markAllRead(this)" class="btn btn-gold btn-sm">
                         <i class="fas fa-check-double me-1"></i>Mark all read
@@ -135,7 +160,48 @@ switch ($role) {
                 <?php endif; ?>
             </div>
         </div>
+        <div class="filter-bar mb-4 w-100">
+            <form method="GET" class="row g-2 align-items-end w-100">
 
+                <!-- Search -->
+                <div class="col-md-3">
+                    <label class="form-label-mis">Search</label>
+                    <input type="text" name="search" class="form-control form-control-sm"
+                        placeholder="Search notifications..." value="<?= htmlspecialchars($_GET['search'] ?? '') ?>">
+                </div>
+
+                <!-- From Date -->
+                <div class="col-md-3">
+                    <label class="form-label-mis">From Date</label>
+                    <input type="date" name="from_date" class="form-control form-control-sm"
+                        value="<?= htmlspecialchars($_GET['from_date'] ?? '') ?>">
+                </div>
+                <!-- To Date -->
+                <div class="col-md-3">
+                    <label class="form-label-mis">To Date</label>
+                    <input type="date" name="to_date" class="form-control form-control-sm"
+                        value="<?= htmlspecialchars($_GET['to_date'] ?? '') ?>">
+                </div>
+                <!-- Filter Button -->
+                <div class="col-md-1 gap-1">
+                    <button type="submit"
+                        class="btn btn-gold btn-sm w-100 d-flex align-items-center justify-content-center gap-1">
+                        <i class="fas fa-filter"></i>
+                        <span>Filter</span>
+                    </button>
+                </div>
+
+                <!-- Reset -->
+                <div class="col-md-1 gap-1">
+                    <a href="<?= $_SERVER['PHP_SELF'] ?>"
+                        class="btn btn-outline-secondary btn-sm w-100 d-flex align-items-center justify-content-center gap-1">
+                        <i class="fa-solid fa-rotate-left"></i>
+                        <span>Reset</span>
+                    </a>
+                </div>
+
+            </form>
+        </div>
         <!-- Card -->
         <div class="card-mis">
             <div class="card-mis-header">

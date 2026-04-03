@@ -1633,57 +1633,55 @@ include '../../includes/header.php';
                                         </div>
                                     </form>
                                 <?php endif; ?>
-                                <?php if (!empty($followupHistory)): ?>
-                                    <div
-                                        style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
-                                            <i class="fas fa-clock-rotate-left me-1"></i>
-                                            Follow-up History
-                                            <span
-                                                style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;">
-                                                <?= count($followupHistory) ?> times
-                                            </span>
-                                        </div>
-                                        <div style="position:relative;">
-                                            <!-- vertical line -->
-                                            <div
-                                                style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;">
-                                            </div>
-                                            <?php foreach ($followupHistory as $i => $fu): ?>
-                                                <div style="display:flex;gap:.75rem;margin-bottom:.75rem;position:relative;">
-                                                    <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;
-                        display:flex;align-items:center;justify-content:center;font-size:.68rem;
-                        font-weight:700;flex-shrink:0;z-index:1;">
-                                                        <?= $i + 1 ?>
-                                                    </div>
-                                                    <div style="background:white;border:1px solid #fde68a;border-radius:8px;
-                        padding:.5rem .75rem;flex:1;">
-                                                        <div style="font-size:.82rem;font-weight:700;color:#92400e;">
-                                                            <?= date('d M Y', strtotime($fu['followup_date'])) ?>
-                                                            <span
-                                                                style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">
-                                                                set on
-                                                                <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
-                                                                by
-                                                                <?= htmlspecialchars($fu['added_by_name']) ?>
-                                                            </span>
-                                                        </div>
-                                                        <?php if ($fu['notes']): ?>
-                                                            <div
-                                                                style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
-                                                                "
-                                                                <?= htmlspecialchars($fu['notes']) ?>"
-                                                            </div>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </div>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    </div>
-                                <?php endif; ?>
                             </div>
                         </div>
+                        <?php if (!empty($followupHistory)): ?>
+                            <div
+                                style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+                                <div
+                                    style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
+                                    <i class="fas fa-clock-rotate-left me-1"></i>
+                                    Follow-up History
+                                    <span
+                                        style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;">
+                                        <?= count($followupHistory) ?> times
+                                    </span>
+                                </div>
+                                <div style="position:relative;">
+                                    <!-- vertical line -->
+                                    <div style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;">
+                                    </div>
+                                    <?php foreach ($followupHistory as $i => $fu): ?>
+                                        <div style="display:flex;gap:.75rem;margin-bottom:.75rem;position:relative;">
+                                            <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;
+                                                        display:flex;align-items:center;justify-content:center;font-size:.68rem;
+                                                        font-weight:700;flex-shrink:0;z-index:1;">
+                                                <?= $i + 1 ?>
+                                            </div>
+                                            <div style="background:white;border:1px solid #fde68a;border-radius:8px;
+                                                            padding:.5rem .75rem;flex:1;">
+                                                <div style="font-size:.82rem;font-weight:700;color:#92400e;">
+                                                    <?= date('d M Y', strtotime($fu['followup_date'])) ?>
+                                                    <span style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">
+                                                        set on
+                                                        <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
+                                                        by
+                                                        <?= htmlspecialchars($fu['added_by_name']) ?>
+                                                    </span>
+                                                </div>
+                                                <?php if ($fu['notes']): ?>
+                                                    <div style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
+                                                        "
+                                                        <?= htmlspecialchars($fu['notes']) ?>"
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
 
                         <!-- ════ CORP ════ -->
                     <?php elseif ($task['dept_code'] === 'CORP'): ?>

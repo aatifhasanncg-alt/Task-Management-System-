@@ -49,11 +49,12 @@ $companiesStmt = $db->prepare("
 $companiesStmt->execute([$adminUser['branch_id']]);
 $companies = $companiesStmt->fetchAll();
 
-$allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
+
+$allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 AND dept_name != 'CORE ADMIN' ORDER BY dept_name")->fetchAll();
 
 // Transfer staff — admins only (exclude CORE), filtered by dept in JS
 $transferStaff = $db->query("
-    SELECT u.id, u.full_name, b.branch_name, d.dept_name, d.dept_code
+    SELECT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name, d.dept_code
     FROM users u
     LEFT JOIN branches b    ON b.id = u.branch_id
     LEFT JOIN departments d ON d.id = u.department_id
@@ -595,8 +596,6 @@ include '../../includes/header.php';
                                     required onchange="filterTransferStaff()">
                                 <option value="">-- Select Department --</option>
                                 <?php foreach ($allDepts as $d): ?>
-                                    <?php if ($d['id'] == $task['department_id']) continue; ?>
-                                    <?php if ($d['dept_code'] === 'CORE') continue; ?>
                                     <option value="<?= $d['id'] ?>"
                                             data-code="<?= htmlspecialchars($d['dept_code']) ?>"
                                             data-name="<?= htmlspecialchars($d['dept_name']) ?>">
@@ -620,6 +619,7 @@ include '../../includes/header.php';
                                     <option value="<?= $s['id'] ?>"
                                             data-deptcode="<?= htmlspecialchars($s['dept_code']) ?>">
                                         <?= htmlspecialchars($s['full_name']) ?>
+                                        <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
                                         — <?= htmlspecialchars($s['branch_name']) ?>
                                         (<?= htmlspecialchars($s['dept_name']) ?>)
                                     </option>
@@ -649,11 +649,22 @@ include '../../includes/header.php';
 </div>
 
 <?php include '../../includes/footer.php'; ?>
-
 <script>
-// ── Tom Select: Company ───────────────────────────────────────────────────────
+// ── Store all transfer staff for filtering ────────────────────────────────────
+const allTransferStaff = <?= json_encode(array_map(fn($s) => [
+    'id'       => $s['id'],
+    'name'     => $s['full_name'],
+    'employee' => $s['employee_id'] ?? '',
+    'branch'   => $s['branch_name'],
+    'dept'     => $s['dept_name'],
+    'deptcode' => $s['dept_code'],
+], $transferStaff)) ?>;
+
+let transferTs = null;
+
 document.addEventListener('DOMContentLoaded', function () {
 
+    // ── Company ───────────────────────────────────────────────────────────────
     const companyTs = new TomSelect('#company_select', {
         placeholder: 'Search company, PAN or code…',
         allowEmptyOption: true,
@@ -662,11 +673,9 @@ document.addEventListener('DOMContentLoaded', function () {
         render: {
             option: function(data, escape) {
                 const parts = data.text.split(' — ');
-                const name  = parts[0] || '';
-                const meta  = parts[1] || '';
                 return `<div style="padding:.4rem .2rem;">
-                    <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
-                    ${meta ? `<div style="font-size:.75rem;color:#6b7280;">${escape(meta)}</div>` : ''}
+                    <div style="font-weight:600;font-size:.87rem;">${escape(parts[0] || '')}</div>
+                    ${parts[1] ? `<div style="font-size:.75rem;color:#6b7280;">${escape(parts[1])}</div>` : ''}
                 </div>`;
             },
             item: function(data, escape) {
@@ -674,11 +683,10 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
-
-    // Force pre-selection — Tom Select misses HTML selected attr with allowEmptyOption
     const preCompany = '<?= (int)($task['company_id'] ?? 0) ?>';
     if (preCompany && preCompany !== '0') companyTs.setValue(preCompany, true);
 
+    // ── Assign To ─────────────────────────────────────────────────────────────
     const staffTs = new TomSelect('#assigned_to_sel', {
         placeholder: 'Search staff by name or ID…',
         allowEmptyOption: true,
@@ -686,12 +694,10 @@ document.addEventListener('DOMContentLoaded', function () {
         searchField: ['text'],
         render: {
             option: function(data, escape) {
-                const parts  = data.text.split(' — ');
-                const name   = parts[0] || '';
-                const branch = parts[1] || '';
+                const parts = data.text.split(' — ');
                 return `<div style="padding:.4rem .2rem;">
-                    <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
-                    ${branch ? `<div style="font-size:.75rem;color:#6b7280;">${escape(branch)}</div>` : ''}
+                    <div style="font-weight:600;font-size:.87rem;">${escape(parts[0] || '')}</div>
+                    ${parts[1] ? `<div style="font-size:.75rem;color:#6b7280;">${escape(parts[1])}</div>` : ''}
                 </div>`;
             },
             item: function(data, escape) {
@@ -699,90 +705,120 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
-
     const preStaff = '<?= (int)($task['assigned_to'] ?? 0) ?>';
     if (preStaff && preStaff !== '0') staffTs.setValue(preStaff, true);
 
-    // Init capacity bar on page load
-    const nature = document.getElementById('audit_nature').value;
-    if (nature) {
-        document.getElementById('auditor-wrap').style.display = 'block';
-        document.getElementById('auditor-limit-note').textContent =
-            nature === 'countable' ? '(limit applies)' : '(no limit)';
+    // ── Transfer Staff (init with all staff, filter on dept change) ───────────
+    filterTransferStaff();
+
+    // ── Audit capacity bar on load ────────────────────────────────────────────
+    const auditNatureEl = document.getElementById('audit_nature');
+    if (auditNatureEl?.value) {
+        const auditorWrap = document.getElementById('auditor-wrap');
+        if (auditorWrap) auditorWrap.style.display = 'block';
+        const limitNote = document.getElementById('auditor-limit-note');
+        if (limitNote) limitNote.textContent = auditNatureEl.value === 'countable' ? '(limit applies)' : '(no limit)';
         updateCapacityBar();
     }
+
+    // ── Auditor change ────────────────────────────────────────────────────────
+    const auditorSel = document.getElementById('auditor_id');
+    if (auditorSel) auditorSel.addEventListener('change', updateCapacityBar);
 });
 
 // ── Transfer dept filter ──────────────────────────────────────────────────────
 function filterTransferStaff() {
     const sel      = document.getElementById('transferDept');
-    const option   = sel.options[sel.selectedIndex];
-    const deptCode = option ? option.dataset.code : '';
-    const deptName = option ? option.dataset.name : '';
-    const staffSel = document.getElementById('transferStaff');
+    const option   = sel?.options[sel.selectedIndex];
+    const deptCode = option?.dataset.code ?? '';
+    const deptName = option?.dataset.name ?? '';
     const note     = document.getElementById('staffFilterNote');
 
-    Array.from(staffSel.options).forEach(o => {
-        if (!o.value) return;
-        o.hidden = deptCode ? (o.dataset.deptcode !== deptCode) : false;
+    if (note) note.textContent = deptCode ? `(${deptName} admins)` : '(select dept first)';
+
+    // Destroy existing Tom Select instance
+    if (transferTs) { transferTs.destroy(); transferTs = null; }
+
+    // Rebuild select options filtered by department
+    const filtered = deptCode
+        ? allTransferStaff.filter(s => s.deptcode === deptCode)
+        : allTransferStaff;
+
+    const select = document.getElementById('transferStaff');
+    select.innerHTML = '<option value="">-- Unassigned --</option>';
+    filtered.forEach(s => {
+        const opt  = document.createElement('option');
+        opt.value  = s.id;
+        opt.text   = `${s.name}${s.employee ? ' (' + s.employee + ')' : ''} — ${s.branch} (${s.dept})`;
+        select.appendChild(opt);
     });
 
-    const curr = staffSel.options[staffSel.selectedIndex];
-    if (curr && curr.hidden) staffSel.value = '';
-    note.textContent = deptCode ? `(${deptName} admins)` : '(select dept first)';
+    transferTs = new TomSelect('#transferStaff', {
+        placeholder: 'Search by name, ID or department...',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        render: {
+            option: function(data, escape) {
+                const parts = data.text.split(' — ');
+                return `<div style="padding:.4rem .2rem;">
+                    <div style="font-weight:600;font-size:.87rem;">${escape(parts[0] || '')}</div>
+                    ${parts[1] ? `<div style="font-size:.75rem;color:#6b7280;">${escape(parts[1])}</div>` : ''}
+                </div>`;
+            },
+            item: function(data, escape) {
+                return `<div>${escape(data.text.split(' — ')[0])}</div>`;
+            }
+        }
+    });
 }
 
 // ── Load auditors via AJAX ────────────────────────────────────────────────────
 function loadAuditors(nature) {
     const wrap = document.getElementById('auditor-wrap');
     const sel  = document.getElementById('auditor_id');
+    if (!wrap || !sel) return;
 
     if (!nature) { wrap.style.display = 'none'; return; }
     wrap.style.display = 'block';
-
     document.getElementById('auditor-limit-note').textContent =
         nature === 'countable' ? '(limit applies)' : '(no limit)';
 
     sel.innerHTML = '<option value="">Loading…</option>';
 
     fetch(`<?= APP_URL ?>/ajax/get_auditors.php?nature=${encodeURIComponent(nature)}`)
-    .then(r => r.json())
-    .then(data => {
-        sel.innerHTML = '<option value="">-- Select Auditor --</option>';
-        if (!Array.isArray(data)) throw new Error('Invalid data');
-
-        data.forEach(a => {
-            // ✅ FIX: use lowercase comparison to match get_auditors.php response
-            const atLimit = nature === 'countable' && a.at_limit;
-            const label   = nature === 'countable'
-                ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
-                : `${a.auditor_name} (${a.uncountable_count} tasks)`;
-
-            const opt         = document.createElement('option');
-            opt.value         = a.id;
-            opt.text          = label;
-            opt.disabled      = atLimit;
-            opt.dataset.countable   = a.countable_count;
-            opt.dataset.uncountable = a.uncountable_count;
-            opt.dataset.limit       = a.max_limit;
-            sel.appendChild(opt);
-        });
-
-        updateCapacityBar();
-    })
-    .catch(() => {
-        sel.innerHTML = '<option value="">Error loading auditors</option>';
-    });
+        .then(r => r.json())
+        .then(data => {
+            if (!Array.isArray(data)) throw new Error('Invalid data');
+            sel.innerHTML = '<option value="">-- Select Auditor --</option>';
+            data.forEach(a => {
+                const atLimit = nature === 'countable' && a.at_limit;
+                const opt = document.createElement('option');
+                opt.value = a.id;
+                opt.text  = nature === 'countable'
+                    ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
+                    : `${a.auditor_name} (${a.uncountable_count} tasks)`;
+                opt.disabled = atLimit;
+                opt.dataset.countable   = a.countable_count;
+                opt.dataset.uncountable = a.uncountable_count;
+                opt.dataset.limit       = a.max_limit;
+                sel.appendChild(opt);
+            });
+            updateCapacityBar();
+        })
+        .catch(() => { sel.innerHTML = '<option value="">Error loading auditors</option>'; });
 }
 
 // ── Capacity bar ──────────────────────────────────────────────────────────────
 function updateCapacityBar() {
-    const nature  = document.getElementById('audit_nature').value;
-    const sel     = document.getElementById('auditor_id');
-    const capDiv  = document.getElementById('auditor-capacity');
-    const opt     = sel.options[sel.selectedIndex];
+    const natureEl = document.getElementById('audit_nature');
+    const sel      = document.getElementById('auditor_id');
+    const capDiv   = document.getElementById('auditor-capacity');
+    if (!natureEl || !sel || !capDiv) return;
 
-    if (!opt || !opt.value || !nature) { capDiv.style.display = 'none'; return; }
+    const nature = natureEl.value;
+    const opt    = sel.options[sel.selectedIndex];
+    if (!opt?.value || !nature) { capDiv.style.display = 'none'; return; }
 
     const used  = parseInt(opt.dataset.countable  || 0);
     const limit = parseInt(opt.dataset.limit       || 0);
@@ -798,13 +834,10 @@ function updateCapacityBar() {
 
     const pct   = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
     const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
-
     document.getElementById('capacity-label').textContent    = 'Countable capacity used';
     document.getElementById('capacity-text').textContent     = `${used} / ${limit} (${pct}%)`;
     document.getElementById('capacity-bar').style.width      = pct + '%';
     document.getElementById('capacity-bar').style.background = color;
     capDiv.style.display = 'block';
 }
-
-document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
 </script>
