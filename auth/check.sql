@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS mis_ask CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE mis_ask;
+-- CREATE DATABASE IF NOT EXISTS mis_ask CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE askgloba_task;
 
 -- ========================
 -- LOOKUP TABLES
@@ -507,7 +507,6 @@ CREATE TABLE task_tax (
     -- Tax Fields
     assigned_office_id INT,             -- FK tax_office_types (IRD/NCG/ASK)
     tax_type_id INT,                    -- FK tax_types (D1/D2/D3 etc)
-    fiscal_year VARCHAR(10),
     submission_number VARCHAR(100),     -- Generated from external website
     udin_no VARCHAR(100),               -- Generated from ICAI/external website
 
@@ -522,18 +521,9 @@ CREATE TABLE task_tax (
     verify_by INT,                      -- FK users
 
     -- Status & Progress
-    status_id INT,                      -- FK task_status
     tax_clearance_status_id INT,        -- FK task_status
 
-    -- Financial
-    bills_issued DECIMAL(15,2) DEFAULT 0,
-    fee_received DECIMAL(15,2) DEFAULT 0,
-    tds_payment DECIMAL(15,2) DEFAULT 0,
-
-    -- Dates
-    assigned_date DATE,
     completed_date DATE,
-    follow_up_date DATE,
 
     -- Notes
     remarks TEXT,
@@ -550,7 +540,6 @@ CREATE TABLE task_tax (
     FOREIGN KEY (file_received_by)      REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (updated_by)            REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (verify_by)             REFERENCES users(id) ON DELETE SET NULL,
-    FOREIGN KEY (status_id)             REFERENCES task_status(id),
     FOREIGN KEY (tax_clearance_status_id) REFERENCES task_status(id)
 );
 

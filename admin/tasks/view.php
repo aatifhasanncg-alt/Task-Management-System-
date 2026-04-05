@@ -492,18 +492,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEd
     $ex->execute([$id]);
     // Build param array — with or without address col
     if ($hasAddrCol) {
-        $p = [$task['company_id'], $firm, ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null, $officeAddr ?: null, ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null, $taxFy, $taxFyId, trim($t2['submission_number'] ?? ''), trim($t2['udin_no'] ?? ''), $biz, $pan, ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null, ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null, ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null, ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null, ($t2['status_id'] ?? '') !== '' ? (int) $t2['status_id'] : null, ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null, ($t2['bills_issued'] ?? '') !== '' ? (float) $t2['bills_issued'] : 0, ($t2['fee_received'] ?? '') !== '' ? (float) $t2['fee_received'] : 0, ($t2['tds_payment'] ?? '') !== '' ? (float) $t2['tds_payment'] : 0, $t2['assigned_date'] ?: null, $t2['completed_date'] ?: null, $t2['follow_up_date'] ?: null, trim($t2['remarks'] ?? ''), trim($t2['notes'] ?? '')];
+        $p = [
+            $task['company_id'],
+            $firm,
+            ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null,
+            $officeAddr ?: null,
+            ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null,
+            $taxFy,
+            $taxFyId,
+            trim($t2['submission_number'] ?? ''),
+            trim($t2['udin_no'] ?? ''),
+            $biz,
+            $pan,
+            ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null,
+            ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null,
+            ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null,
+            ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null,
+            ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,
+            $t2['completed_date'] ?: null,
+            trim($t2['remarks'] ?? ''),
+            trim($t2['notes'] ?? ''),
+        ];
+
         if ($ex->fetch()) {
-            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,assigned_office_address=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,status_id=?,tax_clearance_status_id=?,bills_issued=?,fee_received=?,tds_payment=?,assigned_date=?,completed_date=?,follow_up_date=?,remarks=?,notes=? WHERE task_id=?")->execute(array_merge($p, [$id]));
+            $db->prepare("
+        UPDATE task_tax SET
+            company_id=?, firm_name=?, assigned_office_id=?, assigned_office_address=?,
+            tax_type_id=?, fiscal_year=?, fiscal_year_id=?,
+            submission_number=?, udin_no=?, business_type=?, pan_number=?,
+            assigned_to=?, file_received_by=?, updated_by=?, verify_by=?,
+            tax_clearance_status_id=?, completed_date=?, remarks=?, notes=?
+        WHERE task_id=?
+    ")->execute(array_merge($p, [$id]));
         } else {
-            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,assigned_office_address,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,status_id,tax_clearance_status_id,bills_issued,fee_received,tds_payment,assigned_date,completed_date,follow_up_date,remarks,notes)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
+            $db->prepare("
+        INSERT INTO task_tax(
+            task_id, company_id, firm_name, assigned_office_id, assigned_office_address,
+            tax_type_id, fiscal_year, fiscal_year_id,
+            submission_number, udin_no, business_type, pan_number,
+            assigned_to, file_received_by, updated_by, verify_by,
+            tax_clearance_status_id, completed_date, remarks, notes
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ")->execute(array_merge([$id], $p));
         }
     } else {
-        $p = [$task['company_id'], $firm, ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null, ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null, $taxFy, $taxFyId, trim($t2['submission_number'] ?? ''), trim($t2['udin_no'] ?? ''), $biz, $pan, ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null, ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null, ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null, ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null, ($t2['status_id'] ?? '') !== '' ? (int) $t2['status_id'] : null, ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null, ($t2['bills_issued'] ?? '') !== '' ? (float) $t2['bills_issued'] : 0, ($t2['fee_received'] ?? '') !== '' ? (float) $t2['fee_received'] : 0, ($t2['tds_payment'] ?? '') !== '' ? (float) $t2['tds_payment'] : 0, $t2['assigned_date'] ?: null, $t2['completed_date'] ?: null, $t2['follow_up_date'] ?: null, trim($t2['remarks'] ?? ''), trim($t2['notes'] ?? '')];
+        $p = [$task['company_id'], $firm, ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null, ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null, $taxFy, $taxFyId, trim($t2['submission_number'] ?? ''), trim($t2['udin_no'] ?? ''), $biz, $pan, ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null, ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null, ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null, ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null, ($t2['status_id'] ?? '') !== '' ? (int) $t2['status_id'] : null, ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,  $t2['completed_date'] ?: null, trim($t2['remarks'] ?? ''), trim($t2['notes'] ?? '')];
         if ($ex->fetch()) {
-            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,status_id=?,tax_clearance_status_id=?,bills_issued=?,fee_received=?,tds_payment=?,assigned_date=?,completed_date=?,follow_up_date=?,remarks=?,notes=? WHERE task_id=?")->execute(array_merge($p, [$id]));
+            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,status_id=?,tax_clearance_status_id=?,completed_date=?,remarks=?,notes=? WHERE task_id=?")->execute(array_merge($p, [$id]));
         } else {
-            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,status_id,tax_clearance_status_id,bills_issued,fee_received,tds_payment,assigned_date,completed_date,follow_up_date,remarks,notes)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
+            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,tax_clearance_status_id,completed_date,remarks,notes)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
         }
     }
     if (!empty($t2['status_id']))
@@ -1126,14 +1163,6 @@ include '../../includes/header.php';
                                                         class="btn btn-outline-secondary btn-sm"><i
                                                             class="fas fa-external-link-alt"></i></a></div>
                                             </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Status</label><select
-                                                    name="tax[status_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Tax Clearance
                                                     Status</label><select name="tax[tax_clearance_status_id]"
                                                     class="form-select form-select-sm">
@@ -1161,13 +1190,7 @@ include '../../includes/header.php';
                                                 </div><input type="hidden" name="tax[assigned_to]"
                                                     value="<?= $taskAssignedToId ?>">
                                             </div>
-                                            <?php foreach (['bills_issued' => 'Bills Issued (Rs.)', 'fee_received' => 'Fee Received (Rs.)', 'tds_payment' => 'TDS Payment (Rs.)'] as $f => $l): ?>
-                                                <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
-                                                        type="number" name="tax[<?= $f ?>]" class="form-control form-control-sm"
-                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>">
-                                                </div>
-                                            <?php endforeach; ?>
-                                            <?php foreach (['assigned_date' => 'Assigned Date', 'completed_date' => 'Completed Date', 'follow_up_date' => 'Follow-up Date'] as $f => $l): ?>
+                                            <?php foreach (['completed_date' => 'Completed Date', 'follow_up_date' => 'Follow-up Date'] as $f => $l): ?>
                                                 <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
                                                         type="date" name="tax[<?= $f ?>]" class="form-control form-control-sm"
                                                         value="<?= htmlspecialchars($detail[$f] ?? '') ?>"></div>
