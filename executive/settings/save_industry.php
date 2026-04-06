@@ -5,7 +5,7 @@ require_once '../../config/session.php';
 requireExecutive();
 if (!isCoreAdmin()) {
     setFlash('error', 'Access denied.');
-    header('Location: industries.php'); exit;
+    header('Location: industry.php'); exit;
 }
 $db   = getDB();
 $name = trim($_POST['industry_name'] ?? '');

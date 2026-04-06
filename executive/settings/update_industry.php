@@ -6,7 +6,7 @@ requireExecutive();
 
 if (!isCoreAdmin()) {
     setFlash('error', 'Access denied.');
-    header('Location: industries.php'); exit;
+    header('Location: industry.php'); exit;
 }
 
 $db     = getDB();
