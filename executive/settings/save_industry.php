@@ -3,14 +3,10 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 requireExecutive();
-
 if (!isCoreAdmin()) {
     setFlash('error', 'Access denied.');
     header('Location: industries.php'); exit;
 }
-
-verifyCsrf();
-
 $db   = getDB();
 $name = trim($_POST['industry_name'] ?? '');
 $active = (int)($_POST['is_active'] ?? 1);

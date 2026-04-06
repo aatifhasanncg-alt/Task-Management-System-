@@ -9,17 +9,10 @@ if (!isCoreAdmin()) {
     header('Location: industries.php'); exit;
 }
 
-verifyCsrf();
-
 $db     = getDB();
 $id     = (int)($_POST['id'] ?? 0);
 $name   = trim($_POST['industry_name'] ?? '');
 $active = (int)($_POST['is_active'] ?? 1);
-
-if (!$id || !$name) {
-    setFlash('error', 'Invalid request.');
-    header('Location: industries.php'); exit;
-}
 
 $dup = $db->prepare("SELECT id FROM industries WHERE industry_name = ? AND id != ?");
 $dup->execute([$name, $id]);
