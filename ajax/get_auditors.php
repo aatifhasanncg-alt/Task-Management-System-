@@ -14,8 +14,8 @@ $stmt = $db->prepare("
     SELECT
         a.id,
         a.auditor_name,
-        a.max_countable,
-        COALESCE(q.max_countable_override, a.max_countable) AS effective_max,
+        a.max_limit,
+        COALESCE(q.max_countable_override, a.max_limit) AS effective_max,
         COALESCE(q.countable_count,   0)                    AS countable_count,
         COALESCE(q.uncountable_count, 0)                    AS uncountable_count
     FROM auditors a
