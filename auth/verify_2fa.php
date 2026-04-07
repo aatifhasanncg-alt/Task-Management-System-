@@ -14,7 +14,7 @@ $errors = [];
 $userId = (int) $_SESSION['2fa_pending_user'];
 $db = getDB();
 $user = $db->query("
-    SELECT u.*, r.role_name
+    SELECT u.*, r.role_name AS role
     FROM users u
     LEFT JOIN roles r ON r.id = u.role_id
     WHERE u.id = {$userId}
@@ -43,17 +43,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['full_name'] = $user['full_name'];
-        $_SESSION['role'] = $user['role_name'] ?? 'staff';
+        $_SESSION['role'] = strtolower($user['role_name'] ?? 'staff');
         $_SESSION['branch_id'] = $user['branch_id'];
         $_SESSION['branch_name'] = $bName ?: '';
         $_SESSION['dept_id'] = $user['department_id'];
         $_SESSION['email'] = $user['email'];
+
         unset($_SESSION['2fa_pending_user'], $_SESSION['2fa_pending_role']);
 
-        if ($user['role'] === 'admin') {
+        if ($_SESSION['role'] === 'admin') {
             $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id=?");
             $dSt->execute([$user['id']]);
             $_SESSION['allowed_depts'] = array_column($dSt->fetchAll(), 'department_id');
+
             $bSt2 = $db->prepare("SELECT branch_id FROM admin_branch_access WHERE admin_id=?");
             $bSt2->execute([$user['id']]);
             $_SESSION['allowed_branches'] = array_column($bSt2->fetchAll(), 'branch_id');
@@ -61,8 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $db->prepare("UPDATE users SET last_login=NOW() WHERE id=?")->execute([$user['id']]);
         logActivity('2FA Login', 'auth');
-        $_SESSION['role'] = $user['role_name'];
-        $role = strtolower($user['role_name']);
+        $role = strtolower($user['role_name'] ?? 'staff');
         header('Location: ../' . $role . '/dashboard/');
         exit;
     } else {
