@@ -44,8 +44,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($dup->fetch())
             $errors[] = "Company \"{$name}\" already exists.";
     }
-    if ($pan && !preg_match('/^\d{10}$/', $pan)) {
-        $errors[] = "PAN number must be exactly 10 digits.";
+    if ($pan && !preg_match('/^\d{9}$/', $pan)) {
+        $errors[] = "PAN number must be exactly 09 digits.";
     }
     if (!$errors && $pan) {
         $dup2 = $db->prepare("SELECT id FROM companies WHERE pan_number=? AND is_active=1");
@@ -166,9 +166,9 @@ include '../../includes/header.php';
                                         <input type="text"
                                             name="pan_number"
                                             class="form-control"
-                                            maxlength="10"
-                                            pattern="\d{10}"
-                                            placeholder="10 digit PAN"
+                                            maxlength="09"
+                                            pattern="\d{09}"
+                                            placeholder="09 digit PAN"
                                             value="<?= htmlspecialchars($_POST['pan_number'] ?? '') ?>">
                                     </div>
                                     <div class="col-md-4">
@@ -246,7 +246,7 @@ include '../../includes/header.php';
                                 class="fas fa-info-circle text-warning me-1"></i>Tips</p>
                         <ul style="font-size:.78rem;color:#6b7280;padding-left:1rem;margin:0;">
                             <li>PAN must be unique across companies.</li>
-                            <li>PAN must be 10 digit.</li>
+                            <li>PAN must be 09 digit.</li>
                         </ul>
                     </div>
                 </div>

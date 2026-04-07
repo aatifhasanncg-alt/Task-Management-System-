@@ -211,7 +211,7 @@ include '../../includes/header.php';
                             <label class="form-label-mis">PAN Number</label>
                             <input type="text" name="pan_number" class="form-control"
                                    value="<?= htmlspecialchars($_POST['pan_number'] ?? '') ?>"
-                                   placeholder="10-digit PAN">
+                                   placeholder="09-digit PAN">
                         </div>
 
                         <div class="col-md-4">
@@ -408,7 +408,7 @@ include '../../includes/header.php';
                             Company Type, Branch Name, and Industry must match the exact names
                             listed in the <em>Valid Values</em> sheet of the template.
                             Return Type must be one of: D1, D2, D3, D4.
-                            PAN must be exactly 10 digits.
+                            PAN must be exactly 09 digits.
                         </div>
                     </div>
                 </div>
