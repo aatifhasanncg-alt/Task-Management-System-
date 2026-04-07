@@ -125,8 +125,8 @@ if ($filterName) {
     $params[] = "%{$filterName}%";
 }
 if ($filterClass) {
-    $where[] = 'a.class LIKE ?';
-    $params[] = "%{$filterClass}%";
+    $where[] = 'a.class = ?';
+    $params[] = $filterClass;
 }
 
 $ws = implode(' AND ', $where);
@@ -222,8 +222,13 @@ include '../../includes/header.php';
                     </div>
                     <div class="col-md-4">
                         <label class="form-label-mis">Class</label>
-                        <input type="text" name="class" class="form-control form-control-sm"
-                            value="<?= htmlspecialchars($filterClass) ?>" placeholder="Filter by class...">
+                        <select name="class" class="form-control form-control-sm">
+                            <option value="">All Classes</option>
+                            <option value="CA" <?= $filterClass === 'CA' ? 'selected' : '' ?>>CA</option>
+                            <option value="B"  <?= $filterClass === 'B'  ? 'selected' : '' ?>>B</option>
+                            <option value="C"  <?= $filterClass === 'C'  ? 'selected' : '' ?>>C</option>
+                            <option value="D"  <?= $filterClass === 'D'  ? 'selected' : '' ?>>D</option>
+                        </select>
                     </div>
                     <div class="col-md-2 d-flex gap-1">
                         <button class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i> Filter</button>
@@ -426,7 +431,14 @@ include '../../includes/header.php';
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label-mis">Class</label>
-                                        <input type="text" name="class" id="class" class="form-control form-control-sm">
+                                        <select name="class" id="class" class="form-control form-control-sm"
+                                            <?= isCoreAdmin() ? '' : 'disabled' ?>>
+                                            <option value="">-- Select Class --</option>
+                                            <option value="CA">CA</option>
+                                            <option value="B">B</option>
+                                            <option value="C">C</option>
+                                            <option value="D">D</option>
+                                        </select>
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label-mis">Address</label>

@@ -99,11 +99,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
     $assignTo    = (int)($_POST['assigned_to'] ?? 0) ?: null;
     $compId      = (int)($_POST['company_id']  ?? 0) ?: null;
     $statusName  = trim($_POST['status']       ?? '');
-    $auditNature = !empty($_POST['audit_nature'])
-                    ? strtolower(trim($_POST['audit_nature']))
-                    : null;
+    $raw = trim($_POST['audit_nature'] ?? '');
+    $auditNature = $raw !== '' ? (strtolower($raw) === 'n/a' ? 'N/A' : strtolower($raw)) : null;
     $auditorId   = (int)($_POST['auditor_id']  ?? 0) ?: null;
-
+    if ($auditNature === 'N/A') {
+        $auditorId = null;
+    }
     // Validate
     if (!$title)      $errors[] = 'Task title is required.';
     if (!$statusName) $errors[] = 'Status is required.';
@@ -414,12 +415,13 @@ include '../../includes/header.php';
                                     <?= $currentNature === 'uncountable' ? 'selected' : '' ?>>
                                     Uncountable
                                 </option>
+                                <option value="N/A" <?= strtoupper($currentNature) === 'N/A' ? 'selected' : '' ?>>N/A</option>
                             </select>
                         </div>
 
                         <!-- Auditor -->
                         <div class="col-md-9" id="auditor-wrap"
-                             style="<?= $currentNature ? '' : 'display:none;' ?>">
+                             style="<?= ($currentNature && $currentNature !== 'n/a') ? '' : 'display:none;' ?>">
                             <label class="form-label-mis">
                                 Auditor
                                 <span id="auditor-limit-note"
@@ -626,11 +628,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
 // ── Load auditors via AJAX on nature change ───────────────────────────────────
 function loadAuditors(nature) {
-    const wrap = document.getElementById('auditor-wrap');
-    const sel  = document.getElementById('auditor_id');
+    const wrap   = document.getElementById('auditor-wrap');
+    const sel    = document.getElementById('auditor_id');
+    const capDiv = document.getElementById('auditor-capacity');
+    if (!wrap || !sel) return;
 
-    if (!nature) { wrap.style.display = 'none'; return; }
-
+    if (!nature || nature === 'N/A') {
+        wrap.style.display = 'none';
+        sel.innerHTML = '<option value="">-- Select Auditor --</option>';
+        if (capDiv) capDiv.style.display = 'none';
+        return;
+    }
     wrap.style.display = 'block';
     document.getElementById('auditor-limit-note').textContent =
         nature === 'countable' ? '(limit applies)' : '(no limit)';

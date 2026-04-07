@@ -94,7 +94,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $compId      = (int)($_POST['company_id']   ?? 0) ?: null;
     $status      = $_POST['status']             ?? 'Not Started';
     // Normalize to lowercase to match ENUM('countable','uncountable')
-    $auditNature = $_POST['audit_nature']       ? strtolower(trim($_POST['audit_nature'])) : null;
+    $raw = trim($_POST['audit_nature'] ?? '');
+    $auditNature = $raw !== '' ? (strtolower($raw) === 'n/a' ? 'N/A' : strtolower($raw)) : null;
     $auditorId   = (int)($_POST['auditor_id']   ?? 0) ?: null;
 
     if (isExecutive()) {
@@ -446,6 +447,10 @@ include '../../includes/header.php';
                                 <?= ($_POST['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
                                 Uncountable
                             </option>
+                            <option value="N/A"
+                                <?= ($_POST['audit_nature'] ?? '') === 'N/A' ? 'selected' : '' ?>>
+                                N/A
+                            </option>
                         </select>
                     </div>
 
@@ -620,7 +625,12 @@ function loadAuditors() {
     const nature = document.getElementById('audit_nature').value;
     const select = document.getElementById('auditor_id');
     const capDiv = document.getElementById('auditor-capacity');
-
+    if (!nature || nature === 'N/A') {
+        wrap.style.display = 'none';
+        select.innerHTML = '<option value="">-- Select Auditor --</option>';
+        if (capDiv) capDiv.style.display = 'none';
+        return;
+    }
     if (!nature) {
         select.innerHTML = '<option value="">-- Select Auditor --</option>';
         capDiv.style.display = 'none';

@@ -30,7 +30,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $companyId = (int) ($_POST['company_id'] ?? 0) ?: null;
     $assignedTo = (int) ($_POST['assigned_to'] ?? 0) ?: null;
     $auditorId = (int) ($_POST['auditor_id'] ?? 0) ?: null;
-    $auditNature = $_POST['audit_nature'] ?? null;
+    $raw = trim($_POST['audit_nature'] ?? '');
+    $auditNature = $raw !== '' ? (strtolower($raw) === 'n/a' ? 'N/A' : strtolower($raw)) : null;
+    if ($auditNature === 'N/A') {
+        $auditorId = null;
+    }
     $status_id = (int)($_POST['status_id'] ?? 0);
     $priority = $_POST['priority'] ?? 'medium';
     $dueDate = $_POST['due_date'] ?? null;
@@ -101,13 +105,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Notify assigned staff
         if ($assignedTo) {
-            $db->prepare("INSERT INTO notifications(user_id,title,message,type,link) VALUES(?,?,?,?,?)")
-                ->execute([$assignedTo, "New Task Assigned", "Task assigned: {$title}", 'task', APP_URL . "/staff/tasks/view.php?id={$taskId}"]);
-            $assignedUser = $db->prepare("SELECT * FROM users WHERE id=?");
-            $assignedUser->execute([$assignedTo]);
-            $assignedUser = $assignedUser->fetch();
-            if ($assignedUser)
-                emailTaskAssigned($assignedUser, ['id' => $taskId, 'task_number' => 'Pending', 'title' => $title, 'department' => $deptCode, 'status' => $status_id, 'due_date' => $dueDate]);
+            $tnStmt = $db->prepare("SELECT task_number FROM tasks WHERE id = ?");
+            $tnStmt->execute([$taskId]);
+            $taskNumber = $tnStmt->fetchColumn() ?: "T-{$taskId}";
+
+            $companyName = '';
+            if ($companyId) {
+                $cnStmt = $db->prepare("SELECT company_name FROM companies WHERE id = ?");
+                $cnStmt->execute([$companyId]);
+                $companyName = $cnStmt->fetchColumn() ?: '';
+            }
+
+            $notifMsg = "Task #{$taskNumber}";
+            if ($companyName) $notifMsg .= " — {$companyName}";
+            $notifMsg .= " has been assigned to you";
+            if ($dueDate) $notifMsg .= " · Due " . date('M j, Y', strtotime($dueDate));
+            $notifMsg .= ".";
+
+            notify(
+                $assignedTo,
+                "New Task: {$title}",
+                $notifMsg,
+                'task',
+                APP_URL . '/staff/tasks/view.php?id=' . $taskId,
+                true,
+                [
+                    'template'     => 'task_assigned',
+                    'task_number'  => $taskNumber,
+                    'company_name' => $companyName,
+                    'task'         => [
+                        'id'          => $taskId,
+                        'task_number' => $taskNumber,
+                        'title'       => $title,
+                        'department'  => $deptCode,
+                        'status'      => $status_id,
+                        'priority'    => $priority,
+                        'due_date'    => $dueDate,
+                        'fiscal_year' => $fiscalYear,
+                        'company'     => $companyName,
+                        'remarks'     => $remarks,
+                    ],
+                ]
+            );
         }
 
         logActivity("Assigned task: {$title}", 'tasks', "id={$taskId}");
@@ -182,8 +221,9 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">Audit Nature</label>
                                         <select name="audit_nature" id="audit_nature" class="form-select" onchange="loadAuditors()">
                                             <option value="">-- Select --</option>
-                                            <option value="countable">Countable</option>
-                                            <option value="uncountable">Uncountable</option>
+                                            <option value="countable"   <?= ($_POST['audit_nature'] ?? '') === 'countable'   ? 'selected' : '' ?>>Countable</option>
+                                            <option value="uncountable" <?= ($_POST['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>Uncountable</option>
+                                            <option value="N/A" <?= ($_POST['audit_nature'] ?? '') === 'N/A' ? 'selected' : '' ?>>N/A</option>
                                         </select>
                                     </div>
 
@@ -405,7 +445,12 @@ include '../../includes/header.php';
             const nature = document.getElementById('audit_nature').value;
             const select = document.getElementById('auditor_id');
             const capDiv = document.getElementById('auditor-capacity');
-
+            if (!nature || nature === 'N/A') {
+                wrap.style.display = 'none';
+                select.innerHTML = '<option value="">-- Select Auditor --</option>';
+                if (capDiv) capDiv.style.display = 'none';
+                return;
+            }
             if (!nature) {
                 select.innerHTML = '<option value="">-- Select Auditor --</option>';
                 capDiv.style.display = 'none';

@@ -2,10 +2,6 @@
 require_once '../../config/db.php';
 require_once '../../config/session.php';
 requireExecutive();
-if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied.');
-    header('Location: industries.php'); exit;
-}
 
 $db = getDB();
 

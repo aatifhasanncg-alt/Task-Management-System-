@@ -119,7 +119,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
     $assignTo    = (int)($_POST['assigned_to']  ?? 0) ?: null;
     $compId      = (int)($_POST['company_id']   ?? 0) ?: null;
     $status      = $_POST['status']            ?? '';
-    $auditNature = $_POST['audit_nature'] ? strtolower(trim($_POST['audit_nature'])) : null;
+    $raw = trim($_POST['audit_nature'] ?? '');
+    $auditNature = $raw !== '' ? (strtolower($raw) === 'n/a' ? 'N/A' : strtolower($raw)) : null;
     $auditorId   = (int)($_POST['auditor_id']  ?? 0) ?: null;
 
     $oldAuditorId   = (int)($task['auditor_id']   ?? 0);
@@ -209,7 +210,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
 
             notify($assignTo, 'Task Assigned to You',
                 "Task {$task['task_number']} has been assigned to you.",
-                'task', APP_URL . '/staff/tasks/view.php?id=' . $id);
+                'task', APP_URL . '/admin/tasks/view.php?id=' . $id);
         }
 
         logActivity("Task updated: {$task['task_number']}", 'tasks');
@@ -454,10 +455,17 @@ include '../../includes/header.php';
                                 <?= strtolower($task['audit_nature'] ?? '') === 'uncountable' ? 'selected' : '' ?>>
                                 Uncountable
                             </option>
+                            <option value="N/A"
+                                <?= strtoupper($task['audit_nature'] ?? '') === 'N/A' ? 'selected' : '' ?>>
+                                N/A
+                            </option>
                         </select>
                         </div>
 
                         <!-- ── Auditor ── -->
+                         <?php
+                        $showAuditorWrap = !empty($task['audit_nature']) && strtoupper($task['audit_nature']) !== 'N/A';
+                        ?>
                         <div class="col-md-8" id="auditor-wrap"
                              style="<?= $task['audit_nature'] ? '' : 'display:none;' ?>">
                             <label class="form-label-mis">Auditor
@@ -775,11 +783,17 @@ function filterTransferStaff() {
 
 // ── Load auditors via AJAX ────────────────────────────────────────────────────
 function loadAuditors(nature) {
-    const wrap = document.getElementById('auditor-wrap');
-    const sel  = document.getElementById('auditor_id');
+    const wrap   = document.getElementById('auditor-wrap');
+    const sel    = document.getElementById('auditor_id');
+    const capDiv = document.getElementById('auditor-capacity');
     if (!wrap || !sel) return;
 
-    if (!nature) { wrap.style.display = 'none'; return; }
+    if (!nature || nature === 'N/A') {
+        wrap.style.display = 'none';
+        sel.innerHTML = '<option value="">-- Select Auditor --</option>';
+        if (capDiv) capDiv.style.display = 'none';
+        return;
+    }
     wrap.style.display = 'block';
     document.getElementById('auditor-limit-note').textContent =
         nature === 'countable' ? '(limit applies)' : '(no limit)';
