@@ -5,7 +5,8 @@ require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/mailer.php';
 requireAnyRole();
-
+require_once '../../config/active_sessions_widget.php';
+handleSessionRevoke();
 $db = getDB();
 $user = currentUser();
 $pageTitle = 'My Profile';
@@ -92,9 +93,11 @@ include '../../includes/header.php';
                             <h5 style="font-size:1.1rem;font-weight:700;"><?= htmlspecialchars($profile['full_name']) ?>
                             </h5>
                             <p style="color:#9ca3af;font-size:.83rem;margin:.25rem 0;">
-                                <?= htmlspecialchars($profile['email']) ?></p>
+                                <?= htmlspecialchars($profile['email']) ?>
+                            </p>
                             <div class="d-flex justify-content-center gap-2 mt-2 flex-wrap">
-                                <span class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
+                                <span
+                                    class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
                                 <span class="dept-chip"><?= htmlspecialchars($profile['dept_name'] ?? '—') ?></span>
                             </div>
                             <?php if ($profile['employee_id']): ?>
@@ -160,7 +163,8 @@ include '../../includes/header.php';
                                             <i class="fas <?= $ic ?> me-1 text-warning"></i><?= $lbl ?>
                                         </div>
                                         <div style="font-size:.9rem;color:#1f2937;font-weight:500;margin-top:.15rem;">
-                                            <?= htmlspecialchars($val ?? '—') ?></div>
+                                            <?= htmlspecialchars($val ?? '—') ?>
+                                        </div>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -225,6 +229,14 @@ include '../../includes/header.php';
                                         Password</button>
                                 </div>
                             </form>
+                        </div>
+                    </div>
+                    <div class="card-mis mt-4">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-shield-alt text-warning me-2"></i>Active Sessions</h5>
+                        </div>
+                        <div class="card-mis-body p-0">
+                            <?php renderSessionsWidget(); ?>
                         </div>
                     </div>
                 </div>
