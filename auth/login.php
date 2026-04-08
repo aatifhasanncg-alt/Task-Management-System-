@@ -77,8 +77,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         } else {
             // ── 2FA pending ──────────────────────────────────────────────
+            // ── 2FA pending ──────────────────────────────────────────────
             if ($user['ga_enabled'] && $user['ga_secret']) {
-                // Set user session BEFORE redirecting to 2FA
                 $_SESSION['user'] = [
                     'id' => $user['id'],
                     'username' => $user['username'],
@@ -86,9 +86,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'role' => $user['role'],
                     'role_id' => $user['role_id'] ?? 0
                 ];
-
                 $_SESSION['2fa_pending_user'] = $user['id'];
                 $_SESSION['2fa_pending_role'] = $role;
+
+                // ✅ ADD THIS — token set before 2FA redirect
+                setRememberToken($user['id'], true);
+
                 header('Location: verify_2fa.php');
                 exit;
             }
@@ -128,7 +131,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // Log & redirect
+            // Log & redirect
             logActivity('Login', 'auth', "role={$role}, branch_id={$user['branch_id']}");
+
+            // ✅ ADD THIS — persistent login token
+            setRememberToken($user['id'], true);
+
             header('Location: ../' . $role . '/dashboard/index.php');
             exit;
         }

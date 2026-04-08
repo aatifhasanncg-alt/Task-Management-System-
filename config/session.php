@@ -1,15 +1,14 @@
 <?php
 declare(strict_types=1);
 
-// ── SESSION CONFIG — 5-day lifetime ──────────────────────────
-$sessionLifetime = 5 * 24 * 60 * 60; // 5 days in seconds
+require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/auth_token.php';
 
-ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
-ini_set('session.cookie_lifetime', (string)$sessionLifetime);
-
+// Basic session (short-lived, just for active browser tab)
+ini_set('session.gc_maxlifetime', '86400'); // 1 day
 session_set_cookie_params([
-    'lifetime' => $sessionLifetime,
-    'path'     => '/',
+    'lifetime' => 0,          // session cookie is fine now —
+    'path'     => '/',        // remember_token handles persistence
     'secure'   => isset($_SERVER['HTTPS']),
     'httponly' => true,
     'samesite' => 'Lax',
@@ -19,11 +18,15 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// ── Auto-login via remember token if session is empty ────────
+tryAutoLogin();
+
 // ── AUTO-LOGOUT after 5 days of inactivity ────────────────────
 if (isset($_SESSION['last_activity'])) {
     if (time() - $_SESSION['last_activity'] > $sessionLifetime) {
         session_unset();
         session_destroy();
+        clearRememberToken();   // ← also clear the token on true expiry
         header('Location: /auth/login.php?reason=session_expired');
         exit;
     }

@@ -133,7 +133,19 @@ INSERT INTO departments (dept_name,dept_code,color,icon) VALUES
 -- ========================
 -- USERS
 -- ========================
-
+CREATE TABLE remember_tokens (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    user_id     INT NOT NULL,
+    token       VARCHAR(64) NOT NULL UNIQUE,
+    expires_at  DATETIME NULL,          -- NULL = never expires
+    created_at  DATETIME DEFAULT NOW(),
+    last_used   DATETIME DEFAULT NOW(),
+    ip_address  VARCHAR(45),
+    user_agent  VARCHAR(255),
+    INDEX idx_token (token),
+    INDEX idx_user (user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     full_name VARCHAR(150) NOT NULL,
