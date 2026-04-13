@@ -76,20 +76,6 @@ $fiscalYears = $db->query("
     FROM fiscal_years WHERE is_active=1
     ORDER BY fy_code DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
-$tileLink = APP_URL . '/executive/tasks/index.php?'
-                    . http_build_query([
-                        'dept'      => strtolower($d['dept_code']),
-                        'status'    => $sr['status_name'],
-                        'date_from' => $fromDate,
-                        'date_to'   => $toDate,
-                    ]);
-$overdueLink = APP_URL . '/executive/tasks/index.php?'
-                    . http_build_query([
-                        'dept'      => strtolower($d['dept_code']),
-                        'overdue'   => 1,
-                        'date_from' => $fromDate,
-                        'date_to'   => $toDate,
-                    ]);
 // Count
 $countSt = $db->prepare("
     SELECT COUNT(*) FROM tasks t
