@@ -2,7 +2,7 @@
 // config/db.php — PDO Database Connection
 
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'askgloba_task');
+define('DB_NAME', 'mis_ask');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_CHARSET', 'utf8mb4');

@@ -60,7 +60,63 @@ CREATE TABLE users (
     FOREIGN KEY (department_id) REFERENCES departments(id),
     FOREIGN KEY (managed_by) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE
 );
+CREATE TABLE `retired_employee_ids` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` int(11) NOT NULL,
+  `employee_id` varchar(50) NOT NULL,
+  `role_id` int(11) NOT NULL,
+  `retired_at` timestamp NULL DEFAULT current_timestamp(),
+  `reason` varchar(100) DEFAULT 'role_change'
+);
+ALTER TABLE `retired_employee_ids`
+  ADD CONSTRAINT `retired_employee_ids_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  ADD CONSTRAINT `retired_employee_ids_ibfk_2` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`);
 
+
+CREATE TABLE `admin_department_access` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  `admin_id` int(11) NOT NULL,
+  `department_id` int(11) NOT NULL
+);
+
+CREATE TABLE `user_role_history` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` int(11) NOT NULL,
+  `old_role_id` int(11) NOT NULL,
+  `new_role_id` int(11) NOT NULL,
+  `old_employee_id` varchar(50) DEFAULT NULL,
+  `new_employee_id` varchar(50) DEFAULT NULL,
+  `old_branch_id` int(11) DEFAULT NULL,
+  `new_branch_id` int(11) DEFAULT NULL,
+  `changed_by` int(11) NOT NULL,
+  `changed_at` timestamp NULL DEFAULT current_timestamp(),
+  `reason` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+ALTER TABLE `user_role_history`
+  ADD KEY `user_id` (`user_id`),
+  ADD KEY `old_role_id` (`old_role_id`),
+  ADD KEY `new_role_id` (`new_role_id`),
+  ADD KEY `changed_by` (`changed_by`);
+  ALTER TABLE `user_role_history`
+  ADD CONSTRAINT `user_role_history_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  ADD CONSTRAINT `user_role_history_ibfk_2` FOREIGN KEY (`old_role_id`) REFERENCES `roles` (`id`),
+  ADD CONSTRAINT `user_role_history_ibfk_3` FOREIGN KEY (`new_role_id`) REFERENCES `roles` (`id`),
+  ADD CONSTRAINT `user_role_history_ibfk_4` FOREIGN KEY (`changed_by`) REFERENCES `users` (`id`);
+
+CREATE TABLE `admin_branch_access` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  `admin_id` int(11) NOT NULL,
+  `branch_id` int(11) NOT NULL
+);
+CREATE TABLE `staff_branch_log` (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  `staff_id` int(11) NOT NULL,
+  `old_branch_id` int(11) DEFAULT NULL,
+  `new_branch_id` int(11) NOT NULL,
+  `changed_by` int(11) NOT NULL,
+  `reason` text DEFAULT NULL,
+  `changed_at` timestamp NOT NULL DEFAULT current_timestamp()
+);
 -- Auditors
 CREATE TABLE auditors (
     id INT AUTO_INCREMENT PRIMARY KEY,
