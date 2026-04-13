@@ -78,14 +78,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             // ── 2FA pending ──────────────────────────────────────────────
             // ── 2FA pending ──────────────────────────────────────────────
-            if ($user['ga_enabled'] && $user['ga_secret']) {
-                $_SESSION['user'] = [
-                    'id' => $user['id'],
-                    'username' => $user['username'],
-                    'full_name' => $user['full_name'],
-                    'role' => $user['role'],
-                    'role_id' => $user['role_id'] ?? 0
-                ];
+           if ($user['ga_enabled'] && $user['ga_secret']) {
+            
+                // ── Save login time & IP for 2FA users too ────────────────────────
+                $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR'] 
+                           ?? $_SERVER['HTTP_CLIENT_IP'] 
+                           ?? $_SERVER['REMOTE_ADDR'] 
+                           ?? '0.0.0.0';
+                if (str_contains($loginIp, ',')) {
+                    $loginIp = trim(explode(',', $loginIp)[0]);
+                }
+                $loginIp = filter_var($loginIp, FILTER_VALIDATE_IP) ? $loginIp : '0.0.0.0';
+            
+                $db->prepare("
+                    UPDATE users 
+                    SET last_login = NOW(),
+                        last_login_ip = ?
+                    WHERE id = ?
+                ")->execute([$loginIp, $user['id']]);
+            
                 $_SESSION['2fa_pending_user'] = $user['id'];
                 $_SESSION['2fa_pending_role'] = $role;
 
@@ -98,7 +109,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // ── Login success ─────────────────────────────────────────────
             // Login success (no 2FA)
-            session_regenerate_id(true);
+            // ── Save login time & IP ──────────────────────────────────────────────────
+                $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR'] 
+                           ?? $_SERVER['HTTP_CLIENT_IP'] 
+                           ?? $_SERVER['REMOTE_ADDR'] 
+                           ?? '0.0.0.0';
+                // X-Forwarded-For can be a comma-separated list — take the first (real client)
+                if (str_contains($loginIp, ',')) {
+                    $loginIp = trim(explode(',', $loginIp)[0]);
+                }
+                $loginIp = filter_var($loginIp, FILTER_VALIDATE_IP) ? $loginIp : '0.0.0.0';
+                
+                $db->prepare("
+                    UPDATE users 
+                    SET last_login = NOW(),
+                        last_login_ip = ?
+                    WHERE id = ?
+                ")->execute([$loginIp, $user['id']]);
+                
+                session_regenerate_id(true);
 
             $_SESSION['user'] = [
                 'id' => $user['id'],
@@ -174,13 +203,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         body {
             min-height: 100vh;
             margin: 0;
+            padding: 1.5rem;
             font-family: 'Outfit', sans-serif;
             background: var(--navy);
             display: flex;
-            align-items: center;
+            align-items: flex-start; /* ← changed from center */
             justify-content: center;
             position: relative;
-            overflow: hidden;
+            overflow-y: auto;        /* ← allow scrolling */
+            overflow-x: hidden;
         }
 
         body::before {
@@ -191,6 +222,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 radial-gradient(ellipse 80% 60% at 20% 50%, rgba(201, 168, 76, .07) 0%, transparent 60%),
                 radial-gradient(ellipse 60% 80% at 80% 20%, rgba(26, 37, 64, .8) 0%, transparent 70%);
             pointer-events: none;
+            z-index: 0;
         }
 
         /* ── Layout ── */
@@ -204,6 +236,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             position: relative;
             z-index: 1;
             width: min(820px, 96vw);
+            margin: auto;
+            align-self: center;
         }
 
         /* ── Left panel ── */

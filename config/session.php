@@ -4,10 +4,10 @@ declare(strict_types=1);
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/auth_token.php';
 
-// Basic session (short-lived, just for active browser tab)
-ini_set('session.gc_maxlifetime', '86400'); // 1 day
+// ── SESSION CONFIG ────────────────────────────────────────────
+ini_set('session.gc_maxlifetime', '86400'); // 1 day server-side
 session_set_cookie_params([
-    'lifetime' => 0,          // session cookie is fine now —
+    'lifetime' => 0,          // browser session cookie is fine —
     'path'     => '/',        // remember_token handles persistence
     'secure'   => isset($_SERVER['HTTPS']),
     'httponly' => true,
@@ -18,22 +18,10 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ── Auto-login via remember token if session is empty ────────
+// ── STEP 1: Auto-login via remember token FIRST ───────────────
 tryAutoLogin();
 
-// ── AUTO-LOGOUT after 5 days of inactivity ────────────────────
-if (isset($_SESSION['last_activity'])) {
-    if (time() - $_SESSION['last_activity'] > $sessionLifetime) {
-        session_unset();
-        session_destroy();
-        clearRememberToken();   // ← also clear the token on true expiry
-        header('Location: /auth/login.php?reason=session_expired');
-        exit;
-    }
-}
-$_SESSION['last_activity'] = time();
-
-// ── LOGIN & ROLE CHECKS ──────────────────────────────────────
+// ── LOGIN & ROLE CHECKS ───────────────────────────────────────
 
 function requireLogin(): void {
     if (empty($_SESSION['user_id'])) {
@@ -48,12 +36,33 @@ function requireRole(string ...$roles): void {
         header('Location: /auth/login.php?error=unauthorized');
         exit;
     }
+    // ── Update active_at on every authenticated page load ──
+    try {
+        updateActiveAt(getDB(), (int)$_SESSION['user_id']);
+    } catch (Exception $e) {}
 }
 
 function requireExecutive(): void { requireRole('executive'); }
 function requireAdmin(): void     { requireRole('admin', 'executive'); }
 function requireAnyRole(): void   { requireRole('executive', 'admin', 'staff'); }
 
+function getClientIp(): string {
+    $ip = $_SERVER['HTTP_X_FORWARDED_FOR']
+          ?? $_SERVER['HTTP_CLIENT_IP']
+          ?? $_SERVER['REMOTE_ADDR']
+          ?? '0.0.0.0';
+    if (str_contains($ip, ',')) {
+        $ip = trim(explode(',', $ip)[0]);
+    }
+    return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '0.0.0.0';
+}
+
+function updateActiveAt(PDO $db, int $userId): void {
+    try {
+        $db->prepare("UPDATE users SET active_at = NOW() WHERE id = ?")
+           ->execute([$userId]);
+    } catch (Exception $e) {}
+}
 // ── CURRENT USER ─────────────────────────────────────────────
 
 function currentUser(): array {
@@ -215,4 +224,18 @@ function logActivity(string $action, string $module = '', string $details = ''):
     } catch (Exception $e) {
         // silent
     }
+}
+// Add this helper at the top of both view files, after the require_once lines
+function formatLastSeen(?string $activeAt, ?string $lastLogin): array {
+    // Prefer active_at (real-time), fall back to last_login
+    $time = $activeAt ?? $lastLogin;
+    if (!$time) return ['label' => 'Never seen', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
+
+    $diff = time() - strtotime($time);
+
+    if ($diff < 300)       return ['label' => 'Online now',         'color' => '#10b981', 'dot' => '#10b981', 'online' => true];
+    if ($diff < 3600)      return ['label' => round($diff/60) . 'm ago',  'color' => '#f59e0b', 'dot' => '#f59e0b', 'online' => false];
+    if ($diff < 86400)     return ['label' => round($diff/3600) . 'h ago', 'color' => '#6b7280', 'dot' => '#9ca3af', 'online' => false];
+    if ($diff < 604800)    return ['label' => round($diff/86400) . 'd ago', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
+    return ['label' => date('d M Y', strtotime($time)), 'color' => '#9ca3af', 'dot' => '#d1d5db', 'online' => false];
 }

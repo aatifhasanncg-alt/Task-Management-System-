@@ -7,7 +7,7 @@ requireAdmin();
 
 $db = getDB();
 $userSession = currentUser();
-
+updateActiveAt($db, (int)$userSession['id']); 
 $stmt = $db->prepare("
     SELECT u.*, r.role_name, b.branch_name, d.dept_name
     FROM users u
@@ -52,10 +52,11 @@ $scopeWhere = "(
 // One canonical set of 6 scope params — reuse via array_merge
 $sp = [$adminBranchId, $adminDeptId, $adminDeptId, $adminDeptId, $adminUserId, $adminUserId];
 
-// ── All dynamic statuses (exclude Corporate Team) ────────────────────────────
 $allStatuses = $db->query(
-    "SELECT id, status_name FROM task_status
-     WHERE status_name != 'Corporate Team' ORDER BY id"
+    "SELECT id, status_name, color, bg_color, icon
+     FROM task_status
+     WHERE status_name != 'Corporate Team'
+     ORDER BY id"
 )->fetchAll();
 
 // ── 1. Status counts ─────────────────────────────────────────────────────────
@@ -178,11 +179,13 @@ $recentStmt = $db->prepare("
     LEFT JOIN companies   c  ON c.id  = t.company_id
     LEFT JOIN users       u  ON u.id  = t.assigned_to
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE t.is_active = 1 AND {$scopeWhere}
+    WHERE t.is_active = 1
+      AND t.branch_id     = ?
+      AND t.department_id = ?
     ORDER BY t.created_at DESC
     LIMIT 6
 ");
-$recentStmt->execute($sp);                  // ✓ 6 params
+$recentStmt->execute([$adminBranchId, $adminDeptId]);                // ✓ 6 params
 $recentTasks = $recentStmt->fetchAll();
 
 include '../../includes/header.php';
@@ -231,50 +234,48 @@ include '../../includes/header.php';
 
             <!-- Stat cards -->
             <div class="row g-3 mb-4">
-                <?php
-                $staticIcons = [
-                    'Not Started' => ['fa-circle', '#9ca3af', '#f3f4f6'],
-                    'WIP' => ['fa-spinner', '#f59e0b', '#fffbeb'],
-                    'Pending' => ['fa-clock', '#ef4444', '#fef2f2'],
-                    'HBC' => ['fa-hourglass', '#8b5cf6', '#f5f3ff'],
-                    'Next Year' => ['fa-calendar', '#06b6d4', '#ecfeff'],
-                    'NON Performance' => ['fa-ban', '#6b7280', '#f3f4f6'],
-                    'Done' => ['fa-check-circle', '#10b981', '#ecfdf5'],
-                ];
-                foreach ($allStatuses as $st):
-                    $k = $st['status_name'];
-                    $cnt = $byStatus[$k] ?? 0;
-                    $col = defined('TASK_STATUSES') && isset(TASK_STATUSES[$k]) ? TASK_STATUSES[$k]['color'] : ($staticIcons[$k][1] ?? '#6b7280');
-                    $bg = defined('TASK_STATUSES') && isset(TASK_STATUSES[$k]) ? TASK_STATUSES[$k]['bg'] : ($staticIcons[$k][2] ?? '#f3f4f6');
-                    $icon = $staticIcons[$k][0] ?? 'fa-circle';
-                    ?>
+                <?php foreach ($allStatuses as $st):
+                    $k    = $st['status_name'];
+                    $cnt  = $byStatus[$k] ?? 0;
+                    $col  = $st['color']    ?? '#6b7280';
+                    $bg   = $st['bg_color'] ?? '#f3f4f6';
+                    $icon = $st['icon']     ?? 'fa-circle';
+                ?>
                     <div class="col-6 col-md-4 col-xl-2">
                         <div class="stat-card">
-                            <div class="stat-card-icon" style="background:<?= $bg ?>;color:<?= $col ?>;"><i
-                                    class="fas <?= $icon ?>"></i></div>
-                            <div class="stat-card-value" style="color:<?= $col ?>;"><?= number_format($cnt) ?></div>
+                            <div class="stat-card-icon" style="background:<?= htmlspecialchars($bg) ?>;color:<?= htmlspecialchars($col) ?>;">
+                                <i class="fas <?= htmlspecialchars($icon) ?>"></i>
+                            </div>
+                            <div class="stat-card-value" style="color:<?= htmlspecialchars($col) ?>;">
+                                <?= number_format($cnt) ?>
+                            </div>
                             <div class="stat-card-label"><?= htmlspecialchars($k) ?></div>
                         </div>
                     </div>
                 <?php endforeach; ?>
+            
+                <!-- Total Tasks -->
                 <div class="col-6 col-md-4 col-xl-2">
                     <div class="stat-card">
-                        <div class="stat-card-icon" style="background:#eff6ff;color:#3b82f6;"><i
-                                class="fas fa-list-check"></i></div>
+                        <div class="stat-card-icon" style="background:#eff6ff;color:#3b82f6;">
+                            <i class="fas fa-list-check"></i>
+                        </div>
                         <div class="stat-card-value" style="color:#3b82f6;"><?= number_format($total) ?></div>
                         <div class="stat-card-label">Total Tasks</div>
                     </div>
                 </div>
+            
+                <!-- My Staff -->
                 <div class="col-6 col-md-4 col-xl-2">
                     <div class="stat-card">
-                        <div class="stat-card-icon" style="background:#fdf2f8;color:#ec4899;"><i
-                                class="fas fa-users"></i></div>
+                        <div class="stat-card-icon" style="background:#fdf2f8;color:#ec4899;">
+                            <i class="fas fa-users"></i>
+                        </div>
                         <div class="stat-card-value" style="color:#ec4899;"><?= number_format($staffCount) ?></div>
                         <div class="stat-card-label">My Staff</div>
                     </div>
                 </div>
             </div>
-
             <!-- Staff Work Distribution -->
             <div class="card-mis mb-4">
                 <div class="card-mis-header">
@@ -360,13 +361,11 @@ include '../../includes/header.php';
                     if (!ctx) return;
                     const data = <?= json_encode(array_values(array_filter($deptDist, fn($d) => $d['task_count'] > 0))) ?>;
                     if (!data.length) return;
-                    const statuses = <?= json_encode(array_map(function ($st) {
-                        $k = $st['status_name'];
+                    const statuses = <?= json_encode(array_map(function($st) {
                         return [
-                            'key' => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($k)),
-                            'label' => $k,
-                            'color' => (defined('TASK_STATUSES') && isset(TASK_STATUSES[$k]))
-                                ? TASK_STATUSES[$k]['color'] : '#9ca3af',
+                            'key'   => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name'])),
+                            'label' => $st['status_name'],
+                            'color' => $st['color'] ?? '#9ca3af',
                         ];
                     }, $allStatuses)) ?>;
                     new Chart(ctx, {

@@ -2,6 +2,7 @@
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
+require_once '../../config/notify.php';
 requireAdmin();
 
 $db   = getDB();
@@ -71,7 +72,7 @@ $deptStaff = $db->prepare("
     FROM users u
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
-    WHERE r.role_name = 'staff'
+    WHERE r.role_name IN('staff','admin')
       AND u.is_active  = 1
       AND u.department_id = ?
     ORDER BY u.full_name
@@ -208,9 +209,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
                 ]);
             } catch (Exception $e) {}
 
-            notify($assignTo, 'Task Assigned to You',
-                "Task {$task['task_number']} has been assigned to you.",
-                'task', APP_URL . '/admin/tasks/view.php?id=' . $id);
+                $assigneeStmt = $db->prepare("
+                    SELECT r.role_name FROM users u
+                    LEFT JOIN roles r ON r.id = u.role_id
+                    WHERE u.id = ?
+                ");
+                $assigneeStmt->execute([$assignTo]);
+                $assigneeRole = $assigneeStmt->fetchColumn();
+            
+                $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
+                    ? APP_URL . '/admin/tasks/view.php?id=' . $id
+                    : APP_URL . '/staff/tasks/view.php?id=' . $id;
+            
+                notify(
+                    $assignTo,
+                    'Task Assigned to You',
+                    "Task {$task['task_number']} has been assigned to you.",
+                    'task',
+                    $taskUrl
+                );
         }
 
         logActivity("Task updated: {$task['task_number']}", 'tasks');
@@ -218,6 +235,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
         header("Location: edit.php?id={$id}"); exit;
     }
 }
+// ── POST: Transfer department ─────────────────────────────────────────────────
 // ── POST: Transfer department ─────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
     verifyCsrf();
@@ -234,22 +252,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
 
         $notStartedId = $db->query("SELECT id FROM task_status WHERE status_name='Not Started'")->fetchColumn();
 
+        // ── 1. Create NEW task in target department ───────────────────────────
         $db->prepare("
-            UPDATE tasks SET
-                department_id   = ?,
-                current_dept_id = ?,
-                assigned_to     = ?,
-                status_id       = ?,
-                updated_at      = NOW()
-            WHERE id = ?
-        ")->execute([$newDeptId, $newDeptId, $newAssignTo, $notStartedId, $id]);
+            INSERT INTO tasks
+                (title, description, department_id, current_dept_id, branch_id, company_id,
+                 created_by, assigned_to, status_id, priority,
+                 due_date, fiscal_year, remarks, audit_nature, auditor_id,
+                 parent_task_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ")->execute([
+            $task['title'],
+            $task['description'],
+            $newDeptId,
+            $newDeptId,
+            $task['branch_id'],
+            $task['company_id'],
+            $user['id'],
+            $newAssignTo,
+            $notStartedId,
+            $task['priority'],
+            $task['due_date'],
+            $task['fiscal_year'],
+            $transferNote ?: $task['remarks'],
+            null,   // audit_nature reset for new dept
+            null,   // auditor_id reset
+            $id,    // parent_task_id — links back to original
+        ]);
+        $newTaskId     = $db->lastInsertId();
+        $newTaskNumber = $db->query("SELECT task_number FROM tasks WHERE id = {$newTaskId}")->fetchColumn();
 
+        // ── 2. Mark original task as Completed (dept finished their work) ─────────
+        $completedStatusId = $db->query("SELECT id FROM task_status WHERE status_name='Completed' LIMIT 1")->fetchColumn();
+        $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")
+           ->execute([$completedStatusId, $id]);
+
+        // ── 3. Log workflow on original task ──────────────────────────────────
         try {
             $db->prepare("
                 INSERT INTO task_workflow
                 (task_id, action, from_user_id, to_user_id,
                  from_dept_id, to_dept_id, old_status, new_status, remarks)
-                VALUES (?, 'transferred_dept', ?, ?, ?, ?, ?, 'Not Started', ?)
+                VALUES (?, 'transferred_dept', ?, ?, ?, ?, ?, 'Completed', ?)
             ")->execute([
                 $id, $user['id'], $newAssignTo,
                 $task['department_id'], $newDeptId,
@@ -257,32 +300,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
             ]);
         } catch (Exception $e) {}
 
+        // ── 4. Log workflow on new task ───────────────────────────────────────
+        try {
+            $db->prepare("
+                INSERT INTO task_workflow
+                (task_id, action, from_user_id, to_user_id,
+                 from_dept_id, to_dept_id, old_status, new_status, remarks)
+                VALUES (?, 'created_from_transfer', ?, ?, ?, ?, ?, 'Not Started', ?)
+            ")->execute([
+                $newTaskId, $user['id'], $newAssignTo,
+                $task['department_id'], $newDeptId,
+                $task['status'], $transferNote
+            ]);
+        } catch (Exception $e) {}
+
+        // ── 5. Notify assigned user ───────────────────────────────────────────
         if ($newAssignTo) {
+            $assigneeStmt = $db->prepare("
+                SELECT r.role_name FROM users u
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE u.id = ?
+            ");
+            $assigneeStmt->execute([$newAssignTo]);
+            $assigneeRole = $assigneeStmt->fetchColumn();
+
+            $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
+                ? APP_URL . '/admin/tasks/view.php?id=' . $newTaskId
+                : APP_URL . '/staff/tasks/view.php?id=' . $newTaskId;
+
+            $notifMessage = "Task {$task['task_number']} ({$task['title']}) has been transferred from {$task['dept_name']} to {$newDept['dept_name']}. New task {$newTaskNumber} has been created and assigned to you.";
+            if ($transferNote) $notifMessage .= "\n\nReason: {$transferNote}";
+
             notify(
                 $newAssignTo,
-                'Task Transferred to You',
-                "Task {$task['task_number']} has been transferred to {$newDept['dept_name']} and assigned to you." .
-                ($transferNote ? "\n\nNote: {$transferNote}" : ''),
+                "New Task from Transfer: {$newTaskNumber}",
+                $notifMessage,
                 'transfer',
-                APP_URL . '/staff/tasks/view.php?id=' . $id,
+                $taskUrl,
                 true,
                 [
                     'template' => 'task_transferred',
                     'task'     => [
-                        'id'          => $id,
-                        'task_number' => $task['task_number'],
+                        'id'          => $newTaskId,
+                        'task_number' => $newTaskNumber,
                         'title'       => $task['title'],
                         'department'  => $newDept['dept_name'],
                         'status'      => 'Not Started',
                         'due_date'    => $task['due_date'],
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company'     => $task['company_name'] ?? '',
+                        'priority'    => $task['priority'] ?? '',
                     ],
                     'remarks' => $transferNote,
                 ]
             );
         }
 
-        logActivity("Task transferred: {$task['task_number']} → {$newDept['dept_name']}", 'tasks');
-        setFlash('success', "Task transferred to {$newDept['dept_name']} successfully.");
+        logActivity("Task {$task['task_number']} transferred → new task {$newTaskNumber} in {$newDept['dept_name']}", 'tasks');
+       setFlash('success', "New task <strong>{$newTaskNumber}</strong> created in {$newDept['dept_name']}. Original task marked as Completed.");
         header("Location: view.php?id={$id}"); exit;
     }
 }
@@ -427,6 +502,12 @@ include '../../includes/header.php';
                        
                         <select name="assigned_to" id="assigned_to_sel" class="form-select">
                                 <option value="">-- Unassigned --</option>
+                            
+                                <option value="<?= $adminUser['id'] ?>"
+                                    <?= ((int)($task['assigned_to'] ?? 0) === (int)$adminUser['id']) ? 'selected' : '' ?>
+                                    style="font-weight:700;color:#16a34a;">
+                                    ★ Assign to myself (<?= htmlspecialchars($adminUser['full_name']) ?>)
+                                </option>
                                 <?php foreach ($deptStaff as $s):
                                     $sel = ((int)($task['assigned_to'] ?? 0) === (int)$s['id']) ? 'selected' : '';
                                     $label = $s['full_name'];
@@ -590,7 +671,7 @@ include '../../includes/header.php';
             </div>
             <div class="card-mis-body">
                 <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
-                    Transfer this task to another department for further processing.
+                    Mark this task as complete and forward to another department to continue the workflow.
                 </p>
                 <form method="POST" onsubmit="return confirm('Transfer this task?');">
                     <input type="hidden" name="csrf_token"    value="<?= csrfToken() ?>">
@@ -642,10 +723,19 @@ include '../../includes/header.php';
                         </div>
 
                         <div class="col-12 mt-1">
-                            <button type="submit" class="btn w-100 btn-sm"
-                                style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:.5rem;">
-                                <i class="fas fa-exchange-alt me-1"></i>Transfer Task
-                            </button>
+                            <?php $isAlreadyForwarded = in_array($task['status'], ['Completed', 'Transferred']); ?>
+                                
+                                <!-- Wrap the form submit button: -->
+                                <?php if ($isAlreadyForwarded): ?>
+                                    <div style="background:#fef2f2;color:#ef4444;padding:.6rem;border-radius:6px;font-size:.78rem;text-align:center;">
+                                        <i class="fas fa-lock me-1"></i>This task has already been forwarded or completed.
+                                    </div>
+                                <?php else: ?>
+                                    <button type="submit" class="btn w-100 btn-sm"
+                                        style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;padding:.5rem;">
+                                        <i class="fas fa-exchange-alt me-1"></i>Complete &amp; Forward to Department
+                                    </button>
+                                <?php endif; ?>
                         </div>
                     </div>
                 </form>

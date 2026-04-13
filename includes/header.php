@@ -22,9 +22,9 @@ $__user = isset($_SESSION['user_id']) ? (function () {
         rel="stylesheet" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet" />
-    <link href="<?= APP_URL ?>../assets/css/style.css" rel="stylesheet" />
-    <link href="<?= APP_URL ?>../assets/css/datatables.custom.css" rel="stylesheet" />
-    <link href="<?= APP_URL ?>../assets/css/dashboard.css" rel="stylesheet" />
+    <link href="<?= APP_URL ?>/../assets/css/style.css" rel="stylesheet" />
+    <link href="<?= APP_URL ?>/../assets/css/datatables.custom.css" rel="stylesheet" />
+    <link href="<?= APP_URL ?>/../assets/css/dashboard.css" rel="stylesheet" />
     <script>
         window.APP_URL = '<?= APP_URL ?>';
         window.APP_USER_ID = <?= $__user['id'] ?? 0 ?>;

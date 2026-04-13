@@ -14,7 +14,7 @@ $errors = [];
 $userId = (int) $_SESSION['2fa_pending_user'];
 $db = getDB();
 $user = $db->query("
-    SELECT u.*, r.role_name AS role
+    SELECT u.*, r.role_name
     FROM users u
     LEFT JOIN roles r ON r.id = u.role_id
     WHERE u.id = {$userId}
@@ -63,7 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $db->prepare("UPDATE users SET last_login=NOW() WHERE id=?")->execute([$user['id']]);
         logActivity('2FA Login', 'auth');
-        $role = strtolower($user['role_name'] ?? 'staff');
+        $_SESSION['role'] = $user['role_name'];
+        $role = strtolower($user['role_name']);
+                setRememberToken($user['id'], true);
+        session_regenerate_id(true);
         header('Location: ../' . $role . '/dashboard/');
         exit;
     } else {

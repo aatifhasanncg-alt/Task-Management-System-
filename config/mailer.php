@@ -6,7 +6,8 @@ use PHPMailer\PHPMailer\Exception;
 require_once __DIR__ . '/../vendor/PHPMailer/src/Exception.php';
 require_once __DIR__ . '/../vendor/PHPMailer/src/PHPMailer.php';
 require_once __DIR__ . '/../vendor/PHPMailer/src/SMTP.php';
-require_once __DIR__ .  '/config.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/db.php';
 
 function sendMail(string $toEmail, string $toName, string $subject, string $htmlBody): bool {
     try {
@@ -21,34 +22,33 @@ function sendMail(string $toEmail, string $toName, string $subject, string $html
         $mail->setFrom(MAIL_FROM, MAIL_FROM_NAME);
         $mail->addAddress($toEmail, $toName);
         $mail->isHTML(true);
-        $mail->Subject = $subject;
-        $mail->Body    = $htmlBody;
-        $mail->AltBody = strip_tags($htmlBody);
+        $mail->Subject   = $subject;
+        $mail->Body      = $htmlBody;
+        $mail->AltBody   = strip_tags($htmlBody);
+        $mail->SMTPDebug = 2;
+        $mail->Debugoutput = 'error_log';
         $mail->send();
+        error_log("Mailer Success — sent to {$toEmail}");
 
-        // Log email
         try {
             $db = getDB();
             $db->prepare("INSERT INTO email_logs(sent_to,subject,body,status) VALUES(?,?,?,?)")
                ->execute([$toEmail, $subject, $htmlBody, 'sent']);
-        } catch(Exception $e) {}
+        } catch (Exception $e) {}
 
         return true;
-    } catch(Exception $e) {
+
+    } catch (Exception $e) {
+        error_log("Mailer Error — {$toEmail}: " . $e->getMessage());
         try {
             $db = getDB();
             $db->prepare("INSERT INTO email_logs(sent_to,subject,body,status) VALUES(?,?,?,?)")
                ->execute([$toEmail, $subject, $e->getMessage(), 'failed']);
-        } catch(Exception $e2) {}
+        } catch (Exception $e2) {}
+
         return false;
     }
-    if (!$mail->send()) {
-        error_log("Mailer Error: " . $mail->ErrorInfo);
-    } else {
-        error_log("Mailer Success");
-    }
 }
-
 function sendGenericNotificationEmail(
     string $toEmail,
     string $toName,

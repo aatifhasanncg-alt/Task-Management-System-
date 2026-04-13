@@ -13,6 +13,10 @@ $filterDept = $_GET['dept'] ?? '';
 $filterStatus = $_GET['status'] ?? '';
 $filterBranch = (int) ($_GET['branch_id'] ?? 0);
 $filterStaff = (int) ($_GET['staff_id'] ?? 0);
+$filterCompany  = (int)($_GET['company_id'] ?? 0);
+$filterOverdue  = isset($_GET['overdue']) && $_GET['overdue'] == 1;
+$filterDateFrom = trim($_GET['date_from'] ?? '');
+$filterDateTo   = trim($_GET['date_to']   ?? '');
 $filterFY = trim($_GET['fy'] ?? '');
 $search = trim($_GET['search'] ?? '');
 $page = max(1, (int) ($_GET['page'] ?? 1));
@@ -44,6 +48,23 @@ if ($filterFY) {
     $where[] = 't.fiscal_year = ?';
     $params[] = $filterFY;
 }
+if ($filterCompany) {
+    $where[] = 't.company_id = ?';
+    $params[] = $filterCompany;
+}
+if ($filterOverdue) {
+    $where[] = 't.due_date < CURDATE()';
+    $where[] = 'ts.status_name != ?';
+    $params[] = 'Done';
+}
+if ($filterDateFrom) {
+    $where[] = 't.created_at >= ?';
+    $params[] = $filterDateFrom . ' 00:00:00';
+}
+if ($filterDateTo) {
+    $where[] = 't.created_at <= ?';
+    $params[] = $filterDateTo . ' 23:59:59';
+}
 if ($search) {
     $where[] = '(t.title LIKE ? OR t.task_number LIKE ? OR c.company_name LIKE ? OR u.full_name LIKE ?)';
     $params = array_merge($params, ["%$search%", "%$search%", "%$search%", "%$search%"]);
@@ -55,6 +76,20 @@ $fiscalYears = $db->query("
     FROM fiscal_years WHERE is_active=1
     ORDER BY fy_code DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
+$tileLink = APP_URL . '/executive/tasks/index.php?'
+                    . http_build_query([
+                        'dept'      => strtolower($d['dept_code']),
+                        'status'    => $sr['status_name'],
+                        'date_from' => $fromDate,
+                        'date_to'   => $toDate,
+                    ]);
+$overdueLink = APP_URL . '/executive/tasks/index.php?'
+                    . http_build_query([
+                        'dept'      => strtolower($d['dept_code']),
+                        'overdue'   => 1,
+                        'date_from' => $fromDate,
+                        'date_to'   => $toDate,
+                    ]);
 // Count
 $countSt = $db->prepare("
     SELECT COUNT(*) FROM tasks t
@@ -183,61 +218,107 @@ include '../../includes/header.php';
             </div>
 
             <!-- Filters -->
-            <div class="filter-bar mb-4">
-                <form method="GET" class="row g-2 align-items-end">
-                    <?php if ($filterStatus): ?>
-                        <input type="hidden" name="status" value="<?= htmlspecialchars($filterStatus) ?>">
+            <!-- Context banner — outside the form -->
+            <?php if ($filterCompany || $filterOverdue): ?>
+                <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;
+                            padding:.6rem 1rem;margin-bottom:.75rem;font-size:.82rem;color:#1d4ed8;
+                            display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+                    <i class="fas fa-filter"></i>
+                    <?php if ($filterCompany):
+                        try {
+                            $coStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
+                            $coStmt->execute([$filterCompany]);
+                            $coName = $coStmt->fetchColumn() ?: "ID #{$filterCompany}";
+                        } catch (Exception $e) { $coName = "ID #{$filterCompany}"; }
+                    ?>
+                        Showing tasks for company: <strong><?= htmlspecialchars($coName) ?></strong>
                     <?php endif; ?>
+                    <?php if ($filterOverdue): ?>
+                        <span style="color:#dc2626;font-weight:600;">
+                            <i class="fas fa-triangle-exclamation me-1"></i>Overdue tasks only
+                        </span>
+                    <?php endif; ?>
+                    <a href="index.php" style="margin-left:auto;font-size:.75rem;color:#9ca3af;text-decoration:none;">
+                        <i class="fas fa-times me-1"></i>Clear filters
+                    </a>
+                </div>
+            <?php endif; ?>
 
-                    <div class="col-md-3">
-                        <label class="form-label-mis">Search</label>
-                        <input type="text" name="search" class="form-control form-control-sm"
-                            placeholder="Task #, title, company, staff…" value="<?= htmlspecialchars($search) ?>">
-                    </div>
+            <!-- Filters -->
+            <div class="filter-bar mb-4">
+    <form method="GET" class="row g-2 align-items-end flex-nowrap">
 
-                    <div class="col-md-2">
-                        <label class="form-label-mis">Department</label>
-                        <select name="dept" class="form-select form-select-sm">
-                            <option value="">All Depts</option>
-                            <?php foreach ($allDepts as $d): ?>
-                                <option value="<?= strtolower($d['dept_code']) ?>"
-                                    <?= $filterDept === strtolower($d['dept_code']) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($d['dept_name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
+        <?php if ($filterStatus): ?>
+            <input type="hidden" name="status" value="<?= htmlspecialchars($filterStatus) ?>">
+        <?php endif; ?>
+        <?php if ($filterCompany): ?>
+            <input type="hidden" name="company_id" value="<?= $filterCompany ?>">
+        <?php endif; ?>
+        <?php if ($filterOverdue): ?>
+            <input type="hidden" name="overdue" value="1">
+        <?php endif; ?>
 
-                    <div class="col-md-2">
-                        <label class="form-label-mis">Branch</label>
-                        <select name="branch_id" class="form-select form-select-sm">
-                            <option value="">All Branches</option>
-                            <?php foreach ($allBranches as $b): ?>
-                                <option value="<?= $b['id'] ?>" <?= $filterBranch == $b['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($b['branch_name']) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
+        <div class="col">
+            <label class="form-label-mis">Search</label>
+            <input type="text" name="search" class="form-control form-control-sm"
+                placeholder="Task #, title, company…"
+                value="<?= htmlspecialchars($search) ?>">
+        </div>
+        <div class="col">
+            <label class="form-label-mis">Department</label>
+            <select name="dept" class="form-select form-select-sm">
+                <option value="">All Depts</option>
+                <?php foreach ($allDepts as $d): ?>
+                    <option value="<?= strtolower($d['dept_code']) ?>"
+                        <?= $filterDept === strtolower($d['dept_code']) ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($d['dept_name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div class="col">
+            <label class="form-label-mis">Branch</label>
+            <select name="branch_id" class="form-select form-select-sm">
+                <option value="">All Branches</option>
+                <?php foreach ($allBranches as $b): ?>
+                    <option value="<?= $b['id'] ?>"
+                        <?= $filterBranch == $b['id'] ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($b['branch_name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div class="col">
+            <label class="form-label-mis">FY</label>
+            <select name="fy" class="form-select form-select-sm">
+                <option value="">All</option>
+                <?php foreach ($fiscalYears as $fy): ?>
+                    <option value="<?= $fy ?>"
+                        <?= $filterFY === $fy ? 'selected' : '' ?>><?= $fy ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div class="col">
+            <label class="form-label-mis">Date From</label>
+            <input type="date" name="date_from" class="form-control form-control-sm"
+                   value="<?= htmlspecialchars($filterDateFrom) ?>">
+        </div>
+        <div class="col">
+            <label class="form-label-mis">Date To</label>
+            <input type="date" name="date_to" class="form-control form-control-sm"
+                   value="<?= htmlspecialchars($filterDateTo) ?>">
+        </div>
+        <div class="col-auto d-flex gap-1 align-items-end">
+            <button type="submit" class="btn btn-gold btn-sm">
+                <i class="fas fa-filter me-1"></i>Filter
+            </button>
+            <a href="index.php" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-times"></i>
+            </a>
+        </div>
 
-                    <div class="col-md-2">
-                        <label class="form-label-mis">Fiscal Year</label>
-                        <select name="fy" class="form-select form-select-sm">
-                            <option value="">All FY</option>
-                            <?php foreach ($fiscalYears as $fy): ?>
-                                <option value="<?= $fy ?>" <?= $filterFY === $fy ? 'selected' : '' ?>><?= $fy ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-
-                    <div class="col-md-2 d-flex gap-1">
-                        <button type="submit" class="btn btn-gold btn-sm w-100">
-                            <i class="fas fa-filter me-1"></i>Filter
-                        </button>
-                        <a href="index.php" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-times"></i>
-                        </a>
-                    </div>
+    </form>
+</div>
                 </form>
             </div>
 

@@ -83,7 +83,10 @@ $overdueStmt = $db->prepare("
 ");
 $overdueStmt->execute([$staffId]);
 $overdueTasks = $overdueStmt->fetchColumn();
-
+$lastSeen = formatLastSeen(
+    $staffUser['active_at'] ?? null,
+    $staffUser['last_login'] ?? null
+);
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
@@ -152,27 +155,47 @@ include '../../includes/header.php';
                         <div class="card-mis-body">
                             <div class="row g-3">
                                 <?php
+                                
                                 $accountFields = [
-                                    'Username' => $staffUser['username'],
-                                    'Role' => ucfirst($staffUser['role_name'] ?? '—'),
-                                    'Branch' => $staffUser['branch_name'] ?? '—',
+                                    'Username'   => $staffUser['username'],
+                                    'Role'       => ucfirst($staffUser['role_name'] ?? '—'),
+                                    'Branch'     => $staffUser['branch_name'] ?? '—',
                                     'Department' => $staffUser['dept_name'] ?? '—',
-                                    'Last Login' => $staffUser['last_login']
-                                        ? date('d M Y, H:i', strtotime($staffUser['last_login'])) : 'Never',
-                                    'Created' => date('d M Y', strtotime($staffUser['created_at'])),
-                                ];
-                                foreach ($accountFields as $label => $val):
-                                    ?>
+                                    'Created'    => date('d M Y', strtotime($staffUser['created_at'])),
+                                ];?>
+
+                                                                    <?php foreach ($accountFields as $label => $val): ?>
+                                        <div class="col-md-4">
+                                            <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                                <?= $label ?>
+                                            </div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;color:#1f2937;">
+                                                <?= htmlspecialchars($val) ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    
+                                    <!-- Last Active — rich UI -->
                                     <div class="col-md-4">
-                                        <div
-                                            style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
-                                            <?= $label ?>
+                                        <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                            Last Active
                                         </div>
-                                        <div style="font-size:.88rem;margin-top:.2rem;color:#1f2937;">
-                                            <?= htmlspecialchars($val) ?>
+                                        <div style="margin-top:.3rem;display:flex;align-items:center;gap:.5rem;">
+                                            <span style="width:8px;height:8px;border-radius:50%;
+                                                         background:<?= $lastSeen['dot'] ?>;
+                                                         flex-shrink:0;
+                                                         <?= $lastSeen['online'] ? 'box-shadow:0 0 0 3px rgba(16,185,129,.2);' : '' ?>
+                                                         display:inline-block;"></span>
+                                            <span style="font-size:.85rem;font-weight:600;color:<?= $lastSeen['color'] ?>;">
+                                                <?= htmlspecialchars($lastSeen['label']) ?>
+                                            </span>
                                         </div>
+                                        <?php if (!$lastSeen['online'] && ($staffUser['active_at'] ?? $staffUser['last_login'] ?? null)): ?>
+                                            <div style="font-size:.7rem;color:#d1d5db;margin-top:.1rem;">
+                                                <?= date('d M Y, H:i', strtotime($staffUser['active_at'] ?? $staffUser['last_login'])) ?>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
-                                <?php endforeach; ?>
 
                                 <!-- Status -->
                                 <div class="col-md-4">
@@ -329,8 +352,8 @@ include '../../includes/header.php';
                                     <div class="d-flex align-items-center gap-2">
                                         <code id="staffGaSecret"
                                             style="font-size:.88rem;font-weight:700;letter-spacing:.1em;flex:1;color:#1f2937;word-break:break-all;">
-                                    <?= htmlspecialchars($staffUser['ga_secret']) ?>
-                                </code>
+                                        <?= htmlspecialchars($staffUser['ga_secret']) ?>
+                                    </code>
                                         <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0"
                                             onclick="copyStaffSecret()">
                                             <i class="fas fa-copy" id="copyStaffIcon"></i>
@@ -376,7 +399,69 @@ include '../../includes/header.php';
 
                 </div>
             </div>
+            <?php
+            // In any user detail/profile page
+            require_once '../../config/role_manager.php';
 
+            $history = getUserRoleHistory($staffId);
+            $retiredIds = getRetiredEmployeeIds($staffId);
+            ?>
+
+            <!-- Role Change History -->
+            <div class="card-mis mt-4">
+                <div class="card-mis-header">
+                    <h5><i class="fas fa-history text-warning me-2"></i>Role Change History</h5>
+                </div>
+                <div class="card-mis-body p-0">
+                    <?php if (empty($history)): ?>
+                        <p class="text-muted p-3 mb-0">No role changes recorded.</p>
+                    <?php else: ?>
+                        <table class="table table-sm mb-0">
+                            <thead style="background:#f9fafb;font-size:.78rem;">
+                                <tr>
+                                    <th>Date</th>
+                                    <th>From</th>
+                                    <th>To</th>
+                                    <th>Old ID</th>
+                                    <th>New ID</th>
+                                    <th>Branch</th>
+                                    <th>Changed By</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody style="font-size:.82rem;">
+                                <?php foreach ($history as $h): ?>
+                                    <tr>
+                                        <td><?= date('M d, Y', strtotime($h['changed_at'])) ?></td>
+                                        <td>
+                                            <span class="badge bg-secondary">
+                                                <?= htmlspecialchars($h['old_role_name']) ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-warning text-dark">
+                                                <?= htmlspecialchars($h['new_role_name']) ?>
+                                            </span>
+                                        </td>
+                                        <td><code><?= htmlspecialchars($h['old_employee_id']) ?></code></td>
+                                        <td><code><?= htmlspecialchars($h['new_employee_id']) ?></code></td>
+                                        <td>
+                                            <?php if ($h['old_branch_name'] !== $h['new_branch_name']): ?>
+                                                <?= htmlspecialchars($h['old_branch_name'] ?? '—') ?>
+                                                → <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
+                                            <?php else: ?>
+                                                <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?= htmlspecialchars($h['changed_by_name']) ?></td>
+                                        <td class="text-muted"><?= htmlspecialchars($h['reason'] ?? '—') ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </div>
+            </div>
         </div>
         <?php include '../../includes/footer.php'; ?>
 

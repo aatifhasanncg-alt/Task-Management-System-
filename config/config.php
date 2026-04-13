@@ -1,12 +1,12 @@
 <?php
 // config/config.php — App-wide constants
 require_once __DIR__ . '/notify.php';
-
+date_default_timezone_set('Asia/Kathmandu');
 define('APP_NAME',    'MISPro');
 define('ORG_NAME',    'ASK Global Advisory Pvt. Ltd.');
 define('ORG_TAGLINE', 'At ASK business problems end, solutions begin');
 define('ORG_EMAIL',   'askglobaladvisory@gmail.com');
-define('APP_URL',     'http://localhost/mis');
+define('APP_URL',     'https://task.askglobaladvisory.com');
 define('APP_VERSION', '1.0.0');
 
 
@@ -44,6 +44,6 @@ define('MAIL_FROM_NAME', 'ASK Global Advisory MIS');
 define('SMTP_HOST',      'smtp.gmail.com');
 define('SMTP_PORT',      587);
 define('SMTP_USER',      'askglobaladvisory@gmail.com');
-define('SMTP_PASS',      'uwrv gcad iung ajmo');  // 16-char app password
+define('SMTP_PASS',      'fxnb ycqd niwu gtak');  // 16-char app password
 define('SMTP_SECURE',    'tls');
 

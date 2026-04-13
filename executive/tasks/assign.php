@@ -1,9 +1,9 @@
 <?php
 // executive/tasks/assign.php — Executive can assign tasks cross-branch
-require_once '../../config/db.php';
-require_once '../../config/config.php';
-require_once '../../config/session.php';
-require_once '../../config/mailer.php';
+require_once __DIR__ . '/../../config/db.php';
+require_once __DIR__ . '/../../config/config.php';
+require_once __DIR__ . '/../../config/session.php';
+require_once __DIR__ . '/../../config/mailer.php';
 requireExecutive();
 
 $db = getDB();

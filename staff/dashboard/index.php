@@ -7,6 +7,7 @@ requireAnyRole();
 $db   = getDB();
 $user = currentUser();
 $uid  = (int)$user['id'];
+updateActiveAt($db, (int)$user['id']); 
 $pageTitle = 'My Dashboard';
 
 // ── Scope: tasks assigned to OR transferred to this staff ─────────────────────
@@ -30,7 +31,6 @@ $byStatusStmt = $db->query("
     FROM tasks t
     JOIN task_status ts ON ts.id = t.status_id
     WHERE t.id IN ({$scopeSub})
-      AND ts.status_name != 'Corporate Team'
     GROUP BY ts.status_name
 ");
 $byStatus = array_column($byStatusStmt->fetchAll(), 'cnt', 'status_name');

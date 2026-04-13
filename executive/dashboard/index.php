@@ -6,6 +6,7 @@ requireExecutive();
 
 $db = getDB();
 $user = currentUser();
+updateActiveAt($db, (int)$user['id']);
 $pageTitle = 'Executive Dashboard';
 
 // ── Task statuses from DB ──

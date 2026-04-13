@@ -29,6 +29,7 @@ $fiscalYears = $db->query("
 ")->fetchAll(PDO::FETCH_COLUMN);
 
 $filterFY = $_GET['fiscal_year'] ?? '';
+$filterBank = trim($_GET['search_bank'] ?? '');
 
 // ── Handle: Add bank reference (admin only) ───────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bank']) && $userRole === 'admin') {
@@ -39,6 +40,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bank']) && $userR
         try {
             $db->prepare("INSERT INTO bank_references (bank_name, address, created_by) VALUES (?, ?, ?)")
                ->execute([$bankName, $address, $user['id']]);
+            
+            $newBankId = $db->lastInsertId();
+
+            // ── Auto-create a summary row for this bank in the admin's branch ──
+            $currentFyStmt = $db->query("SELECT fy_code FROM fiscal_years WHERE is_current=1 LIMIT 1");
+            $currentFyCode = $currentFyStmt->fetchColumn() ?: '';
+
+            if ($userBranch && $currentFyCode) {
+                $db->prepare("
+                    INSERT IGNORE INTO bank_summary
+                        (bank_reference_id, branch_id, fiscal_year,
+                         total_files, completed, hbc, pending, support, cancelled, is_checked)
+                    VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0)
+                ")->execute([$newBankId, $userBranch['id'], $currentFyCode]);
+            }
+
             setFlash('success', "Bank \"{$bankName}\" added.");
         } catch (Exception $e) {
             setFlash('error', 'Bank name already exists.');
@@ -47,6 +64,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bank']) && $userR
     header('Location: summary.php'); exit;
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_summary']) && $userRole === 'admin') {
+    verifyCsrf();
+    $summaryId  = (int)($_POST['summary_id']  ?? 0);
+    $totalFiles = (int)($_POST['total_files'] ?? 0);
+    $completed  = (int)($_POST['completed']   ?? 0);
+    $hbc        = (int)($_POST['hbc']         ?? 0);
+    $pending    = (int)($_POST['pending']      ?? 0);
+    $support    = (int)($_POST['support']      ?? 0);
+    $cancelled  = (int)($_POST['cancelled']   ?? 0);
+
+    // ── Auto-check: sum of statuses must equal total_files ────────────────────
+    $sumOfStatuses = $completed + $hbc + $pending + $support + $cancelled;
+    $isChecked     = ($sumOfStatuses === $totalFiles && $totalFiles > 0) ? 1 : 0;
+
+    if ($summaryId) {
+        $db->prepare("
+            UPDATE bank_summary SET
+                total_files = ?, completed  = ?, hbc       = ?,
+                pending     = ?, support    = ?, cancelled  = ?,
+                is_checked  = ?, updated_at = NOW()
+            WHERE id = ?
+        ")->execute([
+            $totalFiles, $completed, $hbc,
+            $pending, $support, $cancelled,
+            $isChecked, $summaryId
+        ]);
+        setFlash('success', $isChecked
+            ? 'Updated — ✓ totals balanced.'
+            : 'Updated — ⚠ totals do not balance.'
+        );
+    }
+    header('Location: summary.php' . ($filterFY ? '?fiscal_year=' . urlencode($filterFY) : '')); exit;
+}
 // ── Fetch summary — ONLY for the logged-in user's branch ─────────────────────
 $where  = ['1=1'];
 $params = [];
@@ -58,6 +108,10 @@ if ($userBranch) {
 if (!empty($filterFY)) {
     $where[]  = 'bs.fiscal_year = ?';
     $params[] = $filterFY;
+}
+if (!empty($filterBank)) {
+    $where[]  = 'br.bank_name LIKE ?';
+    $params[] = '%' . $filterBank . '%';
 }
 
 $ws = implode(' AND ', $where);
@@ -132,6 +186,12 @@ else                           include '../../includes/sidebar_staff.php';
 <!-- Fiscal Year Filter -->
 <div class="filter-bar mb-4 w-100">
     <form method="GET" class="row g-2 align-items-end w-100">
+        <div class="col-md-3">
+            <label class="form-label-mis">Search Bank</label>
+            <input type="text" name="search_bank" class="form-control form-control-sm"
+                placeholder="Type bank name..."
+                value="<?= htmlspecialchars($_GET['search_bank'] ?? '') ?>">
+        </div>
         <div class="col-md-3">
             <label class="form-label-mis">Fiscal Year</label>
             <select name="fiscal_year" class="form-select form-select-sm">
@@ -230,12 +290,19 @@ else                           include '../../includes/sidebar_staff.php';
                         <span style="background:#fef2f2;color:#ef4444;padding:.2rem .5rem;border-radius:4px;font-size:.78rem;"><?= $row['cancelled'] ?></span>
                     </td>
                     <td style="text-align:center;">
-                        <?php if ($row['is_checked']): ?>
-                            <span style="background:#ecfdf5;color:#10b981;padding:.2rem .6rem;border-radius:4px;font-size:.75rem;font-weight:700;">TRUE</span>
-                        <?php else: ?>
-                            <span style="background:#fef2f2;color:#ef4444;padding:.2rem .6rem;border-radius:4px;font-size:.75rem;font-weight:700;">FALSE</span>
-                        <?php endif; ?>
-                    </td>
+                        <?php
+                        $sumCheck = $row['completed'] + $row['hbc'] + $row['pending'] + $row['support'] + $row['cancelled'];
+                        $balanced = ($row['total_files'] > 0 && $sumCheck === (int)$row['total_files']);
+                        ?>
+                        <span title="<?= $balanced ? 'All statuses sum to total files' : "Sum ({$sumCheck}) ≠ Total ({$row['total_files']})" ?>"
+                              style="
+                                background:<?= $balanced ? '#ecfdf5' : '#fef2f2' ?>;
+                                color:<?= $balanced ? '#10b981' : '#ef4444' ?>;
+                                padding:.2rem .6rem;border-radius:4px;
+                                font-size:.75rem;font-weight:700;cursor:help;">
+                            <?= $balanced ? '✓ OK' : '✗ OFF' ?>
+                        </span>
+</td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>

@@ -124,7 +124,6 @@ $allStatuses = $db->query("
     SELECT id, status_name,  COALESCE(color,    '#9ca3af') AS color,
            COALESCE(bg_color, '#f3f4f6') AS bg_color,
            COALESCE(icon,     'fa-circle-dot') AS icon FROM task_status
-    WHERE status_name != 'Corporate Team'
     ORDER BY id
 ")->fetchAll();
 

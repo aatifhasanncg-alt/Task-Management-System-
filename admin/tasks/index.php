@@ -19,6 +19,9 @@ $adminDeptId = (int) ($adminUser['department_id'] ?? 0);
 // Filters
 $filterStatus = $_GET['status'] ?? '';
 $filterStaff = (int) ($_GET['staff_id'] ?? 0);
+$filterCompany   = (int)($_GET['company_id'] ?? 0);
+$filterDateFrom = trim($_GET['date_from'] ?? '');
+$filterDateTo   = trim($_GET['date_to']   ?? '');
 $filterDept = (int) ($_GET['dept_id'] ?? 0);
 $filterFY = trim($_GET['fy'] ?? '');
 $search = trim($_GET['search'] ?? '');
@@ -98,6 +101,12 @@ if ($filterStatus) {
 if ($filterStaff) {
     $where[] = 't.assigned_to = ?';
     $params[] = $filterStaff;
+}
+if ($filterDateFrom) { $where[] = 'c.created_at >= ?'; $params[] = $filterDateFrom . ' 00:00:00'; }
+if ($filterDateTo)   { $where[] = 'c.created_at <= ?'; $params[] = $filterDateTo   . ' 23:59:59'; }
+if ($filterCompany) {
+    $where[] = 't.company_id = ?';
+    $params[] = $filterCompany;
 }
 if ($filterDept) {
     $where[] = 't.department_id = ?';
@@ -346,13 +355,24 @@ include '../../includes/header.php';
                     <?php if ($filterStatus): ?>
                         <input type="hidden" name="status" value="<?= htmlspecialchars($filterStatus) ?>">
                     <?php endif; ?>
-
+<?php if ($filterCompany): ?>
+                        <input type="hidden" name="company_id" value="<?= $filterCompany ?>">
+                    <?php endif; ?>
                     <div class="col-md-3">
                         <label class="form-label-mis">Search</label>
                         <input type="text" name="search" class="form-control form-control-sm"
                             placeholder="Task #, title, company, staff..." value="<?= htmlspecialchars($search) ?>">
                     </div>
-
+                <div class="col-md-2">
+                            <label class="form-label-mis">Date From</label>
+                            <input type="date" name="date_from" class="form-control form-control-sm"
+                                   value="<?= htmlspecialchars($_GET['date_from'] ?? '') ?>">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label-mis">Date To</label>
+                            <input type="date" name="date_to" class="form-control form-control-sm"
+                                   value="<?= htmlspecialchars($_GET['date_to'] ?? '') ?>">
+                        </div>
 
                     <?php if ($showAll): ?>
                         <div class="col-md-2">

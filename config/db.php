@@ -2,7 +2,7 @@
 // config/db.php — PDO Database Connection
 
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'mis_ask');
+define('DB_NAME', 'askgloba_task');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_CHARSET', 'utf8mb4');
@@ -22,5 +22,6 @@ function getDB(): PDO {
             die(json_encode(['error' => 'Database connection failed.']));
         }
     }
+    $pdo->exec("SET time_zone = '+05:45'");
     return $pdo;
 }

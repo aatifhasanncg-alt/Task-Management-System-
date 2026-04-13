@@ -1,8 +1,5 @@
 {
     "require": {
-        "phpoffice/phpspreadsheet": "^2.1",
-        "phpmailer/phpmailer": "^7.0",
-        "league/oauth2-client": "^2.9",
         "tecnickcom/tcpdf": "^6.11"
     }
 }

@@ -23,14 +23,13 @@
 require_once '../config/db.php';
 require_once '../config/config.php';
 require_once '../config/session.php';
-
 requireAnyRole();
 
 // ── Load TCPDF ────────────────────────────────────────────────
 if (file_exists(__DIR__ . '/../vendor/autoload.php')) {
     require_once __DIR__ . '/../vendor/autoload.php';
 } elseif (file_exists(__DIR__ . '/../vendor/tecnickcom/tcpdf/tcpdf.php')) {
-    require_once __DIR__ . '/../vendor/tecnickcom/tcpdf/tcpdf.php';
+    require_once __DIR__ . '/../vendor/tecnickcom/tcpdf.php';
 } else {
     die('TCPDF not found. Run: composer require tecnickcom/tcpdf');
 }
@@ -778,9 +777,11 @@ else {
     $pdf->Cell(0, 10, 'Unknown report module: ' . htmlspecialchars($module), 0, 1, 'C');
     $filename = 'Report_' . date('Ymd') . '.pdf';
 }
-
+if (ob_get_length()) {
+    ob_end_clean();
+}
 // ── Output PDF ────────────────────────────────────────────────
-ob_end_clean();
+
 header('Content-Type: application/pdf');
 header('Content-Disposition: attachment; filename="' . $filename . '"');
 $pdf->Output($filename, 'D');

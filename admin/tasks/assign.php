@@ -69,7 +69,7 @@ if (isExecutive()) {
         LEFT JOIN branches b    ON b.id = u.branch_id
         LEFT JOIN departments d ON d.id = u.department_id
         LEFT JOIN roles r       ON r.id = u.role_id
-        WHERE r.role_name     = 'staff'
+        WHERE r.role_name     IN('staff','admin')
           AND u.is_active     = 1
           AND u.department_id = ?
         ORDER BY b.branch_name, u.full_name
@@ -208,19 +208,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notifMessage .= " has been assigned to you";
             if ($dueDate) $notifMessage .= " · Due " . date('M j, Y', strtotime($dueDate));
             $notifMessage .= ".";
-
+            $assigneeStmt = $db->prepare("
+                SELECT r.role_name FROM users u
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE u.id = ?
+            ");
+            $assigneeStmt->execute([$assignTo]);
+            $assigneeRole = $assigneeStmt->fetchColumn();
+        
+            $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
+                ? APP_URL . '/admin/tasks/view.php?id=' . $taskId
+                : APP_URL . '/staff/tasks/view.php?id=' . $taskId;
+        
             notify(
                 $assignTo,
                 "New Task: {$title}",
                 $notifMessage,
                 'task',
-                APP_URL . '/staff/tasks/view.php?id=' . $taskId,
+                $taskUrl,
                 true,
                 [
-                    'template'     => 'task_assigned',
-                    'task_number'  => $taskNumber,
-                    'company_name' => $companyName,
-                    'task'         => [
+                    'template' => 'task_assigned',
+                    'task'     => [
                         'id'          => $taskId,
                         'task_number' => $taskNumber,
                         'title'       => $title,
@@ -410,7 +419,13 @@ include '../../includes/header.php';
                     <div class="col-md-8">
                         <label class="form-label-mis">Assign To</label>
                         <select name="assigned_to" id="assigned_to_select" class="form-select">
-                            <option value="">-- Unassigned --</option>
+                            <option value="">-- Unassigned --</option> 
+                                <option value="<?= $adminUser['id'] ?>"
+                                <?= ($_POST['assigned_to'] ?? '') == $adminUser['id'] ? 'selected' : '' ?>
+                                style="font-weight:700;color:#16a34a;">
+                                ★ Assign to myself (<?= htmlspecialchars($adminUser['full_name']) ?>)
+                            </option>
+
                             <?php
                             $byBranch = [];
                             foreach ($staffList as $s) {

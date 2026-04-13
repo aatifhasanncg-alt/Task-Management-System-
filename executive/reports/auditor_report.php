@@ -27,6 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
     $fReg = trim($_POST['f_reg'] ?? '');
     $icanMemNo = trim($_POST['ICAN_mem_no'] ?? '');
     $class = trim($_POST['class'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $email = trim($_POST['email'] ?? '');
     $address = trim($_POST['address'] ?? '');
     $maxCountable = (int) ($_POST['max_countable'] ?? 100);
     $isActive = isset($_POST['is_active']) ? 1 : 0;
@@ -39,17 +41,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
 
     if ($auditorId > 0) {
         $stmt = $db->prepare("
-            UPDATE auditors SET
-                auditor_name=?, firm_name=?, pan_number=?, cop_no=?,
-                f_reg=?, ICAN_mem_no=?, class=?, address=?, is_active=?,
-                max_countable=?
-            WHERE id=?
-        ");
-        $stmt->execute([
-            $auditorName, $firmName, $panNumber, $copNo,
-            $fReg, $icanMemNo, $class, $address, $isActive,
-            $maxCountable, $auditorId
-        ]);
+        UPDATE auditors SET
+            auditor_name=?, firm_name=?, pan_number=?, cop_no=?,
+            f_reg=?, ICAN_mem_no=?, class=?, address=?, phone=?, email=?, is_active=?,
+            max_countable=?
+        WHERE id=?
+    ");
+    
+    $stmt->execute([
+        $auditorName, $firmName, $panNumber, $copNo,
+        $fReg, $icanMemNo, $class, $address, $phone, $email, $isActive,
+        $maxCountable, $auditorId
+    ]);
         setFlash('success', 'Auditor updated successfully.');
 
         // ── Update current FY quota override and used count ───────────────────
@@ -98,12 +101,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
     } else {
         $stmt = $db->prepare("
             INSERT INTO auditors
-                (auditor_name, firm_name, pan_number, cop_no, f_reg, ICAN_mem_no, class, address, is_active, max_countable)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                (auditor_name, firm_name, pan_number, cop_no, f_reg, ICAN_mem_no, class, address, phone, email, is_active, max_countable)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ");
+        
         $stmt->execute([
             $auditorName, $firmName, $panNumber, $copNo,
-            $fReg, $icanMemNo, $class, $address, $isActive, $maxCountable
+            $fReg, $icanMemNo, $class, $address, $phone, $email, $isActive, $maxCountable
         ]);
         setFlash('success', 'Auditor added successfully.');
     }
@@ -134,7 +138,7 @@ $ws = implode(' AND ', $where);
 $stmt = $db->prepare("
     SELECT
         a.id, a.auditor_name, a.firm_name, a.pan_number, a.cop_no,
-        a.f_reg, a.ICAN_mem_no, a.class, a.address, a.is_active,
+        a.f_reg, a.ICAN_mem_no, a.class, a.phone, a.email, a.address, a.is_active,
         a.max_countable,
         COALESCE(q.countable_count, 0)      AS countable_count,
         COALESCE(q.uncountable_count, 0)    AS uncountable_count,
@@ -231,7 +235,7 @@ include '../../includes/header.php';
                         </select>
                     </div>
                     <div class="col-md-2 d-flex gap-1">
-                        <button class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i> Filter</button>
+                        <button class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i></button>
                         <a href="auditor_report.php" class="btn btn-outline-secondary btn-sm"><i
                                 class="fas fa-times"></i></a>
                     </div>
@@ -446,6 +450,15 @@ include '../../includes/header.php';
                                             <?= isCoreAdmin() ? '' : 'readonly' ?>></textarea>
                                     </div>
                                     <div class="col-md-6">
+                                        <label class="form-label-mis">Phone</label>
+                                        <input type="text" name="phone" id="phone" class="form-control form-control-sm">
+                                    </div>
+                                    
+                                    <div class="col-md-6">
+                                        <label class="form-label-mis">Email</label>
+                                        <input type="email" name="email" id="email" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-6">
                                         <label class="form-label-mis">
                                             Max Countable Limit
                                             <span style="font-size:.68rem;color:#9ca3af;margin-left:.3rem;">
@@ -479,7 +492,7 @@ include '../../includes/header.php';
                                             placeholder="Current count this FY"
                                             <?= isCoreAdmin() ? '' : 'readonly' ?>>
                                         <small style="font-size:.65rem;color:#ef4444;">
-                                            ⚠ Editing this directly adjusts the quota counter. Use carefully.
+                                             <i class="fas fa-exclamation-triangle me-1"></i> Editing this directly adjusts the quota counter. Use carefully.
                                         </small>
                                     </div>
                                     <div class="col-12">
@@ -515,6 +528,8 @@ include '../../includes/header.php';
                     document.getElementById('cop_no').value = auditor.cop_no || '';
                     document.getElementById('f_reg').value = auditor.f_reg || '';
                     document.getElementById('ICAN_mem_no').value = auditor.ICAN_mem_no || '';
+                    document.getElementById('phone').value = auditor.phone || '';
+                    document.getElementById('email').value = auditor.email || '';
                     document.getElementById('class').value = auditor.class || '';
                     document.getElementById('address').value = auditor.address || '';
                     document.getElementById('max_countable').value = auditor.max_countable || 100;

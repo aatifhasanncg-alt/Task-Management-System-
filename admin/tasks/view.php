@@ -11,8 +11,7 @@ if (!function_exists('getFiscalYearId')) {
 if (!function_exists('getFiscalYearId')) {
     function getFiscalYearId(PDO $db, ?string $code): ?int
     {
-        if (!$code)
-            return null;
+        if (!$code) return null;
         try {
             $s = $db->prepare("SELECT id FROM fiscal_years WHERE fy_code=? LIMIT 1");
             $s->execute([$code]);
@@ -28,35 +27,51 @@ if (!function_exists('syncTaskFiscalYear')) {
     {
         try {
             $db->prepare("CALL sync_task_fiscal_year(?)")->execute([$taskId]);
-        } catch (Exception $e) {
-        }
+        } catch (Exception $e) {}
     }
 }
 if (!function_exists('fiscalYearSelect')) {
     function fiscalYearSelect(string $name, ?string $selected, array $fys, string $class = 'form-select form-select-sm', bool $required = false): string
     {
         $req = $required ? ' required' : '';
-        $html = '<select name="' . htmlspecialchars($name) . '" class="' . $class . '"' . $req . ">
-";
-        $html .= '    <option value="">-- Select FY --</option>' . "
-";
+        $html = '<select name="' . htmlspecialchars($name) . '" class="' . $class . '"' . $req . ">\n";
+        $html .= '    <option value="">-- Select FY --</option>' . "\n";
         foreach ($fys as $fy) {
             $isSel = ((string) $selected === (string) $fy['fy_code']);
-            $sel = $isSel ? ' selected' : '';
-            $star = $fy['is_current'] ? ' ★ Current' : '';
-            $lbl = htmlspecialchars($fy['fy_label'] ?: $fy['fy_code']);
-            $val = htmlspecialchars($fy['fy_code']);
+            $sel   = $isSel ? ' selected' : '';
+            $star  = $fy['is_current'] ? ' ★ Current' : '';
+            $lbl   = htmlspecialchars($fy['fy_label'] ?: $fy['fy_code']);
+            $val   = htmlspecialchars($fy['fy_code']);
             $style = $fy['is_current'] ? ' style="font-weight:700;color:#16a34a;"' : '';
-            $html .= '    <option value="' . $val . '"' . $sel . $style . '>' . $lbl . $star . '</option>' . "
-";
+            $html .= '    <option value="' . $val . '"' . $sel . $style . '>' . $lbl . $star . '</option>' . "\n";
         }
         $html .= '</select>';
         return $html;
     }
 }
-requireAdmin();
 
-$db = getDB();
+// ── Determine if admin or staff ───────────────────────────────────────────────
+$isAdmin = false;
+$isStaff = false;
+if (function_exists('requireAdmin')) {
+    // try admin first, fall back to staff
+    $currentRole = $_SESSION['role'] ?? $_SESSION['user']['role'] ?? '';
+    if (in_array($currentRole, ['admin', 'executive', 'superadmin'])) {
+        $isAdmin = true;
+    } else {
+        $isStaff = true;
+    }
+} else {
+    requireLogin();
+    $isStaff = true;
+}
+// If neither guard is satisfied, check session
+if (!$isAdmin && !$isStaff) {
+    requireLogin();
+    $isStaff = true;
+}
+
+$db   = getDB();
 $user = currentUser();
 
 $id = (int) ($_GET['id'] ?? 0);
@@ -65,7 +80,7 @@ if (!$id) {
     exit;
 }
 
-// ── Fiscal years — always from fiscal_years DB table ─────────────────────────
+// ── Fiscal years ──────────────────────────────────────────────────────────────
 $fys = [];
 try {
     $fys = $db->query("
@@ -75,26 +90,19 @@ try {
         ORDER BY fy_code DESC
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    error_log("view.php: fiscal_years query failed: " . $e->getMessage());
-    // Fallback to constant if table missing
     if (defined('FISCAL_YEARS')) {
         foreach (FISCAL_YEARS as $fyc) {
-            $fys[] = ['id' => null, 'fy_code' => $fyc, 'fy_label' => $fyc, 'is_current' => (defined('FISCAL_YEAR') && $fyc === FISCAL_YEAR) ? 1 : 0];
+            $fys[] = ['id' => null, 'fy_code' => $fyc, 'fy_label' => $fyc,
+                      'is_current' => (defined('FISCAL_YEAR') && $fyc === FISCAL_YEAR) ? 1 : 0];
         }
     }
 }
 $currentFy = '';
-foreach ($fys as $fy) {
-    if ($fy['is_current']) {
-        $currentFy = $fy['fy_code'];
-        break;
-    }
-}
-if (!$currentFy && !empty($fys))
-    $currentFy = $fys[0]['fy_code'];
-if (!$currentFy && defined('FISCAL_YEAR'))
-    $currentFy = FISCAL_YEAR;
+foreach ($fys as $fy) { if ($fy['is_current']) { $currentFy = $fy['fy_code']; break; } }
+if (!$currentFy && !empty($fys))    $currentFy = $fys[0]['fy_code'];
+if (!$currentFy && defined('FISCAL_YEAR')) $currentFy = FISCAL_YEAR;
 
+// ── Current user's dept ───────────────────────────────────────────────────────
 $adminStmt = $db->prepare("SELECT * FROM users WHERE id = ?");
 $adminStmt->execute([$user['id']]);
 $adminUser = $adminStmt->fetch();
@@ -103,6 +111,7 @@ $adminDeptStmt = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
 $adminDeptStmt->execute([$adminUser['department_id'] ?? 0]);
 $adminDeptCode = $adminDeptStmt->fetchColumn() ?: '';
 
+// ── Task ──────────────────────────────────────────────────────────────────────
 $taskStmt = $db->prepare("
     SELECT t.*,a.auditor_name,
            d.dept_name, d.dept_code, d.color, d.icon AS dept_icon,
@@ -130,12 +139,21 @@ if (!$task) {
     exit;
 }
 
-$canEditDept = ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code']);
+// Staff can only view their own assigned tasks
+if ($isStaff && $task['assigned_to'] != $user['id']) {
+    setFlash('error', 'Access denied.');
+    header('Location: index.php');
+    exit;
+}
 
-// ── Load dept detail ──────────────────────────────────────────────────────────
+// canEditDept: admin of same dept OR any staff assigned to this task
+$canEditDept = ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code'])
+             || ($isStaff && $task['assigned_to'] == $user['id']);
+
+// ── Dept detail table map ─────────────────────────────────────────────────────
 $detailTableMap = ['RETAIL' => 'task_retail', 'TAX' => 'task_tax', 'BANK' => 'task_banking', 'CORP' => 'task_corporate', 'FIN' => 'task_finance'];
-$detailTable = $detailTableMap[$task['dept_code']] ?? null;
-$detail = null;
+$detailTable    = $detailTableMap[$task['dept_code']] ?? null;
+$detail         = null;
 
 if ($detailTable) {
     try {
@@ -167,24 +185,20 @@ if ($detailTable) {
                 break;
 
             case 'CORP':
-                try {
-                    $dSt = $db->prepare("
-                        SELECT tc.*,
-                               cg.grade_name AS grade_name,
-                               au.full_name  AS assigned_to_name,
-                               fb.full_name  AS finalised_by_name,
-                               fy.fy_label   AS fiscal_year_label
-                        FROM task_corporate tc
-                        LEFT JOIN corporate_grades cg ON cg.id = tc.grade_id
-                        LEFT JOIN users            au ON au.id = tc.assigned_to
-                        LEFT JOIN users            fb ON fb.id = tc.finalised_by
-                        LEFT JOIN fiscal_years     fy ON fy.id = tc.fiscal_year_id
-                        WHERE tc.task_id = ?");
-                    $dSt->execute([$id]);
-                    $detail = $dSt->fetch();
-                } catch (Exception $e) {
-                    $detail = null;
-                }
+                $dSt = $db->prepare("
+                    SELECT tc.*,
+                           cg.grade_name AS grade_name,
+                           au.full_name  AS assigned_to_name,
+                           fb.full_name  AS finalised_by_name,
+                           fy.fy_label   AS fiscal_year_label
+                    FROM task_corporate tc
+                    LEFT JOIN corporate_grades cg ON cg.id = tc.grade_id
+                    LEFT JOIN users            au ON au.id = tc.assigned_to
+                    LEFT JOIN users            fb ON fb.id = tc.finalised_by
+                    LEFT JOIN fiscal_years     fy ON fy.id = tc.fiscal_year_id
+                    WHERE tc.task_id = ?");
+                $dSt->execute([$id]);
+                $detail = $dSt->fetch();
                 break;
 
             case 'TAX':
@@ -193,14 +207,12 @@ if ($detailTable) {
                            tot.office_name   AS assigned_office_name,
                            tot.address       AS assigned_office_default_address,
                            tyt.tax_type_name AS tax_type_name,
-                           ts2.status_name   AS status_name,
                            tcs.status_name   AS tax_clearance_status_name,
                            au.full_name AS assigned_to_name,   fr.full_name AS file_received_by_name,
                            ub.full_name AS updated_by_name,    vb.full_name AS verify_by_name
                     FROM task_tax tt
                     LEFT JOIN tax_office_types tot ON tot.id = tt.assigned_office_id
                     LEFT JOIN tax_type tyt          ON tyt.id = tt.tax_type_id
-                    LEFT JOIN task_status ts2       ON ts2.id = tt.status_id
                     LEFT JOIN task_status tcs       ON tcs.id = tt.tax_clearance_status_id
                     LEFT JOIN users au ON au.id=tt.assigned_to
                     LEFT JOIN users fr ON fr.id=tt.file_received_by
@@ -234,9 +246,8 @@ if ($detailTable) {
                            ps.status_name   AS payment_status_name,
                            tcs.status_name  AS tax_clearance_status_name
                     FROM task_finance tf
-    
-                    LEFT JOIN task_status ps            ON ps.id=tf.payment_status_id
-                    LEFT JOIN task_status tcs           ON tcs.id=tf.tax_clearance_status_id
+                    LEFT JOIN task_status ps  ON ps.id=tf.payment_status_id
+                    LEFT JOIN task_status tcs ON tcs.id=tf.tax_clearance_status_id
                     WHERE tf.task_id = ?");
                 $dSt->execute([$id]);
                 $detail = $dSt->fetch();
@@ -249,15 +260,15 @@ if ($detailTable) {
 
 // ── Lookups ───────────────────────────────────────────────────────────────────
 $taskStatuses = $db->query("SELECT id, status_name, color, bg_color FROM task_status ORDER BY id")->fetchAll();
-$yesNo = $db->query("SELECT id, value FROM yes_no ORDER BY id")->fetchAll();
-$allStaff = $db->query("
+$yesNo        = $db->query("SELECT id, value FROM yes_no ORDER BY id")->fetchAll();
+$allStaff     = $db->query("
     SELECT u.id, u.full_name FROM users u
     LEFT JOIN departments d ON d.id=u.department_id
     JOIN roles r ON r.id=u.role_id
     WHERE r.role_name IN ('staff','admin') AND u.is_active=1
       AND (d.dept_code IS NULL OR d.dept_code != 'CORE')
     ORDER BY r.role_name, u.full_name")->fetchAll();
-$allFinal = $db->query("
+$allFinal     = $db->query("
     SELECT u.id, u.full_name, u.employee_id, r.role_name FROM users u
     LEFT JOIN departments d ON d.id = u.department_id
     JOIN roles r ON r.id = u.role_id
@@ -265,6 +276,19 @@ $allFinal = $db->query("
       AND (d.dept_code IS NULL OR d.dept_code != 'CORE') AND r.role_name IN ('admin','executive')
     ORDER BY u.full_name ASC
 ")->fetchAll();
+
+// ── All departments & branches (for transfer) ─────────────────────────────────
+$allDepts    = $db->query("SELECT id, dept_name, dept_code FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
+$allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
+$allStaffTransfer = $db->query("
+    SELECT u.id, u.full_name, u.department_id, d.dept_code
+    FROM users u
+    LEFT JOIN departments d ON d.id = u.department_id
+    JOIN roles r ON r.id = u.role_id
+    WHERE r.role_name IN ('staff','admin') AND u.is_active = 1
+    ORDER BY u.full_name
+")->fetchAll();
+
 // ── Company data ──────────────────────────────────────────────────────────────
 $companyData = null;
 if ($task['company_id']) {
@@ -284,11 +308,11 @@ if ($task['company_id']) {
     $cpStmt->execute([$task['company_id']]);
     $companyData = $cpStmt->fetch();
 }
-$companyPanRow = $companyData ? ['pan_number' => $companyData['pan_number'], 'company_name' => $companyData['company_name']] : null;
+$companyPanRow  = $companyData ? ['pan_number' => $companyData['pan_number'], 'company_name' => $companyData['company_name']] : null;
 $companyTypeVal = $companyData['company_type_name'] ?? '';
 
-// ── Assigned-to locked in all dept forms ─────────────────────────────────────
-$taskAssignedToId = $task['assigned_to'] ?? null;
+// ── Assigned-to from task ─────────────────────────────────────────────────────
+$taskAssignedToId   = $task['assigned_to'] ?? null;
 $taskAssignedToName = $task['assigned_to_name'] ?? '—';
 
 // ── Comments & Workflow ───────────────────────────────────────────────────────
@@ -297,17 +321,16 @@ try {
     $c2 = $db->prepare("SELECT tc.*,u.full_name FROM task_comments tc LEFT JOIN users u ON u.id=tc.user_id WHERE tc.task_id=? ORDER BY tc.created_at ASC");
     $c2->execute([$id]);
     $comments = $c2->fetchAll();
-} catch (Exception $e) {
-}
+} catch (Exception $e) {}
 try {
     $w2 = $db->prepare("SELECT tw.*,u1.full_name AS from_name,u2.full_name AS to_name,d1.dept_name AS from_dept,d2.dept_name AS to_dept FROM task_workflow tw LEFT JOIN users u1 ON u1.id=tw.from_user_id LEFT JOIN users u2 ON u2.id=tw.to_user_id LEFT JOIN departments d1 ON d1.id=tw.from_dept_id LEFT JOIN departments d2 ON d2.id=tw.to_dept_id WHERE tw.task_id=? ORDER BY tw.created_at ASC");
     $w2->execute([$id]);
     $workflow = $w2->fetchAll();
-} catch (Exception $e) {
-}
-// ── Follow-up history ─────────────────────────────────────────────────────
+} catch (Exception $e) {}
+
+// ── Follow-up history ─────────────────────────────────────────────────────────
 $followupHistory = [];
-if ($task['dept_code'] === 'RETAIL') {
+if ($task['dept_code'] === 'RETAIL' || $task['dept_code'] === 'TAX') {
     $fuStmt = $db->prepare("
         SELECT tf.*, u.full_name AS added_by_name
         FROM task_followups tf
@@ -318,63 +341,39 @@ if ($task['dept_code'] === 'RETAIL') {
     $fuStmt->execute([$id]);
     $followupHistory = $fuStmt->fetchAll();
 }
-// ── Extra lookups for editing ─────────────────────────────────────────────────
+
+// ── Extra lookups for editing ──────────────────────────────────────────────
 $taxOfficeTypes = $taxTypes = $financeServiceTypes = $allBanks = $allCats = $allAuditors = [];
-$companyTypes = $fileTypes = $panVatTypes = $yesNoOpts = $auditTypes2 = $corpGrades = [];
+$companyTypes   = $fileTypes = $panVatTypes = $yesNoOpts = $auditTypes2 = $corpGrades = [];
+$taxStaff       = [];
 if ($canEditDept) {
+    try { $taxOfficeTypes    = $db->query("SELECT id,office_name,address FROM tax_office_types ORDER BY office_name")->fetchAll(); } catch (Exception $e) {}
+    try { $taxTypes          = $db->query("SELECT id,tax_type_name FROM tax_type ORDER BY id")->fetchAll(); } catch (Exception $e) {}
+    try { $financeServiceTypes = $db->query("SELECT id,service_name FROM finance_service_types ORDER BY service_name")->fetchAll(); } catch (Exception $e) {}
+    try { $allBanks          = $db->query("SELECT id,bank_name,address FROM bank_references WHERE is_active=1 ORDER BY bank_name")->fetchAll(); } catch (Exception $e) {}
+    try { $allCats           = $db->query("SELECT id,category_name FROM bank_client_categories ORDER BY category_name")->fetchAll(); } catch (Exception $e) {}
+    try { $allAuditors       = $db->query("SELECT id,auditor_name,firm_name FROM auditors WHERE is_active=1 ORDER BY auditor_name")->fetchAll(); } catch (Exception $e) {}
+    try { $companyTypes      = $db->query("SELECT id,type_name FROM company_types ORDER BY type_name")->fetchAll(); } catch (Exception $e) {}
+    try { $fileTypes         = $db->query("SELECT id,type_name FROM file_types ORDER BY type_name")->fetchAll(); } catch (Exception $e) {}
+    try { $panVatTypes       = $db->query("SELECT id,type_name FROM pan_vat_types ORDER BY type_name")->fetchAll(); } catch (Exception $e) {}
+    try { $yesNoOpts         = $db->query("SELECT id,value FROM yes_no ORDER BY id")->fetchAll(); } catch (Exception $e) {}
+    try { $auditTypes2       = $db->query("SELECT id,type_name FROM audit_types ORDER BY type_name")->fetchAll(); } catch (Exception $e) {}
+    try { $corpGrades        = $db->query("SELECT id,grade_name FROM corporate_grades WHERE is_active=1 ORDER BY grade_name")->fetchAll(); } catch (Exception $e) {}
     try {
-        $taxOfficeTypes = $db->query("SELECT id,office_name,address FROM tax_office_types ORDER BY office_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $taxTypes = $db->query("SELECT id,tax_type_name FROM tax_type ORDER BY id")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $financeServiceTypes = $db->query("SELECT id,service_name FROM finance_service_types ORDER BY service_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $allBanks = $db->query("SELECT id,bank_name,address FROM bank_references WHERE is_active=1 ORDER BY bank_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $allCats = $db->query("SELECT id,category_name FROM bank_client_categories ORDER BY category_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $allAuditors = $db->query("SELECT id,auditor_name,firm_name FROM auditors WHERE is_active=1 ORDER BY auditor_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $companyTypes = $db->query("SELECT id,type_name FROM company_types ORDER BY type_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $fileTypes = $db->query("SELECT id,type_name FROM file_types ORDER BY type_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $panVatTypes = $db->query("SELECT id,type_name FROM pan_vat_types ORDER BY type_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $yesNoOpts = $db->query("SELECT id,value FROM yes_no ORDER BY id")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $auditTypes2 = $db->query("SELECT id,type_name FROM audit_types ORDER BY type_name")->fetchAll();
-    } catch (Exception $e) {
-    }
-    try {
-        $corpGrades = $db->query("SELECT id,grade_name FROM corporate_grades WHERE is_active=1 ORDER BY grade_name")->fetchAll();
-    } catch (Exception $e) {
-    }
+        $taxStaff = $db->query("
+            SELECT u.id, u.full_name
+            FROM users u
+            JOIN departments d ON d.id = u.department_id
+            JOIN roles r ON r.id = u.role_id
+            WHERE d.dept_code = 'TAX' AND u.is_active = 1
+            ORDER BY u.full_name
+        ")->fetchAll();
+    } catch (Exception $e) {}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // POST HANDLERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 
 // POST: update_status
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
@@ -387,39 +386,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
         $nsid = (int) ($sid->fetchColumn() ?: 1);
         $db->prepare("UPDATE tasks SET status_id=?,updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
         try {
-            $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")->execute([$id, 'status_changed', $user['id'], $task['status'], $newStatus]);
-        } catch (Exception $e) {
-        }
-        // Build rich notification message
+            $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+               ->execute([$id, 'status_changed', $user['id'], $task['status'], $newStatus]);
+        } catch (Exception $e) {}
         $statusMsg = "Task #{$task['task_number']}";
-        if (!empty($task['company_name']))
-            $statusMsg .= " ({$task['company_name']})";
+        if (!empty($task['company_name'])) $statusMsg .= " ({$task['company_name']})";
         $statusMsg .= " status changed from \"{$task['status']}\" to \"{$newStatus}\".";
-        $taskLink = APP_URL . '/staff/tasks/view.php?id=' . $id;
+        $taskLink  = APP_URL . '/staff/tasks/view.php?id=' . $id;
         $adminLink = APP_URL . '/admin/tasks/view.php?id=' . $id;
-        $emailData = [
-            'template' => 'task_status_changed',
-            'task' => [
-                'id' => $id,
-                'task_number' => $task['task_number'],
-                'title' => $task['title'],
-                'department' => $task['dept_name'] ?? '',
-                'old_status' => $task['status'],
-                'new_status' => $newStatus,
-                'due_date' => $task['due_date'] ?? null,
-                'fiscal_year' => $task['fiscal_year'] ?? '',
-                'company' => $task['company_name'] ?? '',
-                'priority' => $task['priority'] ?? '',
-            ],
-        ];
-        // Notify assigned staff (skip if they are making the change)
-        if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+        $emailData = ['template' => 'task_status_changed', 'task' => ['id' => $id, 'task_number' => $task['task_number'], 'title' => $task['title'], 'department' => $task['dept_name'] ?? '', 'old_status' => $task['status'], 'new_status' => $newStatus, 'due_date' => $task['due_date'] ?? null, 'fiscal_year' => $task['fiscal_year'] ?? '', 'company' => $task['company_name'] ?? '', 'priority' => $task['priority'] ?? '']];
+        if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id'])
             notify((int) $task['assigned_to'], "Status Updated: {$task['task_number']}", $statusMsg, 'status', $taskLink, true, $emailData);
-        }
-        // Notify task creator/admin (skip if same as current user or same as assigned staff)
-        if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+        if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to'])
             notify((int) $task['created_by'], "Status Updated: {$task['task_number']}", $statusMsg, 'status', $adminLink, true, $emailData);
-        }
         logActivity("Status: {$task['task_number']} → {$newStatus}", 'tasks');
         setFlash('success', 'Status updated.');
         header("Location: view.php?id={$id}");
@@ -427,120 +406,136 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
     }
 }
 
-// POST: update_progress
+// POST: transfer_department
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_department'])) {
+    verifyCsrf();
+    $newDeptId    = (int) ($_POST['new_department_id'] ?? 0);
+    $newAssignTo  = ($_POST['transfer_assigned_to'] ?? '') !== '' ? (int) $_POST['transfer_assigned_to'] : null;
+    $transferNote = trim($_POST['transfer_note'] ?? '');
+
+    if ($newDeptId && $newDeptId !== (int) $task['department_id']) {
+        $oldDeptId = (int) $task['department_id'];
+        $db->prepare("UPDATE tasks SET department_id=?, assigned_to=?, updated_at=NOW() WHERE id=?")
+           ->execute([$newDeptId, $newAssignTo, $id]);
+        try {
+            $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,from_dept_id,to_dept_id,to_user_id,remarks)VALUES(?,?,?,?,?,?,?)")
+               ->execute([$id, 'transferred_dept', $user['id'], $oldDeptId, $newDeptId, $newAssignTo, $transferNote ?: null]);
+        } catch (Exception $e) {}
+        logActivity("Transferred dept: {$task['task_number']}", 'tasks');
+        setFlash('success', 'Task transferred to new department.');
+    } else {
+        setFlash('error', 'Please select a different department.');
+    }
+    header("Location: view.php?id={$id}");
+    exit;
+}
+
+// POST: update_progress (RETAIL quick update)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress']) && $canEditDept) {
     verifyCsrf();
     $p = $_POST['progress'] ?? [];
     $db->prepare("UPDATE task_retail SET work_status_id=?,finalisation_status_id=?,finalised_by=?,completed_date=?,tax_clearance_status_id=?,backup_status_id=?,follow_up_date=?,notes=? WHERE task_id=?")
-        ->execute([($p['work_status_id'] ?? '') !== '' ? (int) $p['work_status_id'] : null, ($p['finalisation_status_id'] ?? '') !== '' ? (int) $p['finalisation_status_id'] : null, ($p['finalised_by'] ?? '') !== '' ? (int) $p['finalised_by'] : null, $p['completed_date'] ?: null, ($p['tax_clearance_status_id'] ?? '') !== '' ? (int) $p['tax_clearance_status_id'] : null, ($p['backup_status_id'] ?? '') !== '' ? (int) $p['backup_status_id'] : null, $p['follow_up_date'] ?: null, $p['notes'] ?: null, $id]);
+       ->execute([($p['work_status_id'] ?? '') !== '' ? (int) $p['work_status_id'] : null, ($p['finalisation_status_id'] ?? '') !== '' ? (int) $p['finalisation_status_id'] : null, ($p['finalised_by'] ?? '') !== '' ? (int) $p['finalised_by'] : null, $p['completed_date'] ?: null, ($p['tax_clearance_status_id'] ?? '') !== '' ? (int) $p['tax_clearance_status_id'] : null, ($p['backup_status_id'] ?? '') !== '' ? (int) $p['backup_status_id'] : null, $p['follow_up_date'] ?: null, $p['notes'] ?: null, $id]);
     setFlash('success', 'Progress updated.');
     header("Location: view.php?id={$id}");
     exit;
 }
 
-function parseDate($d)
-{
-    if (empty($d))
-        return null;
-    $x = date_create($d);
-    return $x ? date_format($x, 'Y-m-d') : null;
-}
+function parseDate($d) { if (empty($d)) return null; $x = date_create($d); return $x ? date_format($x, 'Y-m-d') : null; }
 
 // POST: save_tax
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEditDept) {
     verifyCsrf();
-    $t2 = $_POST['tax'] ?? [];
-    $firm = trim($t2['firm_name'] ?? '') ?: ($task['company_name'] ?? '');
-    $biz = trim($t2['business_type'] ?? '') ?: $companyTypeVal;
-    $pan = trim($t2['pan_number'] ?? '') ?: ($companyPanRow['pan_number'] ?? '');
+    $t2     = $_POST['tax'] ?? [];
+    $firm   = trim($t2['firm_name'] ?? '') ?: ($task['company_name'] ?? '');
+    $biz    = trim($t2['business_type'] ?? '') ?: $companyTypeVal;
+    $pan    = trim($t2['pan_number'] ?? '') ?: ($companyPanRow['pan_number'] ?? '');
     $officeAddr = trim($t2['assigned_office_address'] ?? '');
-    $taxFy = trim($t2['fiscal_year'] ?? '');
+    $taxFy  = trim($t2['fiscal_year'] ?? '');
     $taxFyId = getFiscalYearId($db, $taxFy);
-    // Ensure columns exist before saving (handles fresh installs)
-    try {
-        $db->query("SELECT fiscal_year FROM task_tax LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_tax ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER tax_type_id");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT fiscal_year_id FROM task_tax LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_tax ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT assigned_office_address FROM task_tax LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_tax ADD COLUMN assigned_office_address VARCHAR(200) NULL AFTER assigned_office_id");
-        } catch (Exception $e2) {
+    // Ensure columns exist
+    foreach (['fiscal_year VARCHAR(10) NULL AFTER tax_type_id', 'fiscal_year_id INT NULL AFTER fiscal_year', 'assigned_office_address VARCHAR(200) NULL AFTER assigned_office_id', 'total_amount DECIMAL(12,2) DEFAULT 0 AFTER tax_clearance_status_id'] as $colDef) {
+        $colName = explode(' ', trim($colDef))[0];
+        try { $db->query("SELECT $colName FROM task_tax LIMIT 1"); } catch (Exception $e) {
+            try { $db->exec("ALTER TABLE task_tax ADD COLUMN $colDef"); } catch (Exception $e2) {}
         }
     }
     $hasAddrCol = true;
-    try {
-        $db->query("SELECT assigned_office_address FROM task_tax LIMIT 1");
-    } catch (Exception $e) {
-        $hasAddrCol = false;
-    }
+    try { $db->query("SELECT assigned_office_address FROM task_tax LIMIT 1"); } catch (Exception $e) { $hasAddrCol = false; }
 
     $ex = $db->prepare("SELECT id FROM task_tax WHERE task_id=?");
     $ex->execute([$id]);
-    // Build param array — with or without address col
+
     if ($hasAddrCol) {
         $p = [
-            $task['company_id'],
-            $firm,
+            $task['company_id'], $firm,
             ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null,
             $officeAddr ?: null,
             ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null,
-            $taxFy,
-            $taxFyId,
+            $taxFy, $taxFyId,
             trim($t2['submission_number'] ?? ''),
             trim($t2['udin_no'] ?? ''),
-            $biz,
-            $pan,
+            $biz, $pan,
             ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null,
             ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null,
             ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null,
             ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null,
             ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,
+            ($t2['total_amount'] ?? '') !== '' ? (float) $t2['total_amount'] : 0,
             $t2['completed_date'] ?: null,
+            $t2['follow_up_date'] ?: null,
             trim($t2['remarks'] ?? ''),
-            trim($t2['notes'] ?? ''),
+            trim($t2['notes'] ?? '')
         ];
-
         if ($ex->fetch()) {
-            $db->prepare("
-        UPDATE task_tax SET
-            company_id=?, firm_name=?, assigned_office_id=?, assigned_office_address=?,
-            tax_type_id=?, fiscal_year=?, fiscal_year_id=?,
-            submission_number=?, udin_no=?, business_type=?, pan_number=?,
-            assigned_to=?, file_received_by=?, updated_by=?, verify_by=?,
-            tax_clearance_status_id=?, completed_date=?, remarks=?, notes=?
-        WHERE task_id=?
-    ")->execute(array_merge($p, [$id]));
+            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,assigned_office_address=?,
+                tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,
+                assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,tax_clearance_status_id=?,
+                total_amount=?,completed_date=?,follow_up_date=?,remarks=?,notes=?
+                WHERE task_id=?")->execute(array_merge($p, [$id]));
         } else {
-            $db->prepare("
-        INSERT INTO task_tax(
-            task_id, company_id, firm_name, assigned_office_id, assigned_office_address,
-            tax_type_id, fiscal_year, fiscal_year_id,
-            submission_number, udin_no, business_type, pan_number,
-            assigned_to, file_received_by, updated_by, verify_by,
-            tax_clearance_status_id, completed_date, remarks, notes
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ")->execute(array_merge([$id], $p));
+            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,assigned_office_address,
+                tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,
+                assigned_to,file_received_by,updated_by,verify_by,tax_clearance_status_id,
+                total_amount,completed_date,follow_up_date,remarks,notes)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
         }
     } else {
-        $p = [$task['company_id'], $firm, ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null, ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null, $taxFy, $taxFyId, trim($t2['submission_number'] ?? ''), trim($t2['udin_no'] ?? ''), $biz, $pan, ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null, ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null, ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null, ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null, ($t2['status_id'] ?? '') !== '' ? (int) $t2['status_id'] : null, ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,  $t2['completed_date'] ?: null, trim($t2['remarks'] ?? ''), trim($t2['notes'] ?? '')];
+        $p = [
+            $task['company_id'], $firm,
+            ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null,
+            ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null,
+            $taxFy, $taxFyId,
+            trim($t2['submission_number'] ?? ''),
+            trim($t2['udin_no'] ?? ''),
+            $biz, $pan,
+            ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null,
+            ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null,
+            ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null,
+            ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null,
+            ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,
+            ($t2['total_amount'] ?? '') !== '' ? (float) $t2['total_amount'] : 0,
+            $t2['completed_date'] ?: null,
+            $t2['follow_up_date'] ?: null,
+            trim($t2['remarks'] ?? ''),
+            trim($t2['notes'] ?? '')
+        ];
         if ($ex->fetch()) {
-            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,status_id=?,tax_clearance_status_id=?,completed_date=?,remarks=?,notes=? WHERE task_id=?")->execute(array_merge($p, [$id]));
+            $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,tax_clearance_status_id=?,total_amount=?,completed_date=?,follow_up_date=?,remarks=?,notes=? WHERE task_id=?")->execute(array_merge($p, [$id]));
         } else {
-            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,tax_clearance_status_id,completed_date,remarks,notes)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
+            $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,tax_clearance_status_id,total_amount,completed_date,follow_up_date,remarks,notes)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
+        }
+    }
+    // Track follow-up history
+    $newFollowUpDate = $t2['follow_up_date'] ?? '';
+    $newFollowUpNote = trim($t2['follow_up_note'] ?? '');
+    if ($newFollowUpDate) {
+        $lastFu = $db->prepare("SELECT followup_date FROM task_followups WHERE task_id=? ORDER BY created_at DESC LIMIT 1");
+        $lastFu->execute([$id]);
+        $lastDate = $lastFu->fetchColumn();
+        if ($lastDate !== $newFollowUpDate) {
+            $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
+               ->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
         }
     }
     if (!empty($t2['status_id']))
@@ -555,45 +550,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEd
 // POST: save_retail
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $canEditDept) {
     verifyCsrf();
-    $r2 = $_POST['retail'] ?? [];
+    $r2    = $_POST['retail'] ?? [];
     $retFy = trim($r2['fiscal_year'] ?? '');
     $retFyId = getFiscalYearId($db, $retFy);
-    // ── Track follow-up history ───────────────────────────────────────────────
+    // Track follow-up history
     $newFollowUpDate = $r2['follow_up_date'] ?? '';
     $newFollowUpNote = trim($r2['follow_up_note'] ?? '');
-
     if ($newFollowUpDate) {
-        // Only insert if date is different from last recorded one
-        $lastFu = $db->prepare("
-        SELECT followup_date FROM task_followups
-        WHERE task_id = ?
-        ORDER BY created_at DESC LIMIT 1
-    ");
+        $lastFu = $db->prepare("SELECT followup_date FROM task_followups WHERE task_id=? ORDER BY created_at DESC LIMIT 1");
         $lastFu->execute([$id]);
         $lastDate = $lastFu->fetchColumn();
-
         if ($lastDate !== $newFollowUpDate) {
-            $db->prepare("
-            INSERT INTO task_followups (task_id, followup_date, notes, created_by)
-            VALUES (?, ?, ?, ?)
-        ")->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
+            $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
+               ->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
         }
     }
-    // Ensure columns exist before saving
-    try {
-        $db->query("SELECT fiscal_year FROM task_retail LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_retail ADD COLUMN fiscal_year VARCHAR(10) NULL");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT fiscal_year_id FROM task_retail LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_retail ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year");
-        } catch (Exception $e2) {
+    // Ensure columns exist
+    foreach (['fiscal_year VARCHAR(10) NULL', 'fiscal_year_id INT NULL AFTER fiscal_year'] as $colDef) {
+        $colName = explode(' ', trim($colDef))[0];
+        try { $db->query("SELECT $colName FROM task_retail LIMIT 1"); } catch (Exception $e) {
+            try { $db->exec("ALTER TABLE task_retail ADD COLUMN $colDef"); } catch (Exception $e2) {}
         }
     }
     $p = [$task['company_id'], trim($r2['firm_name'] ?? '') ?: ($task['company_name'] ?? ''), ($r2['company_type_id'] ?? '') !== '' ? (int) $r2['company_type_id'] : null, ($r2['file_type_id'] ?? '') !== '' ? (int) $r2['file_type_id'] : null, ($r2['pan_vat_id'] ?? '') !== '' ? (int) $r2['pan_vat_id'] : null, ($r2['vat_client_id'] ?? '') !== '' ? (int) $r2['vat_client_id'] : null, $r2['return_type'] ?? null, $retFy, $retFyId, (int) ($r2['no_of_audit_year'] ?? 1), trim($r2['pan_no'] ?? ''), ($r2['assigned_to'] ?? '') !== '' ? (int) $r2['assigned_to'] : null, $r2['assigned_date'] ?: null, ($r2['audit_type_id'] ?? '') !== '' ? (int) $r2['audit_type_id'] : null, $r2['ecd'] ?: null, ($r2['opening_due'] ?? '') !== '' ? (float) $r2['opening_due'] : 0, ($r2['work_status_id'] ?? '') !== '' ? (int) $r2['work_status_id'] : null, ($r2['finalisation_status_id'] ?? '') !== '' ? (int) $r2['finalisation_status_id'] : null, ($r2['finalised_by'] ?? '') !== '' ? (int) $r2['finalised_by'] : null, $r2['completed_date'] ?: null, ($r2['tax_clearance_status_id'] ?? '') !== '' ? (int) $r2['tax_clearance_status_id'] : null, ($r2['backup_status_id'] ?? '') !== '' ? (int) $r2['backup_status_id'] : null, $r2['follow_up_date'] ?: null, trim($r2['notes'] ?? '')];
@@ -614,28 +590,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
 }
 
 // POST: save_corporate
-// task_corporate columns: task_id,company_id,firm_name,pan_no,grade_id,
-//   assigned_to,finalised_by,completed_date,remarks,fiscal_year,fiscal_year_id
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate']) && $canEditDept) {
     verifyCsrf();
-    $co = $_POST['corporate'] ?? [];
+    $co   = $_POST['corporate'] ?? [];
     $coFy = trim($co['fiscal_year'] ?? '');
     $coFyId = getFiscalYearId($db, $coFy);
-    // Ensure columns exist before saving
-    try {
-        $db->query("SELECT fiscal_year FROM task_corporate LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_corporate ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER pan_no");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT fiscal_year_id FROM task_corporate LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_corporate ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year");
-        } catch (Exception $e2) {
+    foreach (['fiscal_year VARCHAR(10) NULL AFTER pan_no', 'fiscal_year_id INT NULL AFTER fiscal_year'] as $colDef) {
+        $colName = explode(' ', trim($colDef))[0];
+        try { $db->query("SELECT $colName FROM task_corporate LIMIT 1"); } catch (Exception $e) {
+            try { $db->exec("ALTER TABLE task_corporate ADD COLUMN $colDef"); } catch (Exception $e2) {}
         }
     }
     $p = [$task['company_id'], trim($co['firm_name'] ?? '') ?: ($task['company_name'] ?? ''), trim($co['pan_no'] ?? '') ?: ($companyData['pan_number'] ?? ''), ($co['grade_id'] ?? '') !== '' ? (int) $co['grade_id'] : null, ($co['assigned_to'] ?? '') !== '' ? (int) $co['assigned_to'] : $taskAssignedToId, ($co['finalised_by'] ?? '') !== '' ? (int) $co['finalised_by'] : null, $co['completed_date'] ?: null, trim($co['remarks'] ?? ''), $coFy, $coFyId];
@@ -660,49 +623,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate']) && 
 // POST: save_finance
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_finance']) && $canEditDept) {
     verifyCsrf();
-    $f = $_POST['finance'] ?? [];
+    $f    = $_POST['finance'] ?? [];
     $finFy = trim($f['fiscal_year'] ?? '');
     $finFyId = getFiscalYearId($db, $finFy);
-    // Ensure columns exist before saving
-    try {
-        $db->query("SELECT fiscal_year FROM task_finance LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_finance ADD COLUMN fiscal_year VARCHAR(10) NULL");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT fiscal_year_id FROM task_finance LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_finance ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year");
-        } catch (Exception $e2) {
+    foreach (['fiscal_year VARCHAR(10) NULL', 'fiscal_year_id INT NULL AFTER fiscal_year'] as $colDef) {
+        $colName = explode(' ', trim($colDef))[0];
+        try { $db->query("SELECT $colName FROM task_finance LIMIT 1"); } catch (Exception $e) {
+            try { $db->exec("ALTER TABLE task_finance ADD COLUMN $colDef"); } catch (Exception $e2) {}
         }
     }
     $p = [$task['company_id'], $finFy, $finFyId, ($f['total_amount'] ?? '') !== '' ? (float) $f['total_amount'] : 0, ($f['paid_amount'] ?? '') !== '' ? (float) $f['paid_amount'] : 0, $f['payment_date'] ?: null, trim($f['payment_method'] ?? ''), ($f['tax_clearance_status_id'] ?? '') !== '' ? (int) $f['tax_clearance_status_id'] : null, $f['tax_clearance_date'] ?: null, ($f['payment_status_id'] ?? '') !== '' ? (int) $f['payment_status_id'] : null, isset($f['is_completed']) ? 1 : 0, trim($f['remarks'] ?? '')];
-
     $ex = $db->prepare("SELECT id FROM task_finance WHERE task_id=?");
     $ex->execute([$id]);
-
     if ($ex->fetch()) {
-        $db->prepare("
-        UPDATE task_finance SET
-            company_id=?, fiscal_year=?, fiscal_year_id=?,
-            total_amount=?, paid_amount=?, payment_date=?,
-            payment_method=?, tax_clearance_status_id=?, tax_clearance_date=?,
-            payment_status_id=?, is_completed=?, remarks=?
-        WHERE task_id=?
-    ")->execute(array_merge($p, [$id]));
+        $db->prepare("UPDATE task_finance SET company_id=?,fiscal_year=?,fiscal_year_id=?,total_amount=?,paid_amount=?,payment_date=?,payment_method=?,tax_clearance_status_id=?,tax_clearance_date=?,payment_status_id=?,is_completed=?,remarks=? WHERE task_id=?")->execute(array_merge($p, [$id]));
     } else {
-        $db->prepare("
-        INSERT INTO task_finance(
-            task_id, company_id, fiscal_year, fiscal_year_id,
-            total_amount, paid_amount, payment_date,
-            payment_method, tax_clearance_status_id, tax_clearance_date,
-            payment_status_id, is_completed, remarks
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ")->execute(array_merge([$id], $p));
+        $db->prepare("INSERT INTO task_finance(task_id,company_id,fiscal_year,fiscal_year_id,total_amount,paid_amount,payment_date,payment_method,tax_clearance_status_id,tax_clearance_date,payment_status_id,is_completed,remarks)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")->execute(array_merge([$id], $p));
     }
     if (isset($f['is_completed'])) {
         $did = $db->query("SELECT id FROM task_status WHERE status_name='Done'")->fetchColumn();
@@ -714,79 +650,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_finance']) && $c
     exit;
 }
 
-// POST: save_banking
+// POST: save_banking  ── FIXED column/value mismatch ──────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $canEditDept) {
     verifyCsrf();
     $b = $_POST['banking'] ?? [];
-    // Ensure columns exist before saving
-    try {
-        $db->query("SELECT fiscal_year FROM task_banking LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_banking ADD COLUMN fiscal_year VARCHAR(10) NULL AFTER completion_date");
-        } catch (Exception $e2) {
-        }
-    }
-    try {
-        $db->query("SELECT fiscal_year_id FROM task_banking LIMIT 1");
-    } catch (Exception $e) {
-        try {
-            $db->exec("ALTER TABLE task_banking ADD COLUMN fiscal_year_id INT NULL AFTER fiscal_year");
-        } catch (Exception $e2) {
-        }
-    }
-    $p = [$task['id'], $task['company_id'], ($b['bank_reference_id'] ?? null), ($b['client_category_id'] ?? null), ($b['auditor_id'] ?? null), parseDate($b['assigned_date'] ?? null), parseDate($b['ecd'] ?? null), parseDate($b['completion_date'] ?? null), ($b['work_status_id'] ?? null), ($b['sales_check'] ?? null), ($b['audit_check'] ?? null), ($b['provisional_financial_statement'] ?? null), ($b['projected'] ?? null), ($b['consulting'] ?? null), ($b['nta'] ?? null), ($b['salary_certificate'] ?? null), ($b['ca_certification'] ?? null), ($b['etds'] ?? null), isset($b['bill_issued']) ? 1 : 0, $b['remarks'] ?? null];
-    $ex = $db->prepare("SELECT id FROM task_banking WHERE task_id=?");
-    $ex->execute([$task['id']]);
 
-    // ── Sanitize ALL inputs once, before INSERT/UPDATE branch ────────────────
-// Dates
+    // Ensure FY columns exist
+    foreach (['fiscal_year VARCHAR(10) NULL AFTER completion_date', 'fiscal_year_id INT NULL AFTER fiscal_year'] as $colDef) {
+        $colName = explode(' ', trim($colDef))[0];
+        try { $db->query("SELECT $colName FROM task_banking LIMIT 1"); } catch (Exception $e) {
+            try { $db->exec("ALTER TABLE task_banking ADD COLUMN $colDef"); } catch (Exception $e2) {}
+        }
+    }
+
+    // Sanitize dates
     foreach (['assigned_date', 'ecd', 'completion_date'] as $dateField) {
         $b[$dateField] = !empty($b[$dateField]) ? parseDate($b[$dateField]) : null;
     }
-    // Integer / nullable numeric fields
-    $numericFields = [
-        'sales_check',
-        'audit_check',
-        'provisional_financial_statement',
-        'projected',
-        'consulting',
-        'nta',
-        'salary_certificate',
-        'ca_certification',
-        'etds'
-    ];
-    foreach ($numericFields as $nf) {
+    // Sanitize numeric checklist fields
+    foreach (['sales_check','audit_check','provisional_financial_statement','projected','consulting','nta','salary_certificate','ca_certification','etds'] as $nf) {
         $b[$nf] = (isset($b[$nf]) && $b[$nf] !== '') ? (int) $b[$nf] : null;
     }
     // Checkbox
-    $b['bill_issued'] = !empty($b['bill_issued']) ? 1 : 0;
-    $bankRefId = ($b['bank_reference_id'] ?? '') !== '' ? (int) $b['bank_reference_id'] : null;
-    $catId = ($b['client_category_id'] ?? '') !== '' ? (int) $b['client_category_id'] : null;
+    $b['bill_issued']      = !empty($b['bill_issued']) ? 1 : 0;
+    $bankRefId             = ($b['bank_reference_id'] ?? '') !== '' ? (int) $b['bank_reference_id'] : null;
+    $clientCatId           = ($b['client_category_id'] ?? '') !== '' ? (int) $b['client_category_id'] : null;
+
+    $ex = $db->prepare("SELECT id FROM task_banking WHERE task_id=?");
+    $ex->execute([$task['id']]);
 
     if ($ex->fetch()) {
-        $stmt = $db->prepare("
-        UPDATE task_banking SET 
-            company_id=?,
-            bank_reference_id=?,
-            client_category_id=?,
-            ecd=?,
-            completion_date=?,
-            sales_check=?,
-            audit_check=?,
-            provisional_financial_statement=?,
-            projected=?,
-            consulting=?,
-            nta=?,
-            salary_certificate=?,
-            ca_certification=?,
-            etds=?,
-            bill_issued=?,
-            remarks=?
-        WHERE task_id=?
-    ");
-        $stmt->execute([
-            $task['company_id'] ?? 0,
+        // ── UPDATE — 16 SET columns, 17 values (16 + WHERE task_id) ──────────
+        $db->prepare("
+            UPDATE task_banking SET
+                company_id=?,
+                bank_reference_id=?,
+                client_category_id=?,
+                ecd=?,
+                completion_date=?,
+                sales_check=?,
+                audit_check=?,
+                provisional_financial_statement=?,
+                projected=?,
+                consulting=?,
+                nta=?,
+                salary_certificate=?,
+                ca_certification=?,
+                etds=?,
+                od=?,
+                term=?,
+                interest_rate=?,
+                bill_issued=?,
+                remarks=?
+            WHERE task_id=?
+        ")->execute([
+            $task['company_id'] ?? null,    // company_id
+            $bankRefId,                      // bank_reference_id
+            $clientCatId,                    // client_category_id
+            $b['ecd'],                       // ecd
+            $b['completion_date'],           // completion_date
+            $b['sales_check'],               // sales_check
+            $b['audit_check'],               // audit_check
+            $b['provisional_financial_statement'], // provisional_financial_statement
+            $b['projected'],                 // projected
+            $b['consulting'],                // consulting
+            $b['nta'],                       // nta
+            $b['salary_certificate'],        // salary_certificate
+            $b['ca_certification'],          // ca_certification
+            $b['etds'],                      // etds
+            ($b['od'] ?? '') !== '' ? (float)$b['od'] : null,
+            ($b['term'] ?? '') !== '' ? (float)$b['term'] : null,
+            ($b['interest_rate'] ?? '') !== '' ? (float)$b['interest_rate'] : null,
+            $b['bill_issued'],               // bill_issued
+            $b['remarks'] ?? null,           // remarks
+            $task['id'],                     // WHERE task_id
+        ]);
+    } else {
+        // ── INSERT — 17 columns, 17 values ────────────────────────────────────
+        $db->prepare("
+            INSERT INTO task_banking(
+                task_id, company_id, bank_reference_id, client_category_id,
+                assigned_date, ecd, completion_date, work_status_id,
+                sales_check, audit_check, provisional_financial_statement, projected,
+                consulting, nta, salary_certificate, ca_certification, etds,
+                od, term, interest_rate,
+                bill_issued, remarks
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ")->execute([
+            $task['id'],
+            $task['company_id'],
             $b['bank_reference_id'] ?? null,
             $b['client_category_id'] ?? null,
             $b['assigned_date'],
@@ -802,112 +754,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
             $b['salary_certificate'],
             $b['ca_certification'],
             $b['etds'],
+            ($b['od'] ?? '') !== '' ? (float)$b['od'] : null,
+            ($b['term'] ?? '') !== '' ? (float)$b['term'] : null,
+            ($b['interest_rate'] ?? '') !== '' ? (float)$b['interest_rate'] : null,
             $b['bill_issued'],
-            $b['remarks'] ?? null,
-            $task['id']
+            $b['remarks'] ?? null
         ]);
-
-    } else {
-        $db->prepare("
-        INSERT INTO task_banking(
-            task_id, company_id, bank_reference_id, client_category_id,
-            ecd, completion_date,
-            sales_check, audit_check, provisional_financial_statement, projected,
-            consulting, nta, salary_certificate, ca_certification, etds,
-            bill_issued, remarks
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ")->execute([
-                    $task['id'],
-                    $task['company_id'] ?? null,
-                    $b['bank_reference_id'] ?? null,
-                    $b['client_category_id'] ?? null,
-                    $b['ecd'],
-                    $b['completion_date'],
-                    $b['sales_check'],
-                    $b['audit_check'],
-                    $b['provisional_financial_statement'],
-                    $b['projected'],
-                    $b['consulting'],
-                    $b['nta'],
-                    $b['salary_certificate'],
-                    $b['ca_certification'],
-                    $b['etds'],
-                    $b['bill_issued'],
-                    $b['remarks'] ?? null
-                ]);
     }
-    // ── bank_summary sync helper ──────────────────────────────────────────────────
+
+    // Sync bank_summary
     function syncBankSummary(PDO $db, int $bankRefId, int $branchId, string $fiscalYear, int $updatedBy): void
     {
-        if (!$bankRefId || !$branchId || !$fiscalYear)
-            return;
-
+        if (!$bankRefId || !$branchId || !$fiscalYear) return;
         $row = $db->prepare("
-        SELECT
-            COUNT(*)                                               AS total_files,
-            SUM(ts.status_name = 'Done')                          AS completed,
-            SUM(ts.status_name = 'HBC')                           AS hbc,
-            SUM(ts.status_name IN ('Pending','WIP','Not Started')) AS pending,
-            SUM(ts.status_name = 'Corporate Team')                AS support,
-            SUM(ts.status_name = 'Next Year')                     AS cancelled
-        FROM task_banking tb
-        JOIN tasks       t  ON t.id  = tb.task_id
-        JOIN task_status ts ON ts.id = t.status_id
-        WHERE tb.bank_reference_id = ?
-          AND t.branch_id          = ?
-          AND t.fiscal_year        = ?
-          AND t.is_active          = 1
-    ");
+            SELECT
+                COUNT(*) AS total_files,
+                SUM(ts.status_name='Done') AS completed,
+                SUM(ts.status_name='HBC') AS hbc,
+                SUM(ts.status_name IN ('Pending','WIP','Not Started')) AS pending,
+                SUM(ts.status_name='Corporate Team') AS support,
+                SUM(ts.status_name='Next Year') AS cancelled
+            FROM task_banking tb
+            JOIN tasks       t  ON t.id  = tb.task_id
+            JOIN task_status ts ON ts.id = t.status_id
+            WHERE tb.bank_reference_id=? AND t.branch_id=? AND t.fiscal_year=? AND t.is_active=1
+        ");
         $row->execute([$bankRefId, $branchId, $fiscalYear]);
         $counts = $row->fetch(PDO::FETCH_ASSOC);
-
         $db->prepare("
-        INSERT INTO bank_summary
-            (bank_reference_id, branch_id, fiscal_year,
-             total_files, completed, hbc, pending, support, cancelled,
-             updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-            total_files = VALUES(total_files),
-            completed   = VALUES(completed),
-            hbc         = VALUES(hbc),
-            pending     = VALUES(pending),
-            support     = VALUES(support),
-            cancelled   = VALUES(cancelled),
-            updated_by  = VALUES(updated_by),
-            updated_at  = NOW()
-    ")->execute([
-                    $bankRefId,
-                    $branchId,
-                    $fiscalYear,
-                    (int) ($counts['total_files'] ?? 0),
-                    (int) ($counts['completed'] ?? 0),
-                    (int) ($counts['hbc'] ?? 0),
-                    (int) ($counts['pending'] ?? 0),
-                    (int) ($counts['support'] ?? 0),
-                    (int) ($counts['cancelled'] ?? 0),
-                    $updatedBy,
-                ]);
+            INSERT INTO bank_summary(bank_reference_id,branch_id,fiscal_year,total_files,completed,hbc,pending,support,cancelled,updated_by,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,NOW())
+            ON DUPLICATE KEY UPDATE total_files=VALUES(total_files),completed=VALUES(completed),hbc=VALUES(hbc),
+            pending=VALUES(pending),support=VALUES(support),cancelled=VALUES(cancelled),updated_by=VALUES(updated_by),updated_at=NOW()
+        ")->execute([$bankRefId, $branchId, $fiscalYear, (int)($counts['total_files']??0), (int)($counts['completed']??0), (int)($counts['hbc']??0), (int)($counts['pending']??0), (int)($counts['support']??0), (int)($counts['cancelled']??0), $updatedBy]);
     }
-    // existing INSERT/UPDATE task_banking code above stays unchanged ...
 
-    // ── Sync bank_summary ─────────────────────────────────────────────────────
-    $bankRefId = (int) ($b['bank_reference_id'] ?? 0);
     if ($bankRefId) {
-        syncBankSummary(
-            $db,
-            $bankRefId,
-            (int) $task['branch_id'],
-            $task['fiscal_year'] ?? '',
-            $user['id']
-        );
+        syncBankSummary($db, $bankRefId, (int) $task['branch_id'], $task['fiscal_year'] ?? '', $user['id']);
     }
-
     syncTaskFiscalYear($db, $task['id']);
     setFlash('success', 'Banking details saved.');
     header("Location: view.php?id={$task['id']}");
     exit;
-
 }
 
 // POST: add_comment
@@ -915,52 +803,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_comment'])) {
     verifyCsrf();
     $cmt = trim($_POST['comment'] ?? '');
     if ($cmt) {
-        try {
-            $db->prepare("INSERT INTO task_comments(task_id,user_id,comment)VALUES(?,?,?)")->execute([$id, $user['id'], $cmt]);
-        } catch (Exception $e) {
-        }
+        try { $db->prepare("INSERT INTO task_comments(task_id,user_id,comment)VALUES(?,?,?)")->execute([$id, $user['id'], $cmt]); } catch (Exception $e) {}
         header("Location: view.php?id={$id}#comments");
         exit;
     }
 }
 
+// ── Page setup ────────────────────────────────────────────────────────────────
 $pageTitle = 'Task: ' . $task['task_number'];
-$sClass = 'status-' . strtolower(str_replace(' ', '-', $task['status'] ?? ''));
+$sClass    = 'status-' . strtolower(str_replace(' ', '-', $task['status'] ?? ''));
 
 $currentOfficeAddr = '';
-if ($detail && isset($detail['assigned_office_address']))
-    $currentOfficeAddr = $detail['assigned_office_address'] ?? '';
+if ($detail && isset($detail['assigned_office_address'])) $currentOfficeAddr = $detail['assigned_office_address'] ?? '';
 if ($currentOfficeAddr === '' && $detail && !empty($detail['assigned_office_id'])) {
     foreach ($taxOfficeTypes as $_o) {
-        if ($_o['id'] == $detail['assigned_office_id']) {
-            $currentOfficeAddr = $_o['address'] ?? '';
-            break;
-        }
+        if ($_o['id'] == $detail['assigned_office_id']) { $currentOfficeAddr = $_o['address'] ?? ''; break; }
     }
 }
+
+// Sidebar include path differs for admin vs staff
+$sidebarFile = $isAdmin ? '../../includes/sidebar_admin.php' : '../../includes/sidebar.php';
 
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include $sidebarFile; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
             <?= flashHtml() ?>
 
             <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-                <a href="index.php" class="btn btn-outline-secondary btn-sm"><i
-                        class="fas fa-arrow-left me-1"></i>Back</a>
+                <a href="index.php" class="btn btn-outline-secondary btn-sm"><i class="fas fa-arrow-left me-1"></i>Back</a>
                 <div class="d-flex gap-2 align-items-center">
                     <?php if (!$canEditDept): ?>
-                        <span
-                            style="font-size:.73rem;background:#fef3c7;color:#92400e;padding:.3rem .8rem;border-radius:99px;border:1px solid #fde68a;">
-                            <i class="fas fa-eye me-1"></i>View only — dept details belong to
-                            <strong><?= htmlspecialchars($task['dept_name']) ?></strong>
+                        <span style="font-size:.73rem;background:#fef3c7;color:#92400e;padding:.3rem .8rem;border-radius:99px;border:1px solid #fde68a;">
+                            <i class="fas fa-eye me-1"></i>View only — dept details belong to <strong><?= htmlspecialchars($task['dept_name']) ?></strong>
                         </span>
                     <?php endif; ?>
-                    <a href="edit.php?id=<?= $id ?>" class="btn btn-gold btn-sm"><i class="fas fa-pen me-1"></i>Edit
-                        Task</a>
+                    <?php if ($isAdmin): ?>
+                        <a href="edit.php?id=<?= $id ?>" class="btn btn-gold btn-sm"><i class="fas fa-pen me-1"></i>Edit Task</a>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -971,267 +854,336 @@ include '../../includes/header.php';
                     <div class="card-mis mb-4">
                         <div class="card-mis-header">
                             <div>
-                                <span
-                                    class="task-number d-block mb-1"><?= htmlspecialchars($task['task_number']) ?></span>
+                                <span class="task-number d-block mb-1"><?= htmlspecialchars($task['task_number']) ?></span>
                                 <h5 style="font-size:1.05rem;margin:0;"><?= htmlspecialchars($task['title']) ?></h5>
                             </div>
-                            <span
-                                class="status-badge <?= $sClass ?>"><?= htmlspecialchars($task['status'] ?? 'Pending') ?></span>
+                            <span class="status-badge <?= $sClass ?>"><?= htmlspecialchars($task['status'] ?? 'Pending') ?></span>
                         </div>
                         <div class="card-mis-body">
                             <div class="row g-3">
-                                <?php foreach (['Department' => htmlspecialchars($task['dept_name'] ?? '—'), 'Branch' => htmlspecialchars($task['branch_name'] ?? '—'), 'Company' => htmlspecialchars($task['company_name'] ?? '—'), 'Created By' => htmlspecialchars($task['assigned_by_name'] ?? '—'), 'Assigned To' => htmlspecialchars($task['assigned_to_name'] ?? 'Unassigned'), 'Priority' => '<span class="status-badge priority-' . $task['priority'] . '">' . ucfirst($task['priority']) . '</span>', 'Due Date' => $task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—', 'Fiscal Year' => htmlspecialchars($task['fiscal_year'] ?? '—'), 'Auditor' => htmlspecialchars($task['auditor_name'] ?? '—'), 'Created' => date('d M Y, H:i', strtotime($task['created_at']))] as $label => $val): ?>
+                                <?php foreach ([
+                                    'Department'  => htmlspecialchars($task['dept_name'] ?? '—'),
+                                    'Branch'      => htmlspecialchars($task['branch_name'] ?? '—'),
+                                    'Company'     => htmlspecialchars($task['company_name'] ?? '—'),
+                                    'Created By'  => htmlspecialchars($task['assigned_by_name'] ?? '—'),
+                                    'Assigned To' => htmlspecialchars($task['assigned_to_name'] ?? 'Unassigned'),
+                                    'Priority'    => '<span class="status-badge priority-'.$task['priority'].'">'.ucfirst($task['priority']).'</span>',
+                                    'Due Date'    => $task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : '—',
+                                    'Fiscal Year' => htmlspecialchars($task['fiscal_year'] ?? '—'),
+                                    'Auditor'     => htmlspecialchars($task['auditor_name'] ?? '—'),
+                                    'Created'     => date('d M Y, H:i', strtotime($task['created_at'])),
+                                ] as $label => $val): ?>
                                     <div class="col-md-4">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            <?= $label ?>
-                                        </div>
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $label ?></div>
                                         <div style="font-size:.9rem;margin-top:.2rem;"><?= $val ?></div>
                                     </div>
                                 <?php endforeach; ?>
                                 <?php if ($task['description']): ?>
                                     <div class="col-12">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            Description</div>
-                                        <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['description'])) ?>
-                                        </div>
-                                    </div><?php endif; ?>
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Description</div>
+                                        <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($task['description'])) ?></div>
+                                    </div>
+                                <?php endif; ?>
                                 <?php if ($task['remarks']): ?>
                                     <div class="col-12">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                            Remarks</div>
-                                        <div style="font-size:.88rem;margin-top:.2rem;">
-                                            <?= nl2br(htmlspecialchars($task['remarks'])) ?>
-                                        </div>
-                                    </div><?php endif; ?>
+                                        <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Remarks</div>
+                                        <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($task['remarks'])) ?></div>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
 
-                    <?php if (!$canEditDept && $detailTable): ?>
-                        <div
-                            style="background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.6rem;">
-                            <i class="fas fa-lock" style="color:#92400e;"></i>
-                            <span style="font-size:.82rem;color:#92400e;"><strong><?= htmlspecialchars($task['dept_name']) ?>
-                                    Department</strong> details — read only. Only admins from that department can edit these
-                                fields.</span>
+                    <?php if ($detailTable && $adminDeptCode !== $task['dept_code'] && $isAdmin): ?>
+                        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;
+                                    padding:.75rem 1rem;margin-bottom:1rem;
+                                    display:flex;align-items:center;gap:.6rem;">
+                            <i class="fas fa-info-circle" style="color:#0284c7;"></i>
+                            <span style="font-size:.82rem;color:#0369a1;">
+                                The <strong><?= htmlspecialchars($task['dept_name']) ?></strong> department details 
+                                are only visible to admins of that department.
+                            </span>
                         </div>
                     <?php endif; ?>
 
                     <!-- ════ TAX ════ -->
-                    <?php if ($task['dept_code'] === 'TAX'): ?>
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-receipt text-warning me-2"></i>Tax Details</h5>
-                                <?php if (!$canEditDept): ?><span
-                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i
-                                            class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
-                            </div>
-                            <div class="card-mis-body">
-                                <?php if ($canEditDept):
-                                    $savedAddressSuggestions = [];
-                                    try {
-                                        $savedAddressSuggestions = $db->query("SELECT DISTINCT assigned_office_address FROM task_tax WHERE assigned_office_address IS NOT NULL AND assigned_office_address!='' ORDER BY assigned_office_address")->fetchAll(PDO::FETCH_COLUMN);
-                                    } catch (Exception $e) {
-                                    }
-                                    ?>
-                                    <datalist id="office_address_list">
-                                        <?php foreach ($savedAddressSuggestions as $addr): ?>
-                                            <option value="<?= htmlspecialchars($addr) ?>"><?php endforeach; ?>
-                                    </datalist>
-                                <?php endif; ?>
-
-                                <?php if ($detail): ?>
-                                    <div class="row g-3 mb-4">
-                                        <?php
-                                        $officeDisplay = $detail['assigned_office_name'] ?? '—';
-                                        $offAddrSaved = $detail['assigned_office_address'] ?? $detail['assigned_office_default_address'] ?? '';
-                                        if ($offAddrSaved)
-                                            $officeDisplay .= ' <span style="color:#6b7280;font-size:.8em;">– ' . htmlspecialchars($offAddrSaved) . '</span>';
-                                        else
-                                            $officeDisplay = htmlspecialchars($officeDisplay);
-                                        foreach (['Firm Name' => htmlspecialchars($detail['firm_name'] ?? '—'), 'Assigned Office' => '<span style="background:#eff6ff;color:#3b82f6;padding:.2rem .6rem;border-radius:6px;font-weight:600;">' . $officeDisplay . '</span>', 'Tax Type' => '<span style="background:#f0fdf4;color:#16a34a;padding:.2rem .6rem;border-radius:6px;font-weight:600;">' . htmlspecialchars($detail['tax_type_name'] ?? '—') . '</span>', 'Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Business Type' => htmlspecialchars($detail['business_type'] ?? '—'), 'PAN Number' => htmlspecialchars($detail['pan_number'] ?? '—'), 'Assigned To' => htmlspecialchars($detail['assigned_to_name'] ?? '—'), 'File Received' => htmlspecialchars($detail['file_received_by_name'] ?? '—'), 'Verify By' => htmlspecialchars($detail['verify_by_name'] ?? '—'), 'Status' => htmlspecialchars($detail['status_name'] ?? '—'), 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'Bills Issued' => 'Rs. ' . number_format($detail['bills_issued'] ?? 0, 2), 'Fee Received' => 'Rs. ' . number_format($detail['fee_received'] ?? 0, 2), 'TDS Payment' => 'Rs. ' . number_format($detail['tds_payment'] ?? 0, 2), 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'Completed Date' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—', 'Follow-up Date' => ($detail['follow_up_date'] ?? '') ? date('d M Y', strtotime($detail['follow_up_date'])) : '—'] as $lbl => $val): ?>
-                                            <div class="col-md-4">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
-                                                <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
-                                            </div>
-                                        <?php endforeach; ?>
-                                        <?php foreach ([['Submission Number', $detail['submission_number'] ?? '', 'https://ird.gov.np', '#3b82f6', 'IRD Portal'], ['UDIN Number', $detail['udin_no'] ?? '', 'https://udin.icai.org', '#8b5cf6', 'UDIN Portal']] as [$lbl, $val, $url, $col, $btn]): ?>
-                                            <div class="col-md-6">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
-                                                <div class="d-flex align-items-center gap-2 mt-1"><span
-                                                        style="font-size:.88rem;font-weight:600;"><?= htmlspecialchars($val ?: '—') ?></span><?php if ($val): ?><a
-                                                            href="<?= $url ?>" target="_blank"
-                                                            style="background:<?= $col ?>;color:white;padding:.2rem .6rem;border-radius:6px;font-size:.72rem;text-decoration:none;"><i
-                                                                class="fas fa-external-link-alt me-1"></i><?= $btn ?></a><?php endif; ?>
-                                                </div>
-                                            </div>
-                                        <?php endforeach; ?>
-                                        <?php if ($detail['remarks']): ?>
-                                            <div class="col-12">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    Remarks</div>
-                                                <div style="font-size:.88rem;margin-top:.2rem;">
-                                                    <?= nl2br(htmlspecialchars($detail['remarks'])) ?>
-                                                </div>
-                                            </div><?php endif; ?>
-                                    </div>
-                                    <?php if ($canEditDept): ?>
-                                        <hr style="border-color:#f3f4f6;"><?php endif; ?>
-                                <?php elseif (!$canEditDept): ?>
-                                    <div class="text-center py-4 text-muted"><i
-                                            class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No tax details
-                                        recorded yet.</div>
-                                <?php endif; ?>
-
-                                <?php if ($canEditDept): ?>
-                                    <div
-                                        style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Tax Details
-                                    </div>
-                                    <form method="POST">
-                                        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                                        <input type="hidden" name="save_tax" value="1">
-                                        <div class="row g-3">
-                                            <div class="col-md-6"><label class="form-label-mis">Firm Name</label><input
-                                                    type="text" name="tax[firm_name]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['firm_name'] ?? $task['company_name'] ?? '') ?>"
-                                                    <?= $task['company_id'] ? 'readonly style="background:#f0fdf4;cursor:not-allowed;"' : '' ?>></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Assigned Office</label><select
-                                                    name="tax[assigned_office_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taxOfficeTypes as $o): ?>
-                                                        <option value="<?= $o['id'] ?>" <?= ($detail['assigned_office_id'] ?? '') == $o['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($o['office_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Office Branch
-                                                    Address</label><input type="text" name="tax[assigned_office_address]"
-                                                    class="form-control form-control-sm" list="office_address_list"
-                                                    value="<?= htmlspecialchars($currentOfficeAddr) ?>"
-                                                    placeholder="e.g. Lazimpat, Kathmandu"></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Tax Type</label><select
-                                                    name="tax[tax_type_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($taxTypes as $tt): ?>
-                                                        <option value="<?= $tt['id'] ?>" <?= ($detail['tax_type_id'] ?? '') == $tt['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($tt['tax_type_name']) ?>
-                                                        </option>
-                                                    <?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3">
-                                                <label class="form-label-mis">Fiscal Year</label>
-                                                <?= fiscalYearSelect('tax[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?>
-                                            </div>
-                                            <div class="col-md-3"><label class="form-label-mis">Business Type</label><input
-                                                    type="text" name="tax[business_type]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['business_type'] ?? $companyTypeVal) ?>"
-                                                    <?= ($task['company_id'] && $companyTypeVal) ? 'readonly style="background:#f0fdf4;cursor:not-allowed;"' : '' ?>></div>
-                                            <div class="col-md-3"><label class="form-label-mis">PAN
-                                                    Number</label><?php if ($companyPanRow && $companyPanRow['pan_number']): ?><input
-                                                        type="text" name="tax[pan_number]" class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($detail['pan_number'] ?? $companyPanRow['pan_number']) ?>"
-                                                        readonly
-                                                        style="background:#f0fdf4;font-weight:600;cursor:not-allowed;"><?php else: ?><input
-                                                        type="text" name="tax[pan_number]" class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($detail['pan_number'] ?? '') ?>"
-                                                        placeholder="Enter PAN"><?php endif; ?></div>
-                                            <div class="col-md-6"><label class="form-label-mis">Submission Number <span
-                                                        style="font-size:.68rem;color:#9ca3af;">(from IRD)</span></label>
-                                                <div class="input-group input-group-sm"><input type="text"
-                                                        name="tax[submission_number]" class="form-control"
-                                                        value="<?= htmlspecialchars($detail['submission_number'] ?? '') ?>"><a
-                                                        href="https://taxpayerportal.ird.gov.np/taxpayer/app.html"
-                                                        target="_blank" class="btn btn-outline-primary btn-sm"><i
-                                                            class="fas fa-external-link-alt"></i></a></div>
-                                            </div>
-                                            <div class="col-md-6"><label class="form-label-mis">UDIN Number <span
-                                                        style="font-size:.68rem;color:#9ca3af;">(from ICAN)</span></label>
-                                                <div class="input-group input-group-sm"><input type="text" name="tax[udin_no]"
-                                                        class="form-control"
-                                                        value="<?= htmlspecialchars($detail['udin_no'] ?? '') ?>"><a
-                                                        href="https://udin.ican.org.np/" target="_blank"
-                                                        class="btn btn-outline-secondary btn-sm"><i
-                                                            class="fas fa-external-link-alt"></i></a></div>
-                                            </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance
-                                                    Status</label><select name="tax[tax_clearance_status_id]"
-                                                    class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <?php foreach (['file_received_by' => 'File Received By', 'updated_by' => 'Updated By', 'verify_by' => 'Verify By'] as $f => $l): ?>
-                                                <div class="col-md-3"><label class="form-label-mis"><?= $l ?></label><select
-                                                        name="tax[<?= $f ?>]" class="form-select form-select-sm">
-                                                        <option value="">-- Select --</option><?php foreach ($allStaff as $s): ?>
-                                                            <option value="<?= $s['id'] ?>" <?= ($detail[$f] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option>
-                                                        <?php endforeach; ?>
-                                                    </select></div>
-                                            <?php endforeach; ?>
-                                            <div class="col-md-3"><label class="form-label-mis">Assigned To <span
-                                                        style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i
-                                                            class="fas fa-link me-1"></i>from task</span></label>
-                                                <div class="form-control form-control-sm"
-                                                    style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
-                                                    <i class="fas fa-user-circle"
-                                                        style="color:#3b82f6;"></i><?= htmlspecialchars($taskAssignedToName) ?>
-                                                </div><input type="hidden" name="tax[assigned_to]"
-                                                    value="<?= $taskAssignedToId ?>">
-                                            </div>
-                                            <?php foreach (['completed_date' => 'Completed Date', 'follow_up_date' => 'Follow-up Date'] as $f => $l): ?>
-                                                <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
-                                                        type="date" name="tax[<?= $f ?>]" class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($detail[$f] ?? '') ?>"></div>
-                                            <?php endforeach; ?>
-                                            <div class="col-12"><label class="form-label-mis">Remarks</label><textarea
-                                                    name="tax[remarks]" class="form-control form-control-sm"
-                                                    rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea></div>
-                                            <div class="col-12"><label class="form-label-mis">Notes</label><textarea
-                                                    name="tax[notes]" class="form-control form-control-sm"
-                                                    rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Tax Details</button></div>
-                                        </div>
-                                    </form>
-                                <?php endif; ?>
-                            </div>
+                    <?php if ($task['dept_code'] === 'TAX' && ($adminDeptCode === 'TAX' || $isStaff)): ?>
+                    <div class="card-mis mb-4">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-receipt text-warning me-2"></i>Tax Details</h5>
+                            <?php if (!$canEditDept): ?>
+                                <span style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i class="fas fa-eye me-1"></i>View Only</span>
+                            <?php endif; ?>
                         </div>
+                        <div class="card-mis-body">
+                            <?php if ($canEditDept):
+                                $savedAddressSuggestions = [];
+                                try { $savedAddressSuggestions = $db->query("SELECT DISTINCT assigned_office_address FROM task_tax WHERE assigned_office_address IS NOT NULL AND assigned_office_address!='' ORDER BY assigned_office_address")->fetchAll(PDO::FETCH_COLUMN); } catch (Exception $e) {}
+                            ?>
+                                <datalist id="office_address_list">
+                                    <?php foreach ($savedAddressSuggestions as $addr): ?>
+                                        <option value="<?= htmlspecialchars($addr) ?>">
+                                    <?php endforeach; ?>
+                                </datalist>
+                            <?php endif; ?>
 
-                        <!-- ════ BANK ════ -->
-                    <?php elseif ($task['dept_code'] === 'BANK'): ?>
+                            <?php if ($detail): ?>
+                                <div class="row g-3 mb-4">
+                                    <?php
+                                    $officeDisplay = $detail['assigned_office_name'] ?? '—';
+                                    $offAddrSaved  = $detail['assigned_office_address'] ?? $detail['assigned_office_default_address'] ?? '';
+                                    if ($offAddrSaved)
+                                        $officeDisplay .= ' <span style="color:#6b7280;font-size:.8em;">– ' . htmlspecialchars($offAddrSaved) . '</span>';
+                                    else
+                                        $officeDisplay = htmlspecialchars($officeDisplay);
+                                    foreach ([
+                                        'Firm Name'      => htmlspecialchars($detail['firm_name'] ?? '—'),
+                                        'Assigned Office'=> '<span style="background:#eff6ff;color:#3b82f6;padding:.2rem .6rem;border-radius:6px;font-weight:600;">' . $officeDisplay . '</span>',
+                                        'Tax Type'       => '<span style="background:#f0fdf4;color:#16a34a;padding:.2rem .6rem;border-radius:6px;font-weight:600;">' . htmlspecialchars($detail['tax_type_name'] ?? '—') . '</span>',
+                                        'Fiscal Year'    => htmlspecialchars($detail['fiscal_year'] ?? '—'),
+                                        'Business Type'  => htmlspecialchars($detail['business_type'] ?? '—'),
+                                        'PAN Number'     => htmlspecialchars($detail['pan_number'] ?? '—'),
+                                        'Assigned To'    => htmlspecialchars($detail['assigned_to_name'] ?? '—'),
+                                        'File Received'  => htmlspecialchars($detail['file_received_by_name'] ?? '—'),
+                                        'Updated By'     => htmlspecialchars($detail['updated_by_name'] ?? '—'),
+                                        'Verify By'      => htmlspecialchars($detail['verify_by_name'] ?? '—'),
+                                        'Tax Clearance'  => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'),
+                                        'Total Amount'   => 'Rs. ' . number_format($detail['total_amount'] ?? 0, 2),
+                                        'Completed Date' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
+                                        'Follow-up Date' => ($detail['follow_up_date'] ?? '') ? date('d M Y', strtotime($detail['follow_up_date'])) : '—',
+                                    ] as $lbl => $val): ?>
+                                        <div class="col-md-4">
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php foreach ([
+                                        ['Submission Number', $detail['submission_number'] ?? '', 'https://ird.gov.np', '#3b82f6', 'IRD Portal'],
+                                        ['UDIN Number',       $detail['udin_no']           ?? '', 'https://udin.ican.org.np/', '#8b5cf6', 'UDIN Portal'],
+                                    ] as [$lbl, $val, $url, $col, $btn]): ?>
+                                        <div class="col-md-6">
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
+                                            <div class="d-flex align-items-center gap-2 mt-1">
+                                                <span style="font-size:.88rem;font-weight:600;"><?= htmlspecialchars($val ?: '—') ?></span>
+                                                <?php if ($val): ?>
+                                                    <a href="<?= $url ?>" target="_blank" style="background:<?= $col ?>;color:white;padding:.2rem .6rem;border-radius:6px;font-size:.72rem;text-decoration:none;">
+                                                        <i class="fas fa-external-link-alt me-1"></i><?= $btn ?>
+                                                    </a>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php if (!empty($detail['remarks'])): ?>
+                                        <div class="col-12">
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Remarks</div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($detail['remarks'])) ?></div>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($detail['notes'])): ?>
+                                        <div class="col-12">
+                                            <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">Notes</div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;"><?= nl2br(htmlspecialchars($detail['notes'])) ?></div>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if ($canEditDept): ?>
+                                    <hr style="border-color:#f3f4f6;">
+                                    <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
+                                        <i class="fas fa-pen me-1"></i>Update Tax Details
+                                    </div>
+                                <?php endif; ?>
+                            <?php elseif (!$canEditDept): ?>
+                                <div class="text-center py-4 text-muted">
+                                    <i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No tax details recorded yet.
+                                </div>
+                            <?php else: ?>
+                                <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
+                                    <i class="fas fa-pen me-1"></i>Add Tax Details
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if (!empty($followupHistory)): ?>
+                                <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+                                    <div style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
+                                        <i class="fas fa-clock-rotate-left me-1"></i>Follow-up History
+                                        <span style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;"><?= count($followupHistory) ?> times</span>
+                                    </div>
+                                    <div style="position:relative;">
+                                        <div style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;"></div>
+                                        <?php foreach ($followupHistory as $i => $fu): ?>
+                                            <div style="display:flex;gap:.75rem;margin-bottom:.75rem;position:relative;">
+                                                <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;flex-shrink:0;z-index:1;"><?= $i + 1 ?></div>
+                                                <div style="background:white;border:1px solid #fde68a;border-radius:8px;padding:.5rem .75rem;flex:1;">
+                                                    <div style="font-size:.82rem;font-weight:700;color:#92400e;">
+                                                        <?= date('d M Y', strtotime($fu['followup_date'])) ?>
+                                                        <span style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">set on <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?> by <?= htmlspecialchars($fu['added_by_name']) ?></span>
+                                                    </div>
+                                                    <?php if ($fu['notes']): ?><div style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">"<?= htmlspecialchars($fu['notes']) ?>"</div><?php endif; ?>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if ($canEditDept): ?>
+                                <form method="POST">
+                                    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                    <input type="hidden" name="save_tax" value="1">
+                                    <div class="row g-3">
+                                        <div class="col-md-6">
+                                            <label class="form-label-mis">Firm Name</label>
+                                            <input type="text" name="tax[firm_name]" class="form-control form-control-sm"
+                                                   value="<?= htmlspecialchars($detail['firm_name'] ?? $task['company_name'] ?? '') ?>"
+                                                   <?= $task['company_id'] ? 'readonly style="background:#f0fdf4;cursor:not-allowed;"' : '' ?>>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Assigned Office</label>
+                                            <select name="tax[assigned_office_id]" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($taxOfficeTypes as $o): ?>
+                                                    <option value="<?= $o['id'] ?>" <?= ($detail['assigned_office_id'] ?? '') == $o['id'] ? 'selected' : '' ?>><?= htmlspecialchars($o['office_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Office Branch Address</label>
+                                            <input type="text" name="tax[assigned_office_address]" class="form-control form-control-sm"
+                                                   list="office_address_list" value="<?= htmlspecialchars($currentOfficeAddr) ?>" placeholder="e.g. Lazimpat, Kathmandu">
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Tax Type</label>
+                                            <select name="tax[tax_type_id]" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($taxTypes as $tt): ?>
+                                                    <option value="<?= $tt['id'] ?>" <?= ($detail['tax_type_id'] ?? '') == $tt['id'] ? 'selected' : '' ?>><?= htmlspecialchars($tt['tax_type_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Fiscal Year</label>
+                                            <?= fiscalYearSelect('tax[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Business Type</label>
+                                            <input type="text" name="tax[business_type]" class="form-control form-control-sm"
+                                                   value="<?= htmlspecialchars($detail['business_type'] ?? $companyTypeVal) ?>"
+                                                   <?= ($task['company_id'] && $companyTypeVal) ? 'readonly style="background:#f0fdf4;cursor:not-allowed;"' : '' ?>>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">PAN Number</label>
+                                            <?php if ($companyPanRow && $companyPanRow['pan_number']): ?>
+                                                <input type="text" name="tax[pan_number]" class="form-control form-control-sm"
+                                                       value="<?= htmlspecialchars($detail['pan_number'] ?? $companyPanRow['pan_number']) ?>"
+                                                       readonly style="background:#f0fdf4;font-weight:600;cursor:not-allowed;">
+                                            <?php else: ?>
+                                                <input type="text" name="tax[pan_number]" class="form-control form-control-sm"
+                                                       value="<?= htmlspecialchars($detail['pan_number'] ?? '') ?>" placeholder="Enter PAN">
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label-mis">Submission Number <span style="font-size:.68rem;color:#9ca3af;">(from IRD)</span></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" name="tax[submission_number]" class="form-control" value="<?= htmlspecialchars($detail['submission_number'] ?? '') ?>">
+                                                <a href="https://taxpayerportal.ird.gov.np/taxpayer/app.html" target="_blank" class="btn btn-outline-primary btn-sm"><i class="fas fa-external-link-alt"></i></a>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label-mis">UDIN Number <span style="font-size:.68rem;color:#9ca3af;">(from ICAN)</span></label>
+                                            <div class="input-group input-group-sm">
+                                                <input type="text" name="tax[udin_no]" class="form-control" value="<?= htmlspecialchars($detail['udin_no'] ?? '') ?>">
+                                                <a href="https://udin.ican.org.np/" target="_blank" class="btn btn-outline-secondary btn-sm"><i class="fas fa-external-link-alt"></i></a>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label-mis">Total Amount (Rs.)</label>
+                                            <input type="number" name="tax[total_amount]" class="form-control form-control-sm" step="0.01" min="0" value="<?= htmlspecialchars($detail['total_amount'] ?? '0') ?>">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label-mis">Tax Clearance Status</label>
+                                            <select name="tax[tax_clearance_status_id]" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($taskStatuses as $ts): ?>
+                                                    <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">File Received By</label>
+                                            <select name="tax[file_received_by]" id="tax_file_received_by" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($allStaff as $s): ?>
+                                                    <option value="<?= $s['id'] ?>" <?= ($detail['file_received_by'] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Updated By <span style="font-size:.65rem;color:#8b5cf6;margin-left:.3rem;"><i class="fas fa-filter me-1"></i>Tax dept only</span></label>
+                                            <select name="tax[updated_by]" id="tax_updated_by" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($taxStaff as $s): ?>
+                                                    <option value="<?= $s['id'] ?>" <?= ($detail['updated_by'] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Verify By</label>
+                                            <select name="tax[verify_by]" id="tax_verify_by" class="form-select form-select-sm">
+                                                <option value="">-- Select --</option>
+                                                <?php foreach ($allStaff as $s): ?>
+                                                    <option value="<?= $s['id'] ?>" <?= ($detail['verify_by'] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label-mis">Assigned To <span style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from task</span></label>
+                                            <div class="form-control form-control-sm" style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
+                                                <i class="fas fa-user-circle" style="color:#3b82f6;"></i><?= htmlspecialchars($taskAssignedToName) ?>
+                                            </div>
+                                            <input type="hidden" name="tax[assigned_to]" value="<?= $taskAssignedToId ?>">
+                                        </div>
+                                        <?php foreach (['assigned_date' => 'Assigned Date', 'completed_date' => 'Completed Date', 'follow_up_date' => 'Follow-up Date'] as $f => $l): ?>
+                                            <div class="col-md-4">
+                                                <label class="form-label-mis"><?= $l ?></label>
+                                                <input type="date" name="tax[<?= $f ?>]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail[$f] ?? '') ?>">
+                                            </div>
+                                        <?php endforeach; ?>
+                                        <div class="col-md-8">
+                                            <label class="form-label-mis">Follow-up Note <span style="font-size:.65rem;color:#9ca3af;">(optional, logged on date change)</span></label>
+                                            <input type="text" name="tax[follow_up_note]" class="form-control form-control-sm" placeholder="e.g. Called client, waiting for docs...">
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label-mis">Remarks</label>
+                                            <textarea name="tax[remarks]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea>
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label-mis">Notes</label>
+                                            <textarea name="tax[notes]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea>
+                                        </div>
+                                        <div class="col-12">
+                                            <button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save Tax Details</button>
+                                        </div>
+                                    </div>
+                                </form>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    
+                    <!-- ════ BANK ════ -->
+                    <?php elseif ($task['dept_code'] === 'BANK' && ($adminDeptCode === 'BANK' || $isStaff)): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-landmark text-warning me-2"></i>Banking Details</h5>
-                                <?php if (!$canEditDept): ?><span
-                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i
-                                            class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
+                                <?php if (!$canEditDept): ?><span style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
                             </div>
                             <div class="card-mis-body">
-                                <div
-                                    style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                                    <div
-                                        style="font-size:.72rem;font-weight:700;color:#16a34a;text-transform:uppercase;margin-bottom:.5rem;">
-                                        <i class="fas fa-building me-1"></i>Client Info
-                                    </div>
+                                <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+                                    <div style="font-size:.72rem;font-weight:700;color:#16a34a;text-transform:uppercase;margin-bottom:.5rem;"><i class="fas fa-building me-1"></i>Client Info</div>
                                     <div class="row g-2">
                                         <?php foreach (['Company' => $detail['company_name'] ?? ($task['company_name'] ?? '—'), 'Contact' => $detail['contact_person'] ?? '—', 'Phone' => $detail['contact_phone'] ?? '—', 'PAN' => $detail['company_pan'] ?? '—', 'Type' => $detail['company_type_name'] ?? '—', 'Bank' => $detail['bank_name'] ?? '—', 'Category' => $detail['client_category_name'] ?? '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Completion' => ($detail['completion_date'] ?? '') ? date('d M Y', strtotime($detail['completion_date'])) : '—'] as $lbl => $val): ?>
                                             <div class="col-md-4">
-                                                <div
-                                                    style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
+                                                <div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
                                                 <div style="font-size:.87rem;"><?= htmlspecialchars($val) ?></div>
                                             </div>
                                         <?php endforeach; ?>
@@ -1239,465 +1191,259 @@ include '../../includes/header.php';
                                 </div>
                                 <?php if ($detail && !$canEditDept): ?>
                                     <div style="background:#f9fafb;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                                        <div
-                                            style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                            Work Checklist</div>
+                                        <div style="font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">Work Checklist</div>
                                         <div class="row g-2">
-                                            <?php foreach (['Sales Check' => $detail['sales_check'] ?? '—', 'Audit' => $detail['audit_check'] ?? '—', 'Provisional/FS' => $detail['provisional_financial_statement'] ?? '—', 'Projected' => $detail['projected'] ?? '—', 'Consulting' => $detail['consulting'] ?? '—', 'NTA' => $detail['nta'] ?? '—', 'Salary Cert.' => $detail['salary_certificate'] ?? '—', 'CA Cert.' => $detail['ca_certification'] ?? '—', 'ETDS' => $detail['etds'] ?? '—', 'Bill Issued' => ($detail['bill_issued'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
+                                            <?php foreach (['Sales Check' => $detail['sales_check'] ?? '—', 'Audit' => $detail['audit_check'] ?? '—', 'Provisional/FS' => $detail['provisional_financial_statement'] ?? '—', 'Projected' => $detail['projected'] ?? '—', 'Consulting' => $detail['consulting'] ?? '—', 'NTA' => $detail['nta'] ?? '—', 'Salary Cert.' => $detail['salary_certificate'] ?? '—', 'CA Cert.' => $detail['ca_certification'] ?? '—', 'ETDS' => $detail['etds'] ?? '—', 
+                                           'OD (Rs.)'        => $detail['od']            !== null ? 'Rs. ' . number_format($detail['od'], 2) : '—',
+                                        'Term Loan (Rs.)' => $detail['term']          !== null ? 'Rs. ' . number_format($detail['term'], 2) : '—',
+                                        'Interest Rate %' => $detail['interest_rate'] !== null ? $detail['interest_rate'] . '%' : '—', 'Bill Issued' => ($detail['bill_issued'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
                                                 <div class="col-md-3 col-6">
-                                                    <div
-                                                        style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                        <?= $lbl ?>
-                                                    </div>
-                                                    <div style="font-size:.87rem;font-weight:600;">
-                                                        <?= htmlspecialchars((string) $val) ?>
-                                                    </div>
-                                                </div><?php endforeach; ?>
+                                                    <div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
+                                                    <div style="font-size:.87rem;font-weight:600;"><?= htmlspecialchars((string) $val) ?></div>
+                                                </div>
+                                            <?php endforeach; ?>
                                         </div>
                                     </div>
                                 <?php endif; ?>
                                 <?php if (!$detail && !$canEditDept): ?>
-                                    <div class="text-center py-4 text-muted"><i
-                                            class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No banking
-                                        details yet.</div><?php endif; ?>
+                                    <div class="text-center py-4 text-muted"><i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No banking details yet.</div>
+                                <?php endif; ?>
                                 <?php if ($canEditDept): ?>
-                                    <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
-                                            type="hidden" name="save_banking" value="1">
+                                    <form method="POST">
+                                        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                        <input type="hidden" name="save_banking" value="1">
                                         <div class="row g-3">
                                             <div class="col-md-6">
                                                 <label class="form-label-mis">Bank Name</label>
-
-                                                <select name="banking[bank_reference_id]" id="bank_select"
-                                                    class="form-select form-select-sm">
+                                                <select name="banking[bank_reference_id]" id="bank_select" class="form-select form-select-sm">
                                                     <option value="">-- Select Bank --</option>
-
                                                     <?php foreach ($allBanks as $bk): ?>
                                                         <option value="<?= $bk['id'] ?>" <?= ($detail['bank_reference_id'] ?? '') == $bk['id'] ? 'selected' : '' ?>>
-
-                                                            <?= htmlspecialchars($bk['bank_name']) ?>
-
-                                                            <?php if (!empty($bk['address'])): ?>
-                                                                - <?= htmlspecialchars($bk['address']) ?>
-                                                            <?php endif; ?>
-
+                                                            <?= htmlspecialchars($bk['bank_name']) ?><?php if (!empty($bk['address'])): ?> - <?= htmlspecialchars($bk['address']) ?><?php endif; ?>
                                                         </option>
                                                     <?php endforeach; ?>
-
                                                 </select>
                                             </div>
-                                            <div class="col-md-3"><label class="form-label-mis">Category</label><select
-                                                    name="banking[client_category_id]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($allCats as $cat): ?>
-                                                        <option value="<?= $cat['id'] ?>" <?= ($detail['client_category_id'] ?? '') == $cat['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($cat['category_name']) ?>
-                                                        </option>
+                                            <div class="col-md-3">
+                                                <label class="form-label-mis">Category</label>
+                                                <select name="banking[client_category_id]" class="form-select form-select-sm">
+                                                    <option value="">--</option>
+                                                    <?php foreach ($allCats as $cat): ?>
+                                                        <option value="<?= $cat['id'] ?>" <?= ($detail['client_category_id'] ?? '') == $cat['id'] ? 'selected' : '' ?>><?= htmlspecialchars($cat['category_name']) ?></option>
                                                     <?php endforeach; ?>
-                                                </select></div>
+                                                </select>
+                                            </div>
                                             <?php foreach (['ecd' => 'ECD', 'completion_date' => 'Completion Date'] as $f => $l): ?>
-                                                <div class="col-md-3"><label class="form-label-mis"><?= $l ?></label><input
-                                                        type="date" name="banking[<?= $f ?>]" class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($detail[$f] ?? '') ?>"></div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label-mis"><?= $l ?></label>
+                                                    <input type="date" name="banking[<?= $f ?>]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail[$f] ?? '') ?>">
+                                                </div>
                                             <?php endforeach; ?>
                                         </div>
                                         <div style="border-top:1px solid #f3f4f6;padding-top:1rem;margin-top:1rem;">
-                                            <div
-                                                style="font-size:.78rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                                Work Checklist</div>
+                                            <div style="font-size:.78rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">Work Checklist</div>
                                             <div class="row g-3">
                                                 <?php foreach (['sales_check' => 'Sales Check', 'audit_check' => 'Audit', 'provisional_financial_statement' => 'Provisional/FS', 'projected' => 'Projected', 'consulting' => 'Consulting', 'nta' => 'NTA', 'salary_certificate' => 'Salary Cert.', 'ca_certification' => 'CA Cert.', 'etds' => 'ETDS'] as $f => $l): ?>
-                                                    <div class="col-md-3 col-6"><label
-                                                            class="form-label-mis"><?= $l ?></label><input type="number"
-                                                            name="banking[<?= $f ?>]" class="form-control form-control-sm"
-                                                            value="<?= htmlspecialchars($detail[$f] ?? '') ?>" min="0"
-                                                            placeholder="—"></div>
-                                                <?php endforeach; ?>
-                                                <div class="col-md-3 col-6"><label class="form-label-mis">Bill Issued</label>
-                                                    <div class="form-check form-switch mt-2"><input class="form-check-input"
-                                                            type="checkbox" name="banking[bill_issued]" value="1"
-                                                            id="billIssued" <?= ($detail['bill_issued'] ?? 0) ? 'checked' : '' ?>><label class="form-check-label" for="billIssued">Yes</label>
+                                                    <div class="col-md-3 col-6">
+                                                        <label class="form-label-mis"><?= $l ?></label>
+                                                        <input type="number" name="banking[<?= $f ?>]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail[$f] ?? '') ?>" min="0" placeholder="—">
+                                                    </div>
+                                       <?php endforeach; ?>
+                                       <div class="col-md-3 col-6">
+                                        <label class="form-label-mis">OD (Rs.)<small class='text-muted'> in lakh</small></label>
+                                        <input type="number" name="banking[od]" class="form-control form-control-sm"
+                                               value="<?= htmlspecialchars($detail['od'] ?? '') ?>"
+                                               step="0.01" min="0" placeholder="—">
+                                    </div>
+                                    <div class="col-md-3 col-6">
+                                        <label class="form-label-mis">Term Loan (Rs.) <small class='text-muted'> in lakh</small></label>
+                                        <input type="number" name="banking[term]" class="form-control form-control-sm"
+                                               value="<?= htmlspecialchars($detail['term'] ?? '') ?>"
+                                               step="0.01" min="0" placeholder="—">
+                                    </div>
+                                    <div class="col-md-3 col-6">
+                                        <label class="form-label-mis">Interest Rate (%)</label>
+                                        <input type="number" name="banking[interest_rate]" class="form-control form-control-sm"
+                                               value="<?= htmlspecialchars($detail['interest_rate'] ?? '') ?>"
+                                               step="0.01" min="0" max="100" placeholder="—">
+                                    </div>
+                                                <div class="col-md-3 col-6">
+                                                    <label class="form-label-mis">Bill Issued</label>
+                                                    <div class="form-check form-switch mt-2">
+                                                        <input class="form-check-input" type="checkbox" name="banking[bill_issued]" value="1" id="billIssued" <?= ($detail['bill_issued'] ?? 0) ? 'checked' : '' ?>>
+                                                        <label class="form-check-label" for="billIssued">Yes</label>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <div class="mt-3"><label class="form-label-mis">Remarks</label><textarea
-                                                name="banking[remarks]" class="form-control form-control-sm"
-                                                rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea></div>
-                                        <div class="mt-3"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                    class="fas fa-save me-1"></i>Save Banking Details</button></div>
+                                        <div class="mt-3">
+                                            <label class="form-label-mis">Remarks</label>
+                                            <textarea name="banking[remarks]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea>
+                                        </div>
+                                        <div class="mt-3"><button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save Banking Details</button></div>
                                     </form>
                                 <?php endif; ?>
                             </div>
                         </div>
 
-                        <!-- ════ FINANCE ════ -->
-                    <?php elseif ($task['dept_code'] === 'FIN'): ?>
+                    <!-- ════ FINANCE ════ -->
+                    <?php elseif ($task['dept_code'] === 'FIN' && ($adminDeptCode === 'FIN' || $isStaff)): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-coins text-warning me-2"></i>Finance Details</h5>
-                                <?php if (!$canEditDept): ?><span
-                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i
-                                            class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
+                                <?php if (!$canEditDept): ?><span style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
                             </div>
                             <div class="card-mis-body">
                                 <?php if ($detail): ?>
                                     <div class="row g-3 mb-4">
-                                        <?php foreach (['Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Total Amount' => 'Rs. ' . number_format($detail['total_amount'] ?? 0, 2), 'Paid Amount' => 'Rs. ' . number_format($detail['paid_amount'] ?? 0, 2), 'Due Amount' => 'Rs. ' . number_format($detail['due_amount'] ?? 0, 2), 'Payment Date' => ($detail['payment_date'] ?? '') ? date('d M Y', strtotime($detail['payment_date'])) : '—', 'Method' => htmlspecialchars($detail['payment_method'] ?? '—'), 'Payment Status' => htmlspecialchars($detail['payment_status_name'] ?? '—'), 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'TC Date' => ($detail['tax_clearance_date'] ?? '') ? date('d M Y', strtotime($detail['tax_clearance_date'])) : '—', 'Completed' => ($detail['is_completed'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
+                                        <?php foreach (['Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Total Amount' => 'Rs. '.number_format($detail['total_amount'] ?? 0, 2), 'Paid Amount' => 'Rs. '.number_format($detail['paid_amount'] ?? 0, 2), 'Due Amount' => 'Rs. '.number_format($detail['due_amount'] ?? 0, 2), 'Payment Date' => ($detail['payment_date'] ?? '') ? date('d M Y', strtotime($detail['payment_date'])) : '—', 'Method' => htmlspecialchars($detail['payment_method'] ?? '—'), 'Payment Status' => htmlspecialchars($detail['payment_status_name'] ?? '—'), 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'TC Date' => ($detail['tax_clearance_date'] ?? '') ? date('d M Y', strtotime($detail['tax_clearance_date'])) : '—', 'Completed' => ($detail['is_completed'] ?? 0) ? '✅ Yes' : 'No'] as $lbl => $val): ?>
                                             <div class="col-md-4">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
+                                                <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
-                                    <?php if ($canEditDept): ?>
-                                        <hr style="border-color:#f3f4f6;"><?php endif; ?>
+                                    <?php if ($canEditDept): ?><hr style="border-color:#f3f4f6;"><?php endif; ?>
                                 <?php elseif (!$canEditDept): ?>
-                                    <div class="text-center py-4 text-muted"><i
-                                            class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No finance
-                                        details yet.</div>
+                                    <div class="text-center py-4 text-muted"><i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No finance details yet.</div>
                                 <?php endif; ?>
                                 <?php if ($canEditDept): ?>
-                                    <div
-                                        style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Finance Details
-                                    </div>
-                                    <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
-                                            type="hidden" name="save_finance" value="1">
+                                    <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;"><i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Finance Details</div>
+                                    <form method="POST">
+                                        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                        <input type="hidden" name="save_finance" value="1">
                                         <div class="row g-3">
                                             <div class="col-md-3">
                                                 <label class="form-label-mis">Fiscal Year</label>
                                                 <?= fiscalYearSelect('finance[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?>
                                             </div>
                                             <?php foreach (['total_amount' => 'Total Amount (Rs.)', 'paid_amount' => 'Paid Amount (Rs.)'] as $f => $l): ?>
-                                                <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input
-                                                        type="number" name="finance[<?= $f ?>]" class="form-control form-control-sm"
-                                                        step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>">
-                                                </div>
+                                                <div class="col-md-4"><label class="form-label-mis"><?= $l ?></label><input type="number" name="finance[<?= $f ?>]" class="form-control form-control-sm" step="0.01" min="0" value="<?= htmlspecialchars($detail[$f] ?? '0') ?>"></div>
                                             <?php endforeach; ?>
-                                            <div class="col-md-4"><label class="form-label-mis">Due Amount</label><input
-                                                    type="text" class="form-control form-control-sm"
-                                                    value="Rs. <?= number_format($detail['due_amount'] ?? 0, 2) ?>" readonly
-                                                    style="background:#f9fafb;"></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Payment Date</label><input
-                                                    type="date" name="finance[payment_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['payment_date'] ?? '') ?>"></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Payment Method</label><select
-                                                    name="finance[payment_method]" class="form-select form-select-sm">
-                                                    <option value="">--</option>
-                                                    <?php foreach (['Cash', 'Cheque', 'Online Transfer', 'Bank Deposit'] as $pm): ?>
-                                                        <option value="<?= $pm ?>" <?= ($detail['payment_method'] ?? '') === $pm ? 'selected' : '' ?>><?= $pm ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Payment Status</label><select
-                                                    name="finance[payment_status_id]" class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['payment_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance
-                                                    Status</label><select name="finance[tax_clearance_status_id]"
-                                                    class="form-select form-select-sm">
-                                                    <option value="">--</option><?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance Date</label><input
-                                                    type="date" name="finance[tax_clearance_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['tax_clearance_date'] ?? '') ?>"></div>
-                                            <div class="col-12"><label class="form-label-mis">Remarks</label><textarea
-                                                    name="finance[remarks]" class="form-control form-control-sm"
-                                                    rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea></div>
-                                            <div class="col-12">
-                                                <div class="form-check"><input class="form-check-input" type="checkbox"
-                                                        name="finance[is_completed]" value="1" id="finDone"
-                                                        <?= ($detail['is_completed'] ?? 0) ? 'checked' : '' ?>><label
-                                                        class="form-check-label" for="finDone" style="font-size:.85rem;">Mark as
-                                                        Completed (sets task to Done)</label></div>
-                                            </div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Finance Details</button></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Due Amount</label><input type="text" class="form-control form-control-sm" value="Rs. <?= number_format($detail['due_amount'] ?? 0, 2) ?>" readonly style="background:#f9fafb;"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Payment Date</label><input type="date" name="finance[payment_date]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['payment_date'] ?? '') ?>"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Payment Method</label><select name="finance[payment_method]" class="form-select form-select-sm"><option value="">--</option><?php foreach (['Cash','Cheque','Online Transfer','Bank Deposit'] as $pm): ?><option value="<?= $pm ?>" <?= ($detail['payment_method'] ?? '') === $pm ? 'selected' : '' ?>><?= $pm ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Payment Status</label><select name="finance[payment_status_id]" class="form-select form-select-sm"><option value="">--</option><?php foreach ($taskStatuses as $ts): ?><option value="<?= $ts['id'] ?>" <?= ($detail['payment_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance Status</label><select name="finance[tax_clearance_status_id]" class="form-select form-select-sm"><option value="">--</option><?php foreach ($taskStatuses as $ts): ?><option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance Date</label><input type="date" name="finance[tax_clearance_date]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['tax_clearance_date'] ?? '') ?>"></div>
+                                            <div class="col-12"><label class="form-label-mis">Remarks</label><textarea name="finance[remarks]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea></div>
+                                            <div class="col-12"><div class="form-check"><input class="form-check-input" type="checkbox" name="finance[is_completed]" value="1" id="finDone" <?= ($detail['is_completed'] ?? 0) ? 'checked' : '' ?>><label class="form-check-label" for="finDone" style="font-size:.85rem;">Mark as Completed (sets task to Done)</label></div></div>
+                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save Finance Details</button></div>
                                         </div>
                                     </form>
                                 <?php endif; ?>
                             </div>
                         </div>
 
-                        <!-- ════ RETAIL ════ -->
-                    <?php elseif ($task['dept_code'] === 'RETAIL'): ?>
+                    <!-- ════ RETAIL ════ -->
+                    <?php elseif ($task['dept_code'] === 'RETAIL' && ($adminDeptCode === 'RETAIL' || $isStaff)): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-store text-warning me-2"></i>Retail Details</h5>
-                                <?php if (!$canEditDept): ?><span
-                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i
-                                            class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
+                                <?php if (!$canEditDept): ?><span style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
                             </div>
                             <div class="card-mis-body">
                                 <?php if ($detail): ?>
                                     <div class="row g-3 mb-4">
-                                        <?php foreach (['Firm Name' => htmlspecialchars($detail['firm_name'] ?? '—'), 'Company Type' => htmlspecialchars($detail['company_type_name'] ?? '—'), 'File Type' => htmlspecialchars($detail['file_type_name'] ?? '—'), 'PAN / VAT' => htmlspecialchars($detail['pan_vat_name'] ?? '—'), 'VAT Client' => htmlspecialchars($detail['vat_client_value'] ?? '—'), 'Return Type' => htmlspecialchars($detail['return_type'] ?? '—'), 'Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Audit Years' => htmlspecialchars($detail['no_of_audit_year'] ?? '—'), 'PAN No' => htmlspecialchars($detail['pan_no'] ?? '—'), 'Audit Type' => htmlspecialchars($detail['audit_type_name'] ?? '—'), 'Assigned To' => htmlspecialchars($detail['retail_assigned_to_name'] ?? '—'), 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Opening Due' => $detail['opening_due'] !== null ? 'Rs. ' . number_format($detail['opening_due'], 2) : '—', 'Work Status' => htmlspecialchars($detail['work_status_name'] ?? '—'), 'Finalisation' => htmlspecialchars($detail['finalisation_status_name'] ?? '—'), 'Finalised By' => htmlspecialchars($detail['finalised_by_name'] ?? '—'), 'Completed' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—', 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'Backup' => htmlspecialchars($detail['backup_status_value'] ?? '—'), 'Follow-up' => ($detail['follow_up_date'] ?? '') ? date('d M Y', strtotime($detail['follow_up_date'])) : '—', 'Notes' => htmlspecialchars($detail['notes'] ?? '—')] as $lbl => $val): ?>
+                                        <?php foreach (['Firm Name' => htmlspecialchars($detail['firm_name'] ?? '—'), 'Company Type' => htmlspecialchars($detail['company_type_name'] ?? '—'), 'File Type' => htmlspecialchars($detail['file_type_name'] ?? '—'), 'PAN / VAT' => htmlspecialchars($detail['pan_vat_name'] ?? '—'), 'VAT Client' => htmlspecialchars($detail['vat_client_value'] ?? '—'), 'Return Type' => htmlspecialchars($detail['return_type'] ?? '—'), 'Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'), 'Audit Years' => htmlspecialchars($detail['no_of_audit_year'] ?? '—'), 'PAN No' => htmlspecialchars($detail['pan_no'] ?? '—'), 'Audit Type' => htmlspecialchars($detail['audit_type_name'] ?? '—'), 'Assigned To' => htmlspecialchars($detail['retail_assigned_to_name'] ?? '—'), 'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—', 'ECD' => ($detail['ecd'] ?? '') ? date('d M Y', strtotime($detail['ecd'])) : '—', 'Opening Due' => $detail['opening_due'] !== null ? 'Rs. '.number_format($detail['opening_due'], 2) : '—', 'Work Status' => htmlspecialchars($detail['work_status_name'] ?? '—'), 'Finalisation' => htmlspecialchars($detail['finalisation_status_name'] ?? '—'), 'Finalised By' => htmlspecialchars($detail['finalised_by_name'] ?? '—'), 'Completed' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—', 'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'), 'Backup' => htmlspecialchars($detail['backup_status_value'] ?? '—'), 'Follow-up' => ($detail['follow_up_date'] ?? '') ? date('d M Y', strtotime($detail['follow_up_date'])) : '—', 'Notes' => htmlspecialchars($detail['notes'] ?? '—')] as $lbl => $val): ?>
                                             <div class="col-md-4">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
+                                                <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
-                                    <?php if ($canEditDept): ?>
-                                        <hr style="border-color:#f3f4f6;"><?php endif; ?>
+                                    <?php if ($canEditDept): ?><hr style="border-color:#f3f4f6;"><?php endif; ?>
                                 <?php elseif (!$canEditDept): ?>
-                                    <div class="text-center py-4 text-muted"><i
-                                            class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>
-                                        <p style="font-size:.9rem;">No retail details yet.</p>
-                                    </div>
+                                    <div class="text-center py-4 text-muted"><i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i><p style="font-size:.9rem;">No retail details yet.</p></div>
                                 <?php endif; ?>
-
                                 <?php if ($canEditDept):
                                     $ro = 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"';
                                     $roCo = $task['company_id'] ? $ro : '';
-                                    $cFirmName = $detail['firm_name'] ?? $task['company_name'] ?? '';
+                                    $cFirmName  = $detail['firm_name'] ?? $task['company_name'] ?? '';
                                     $cCompTypeId = $detail['company_type_id'] ?? ($companyData['company_type_id_val'] ?? '');
-                                    $cCompType = $detail['company_type_name'] ?? ($companyData['company_type_name'] ?? '');
+                                    $cCompType  = $detail['company_type_name'] ?? ($companyData['company_type_name'] ?? '');
                                     $cReturnType = $detail['return_type'] ?? ($companyData['return_type'] ?? '');
-                                    $cPanNo = $detail['pan_no'] ?? ($companyData['pan_number'] ?? '');
-                                    $cPanVatId = $detail['pan_vat_id'] ?? '';
+                                    $cPanNo     = $detail['pan_no'] ?? ($companyData['pan_number'] ?? '');
+                                    $cPanVatId  = $detail['pan_vat_id'] ?? '';
                                     $cVatClientId = $detail['vat_client_id'] ?? '';
-                                    ?>
-                                    <div
-                                        style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Retail Details
-                                    </div>
+                                ?>
+                                    <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;"><i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Retail Details</div>
                                     <form method="POST">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="save_retail" value="1">
                                         <div class="row g-3">
-                                            <div class="col-md-6"><label class="form-label-mis">Firm Name
-                                                    <?php if ($task['company_id']): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label><input type="text"
-                                                    name="retail[firm_name]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cFirmName) ?>" <?= $roCo ?>></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Company Type
-                                                    <?php if ($cCompType): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label>
-                                                <?php if ($cCompType && $task['company_id']): ?><input type="text"
-                                                        class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($cCompType) ?>" <?= $ro ?>><input type="hidden"
-                                                        name="retail[company_type_id]"
-                                                        value="<?= htmlspecialchars($cCompTypeId) ?>">
-                                                <?php else: ?><select name="retail[company_type_id]"
-                                                        class="form-select form-select-sm">
-                                                        <option value="">-- Select --</option>
-                                                        <?php foreach ($companyTypes as $ct): ?>
-                                                            <option value="<?= $ct['id'] ?>" <?= $cCompTypeId == $ct['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ct['type_name']) ?></option>
-                                                        <?php endforeach; ?>
-                                                    </select><?php endif; ?>
+                                            <div class="col-md-6"><label class="form-label-mis">Firm Name <?php if ($task['company_id']): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label><input type="text" name="retail[firm_name]" class="form-control form-control-sm" value="<?= htmlspecialchars($cFirmName) ?>" <?= $roCo ?>></div>
+                                            <div class="col-md-3"><label class="form-label-mis">Company Type <?php if ($cCompType): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label>
+                                                <?php if ($cCompType && $task['company_id']): ?>
+                                                    <input type="text" class="form-control form-control-sm" value="<?= htmlspecialchars($cCompType) ?>" <?= $ro ?>>
+                                                    <input type="hidden" name="retail[company_type_id]" value="<?= htmlspecialchars($cCompTypeId) ?>">
+                                                <?php else: ?>
+                                                    <select name="retail[company_type_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($companyTypes as $ct): ?><option value="<?= $ct['id'] ?>" <?= $cCompTypeId == $ct['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ct['type_name']) ?></option><?php endforeach; ?></select>
+                                                <?php endif; ?>
                                             </div>
-                                            <div class="col-md-3"><label class="form-label-mis">File Type</label><select
-                                                    name="retail[file_type_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($fileTypes as $ft): ?>
-                                                        <option value="<?= $ft['id'] ?>" <?= ($detail['file_type_id'] ?? '') == $ft['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ft['type_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">PAN / VAT</label><select
-                                                    name="retail[pan_vat_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($panVatTypes as $pv): ?>
-                                                        <option value="<?= $pv['id'] ?>" <?= $cPanVatId == $pv['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($pv['type_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">VAT Client</label><select
-                                                    name="retail[vat_client_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($yesNoOpts as $yn): ?>
-                                                        <option value="<?= $yn['id'] ?>" <?= $cVatClientId == $yn['id'] ? 'selected' : '' ?>><?= htmlspecialchars($yn['value']) ?></option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Return Type
-                                                    <?php if ($cReturnType && $task['company_id']): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label>
-                                                <?php if ($cReturnType && $task['company_id']): ?><input type="text"
-                                                        class="form-control form-control-sm"
-                                                        value="<?= htmlspecialchars($cReturnType) ?>" <?= $ro ?>><input type="hidden"
-                                                        name="retail[return_type]" value="<?= htmlspecialchars($cReturnType) ?>">
-                                                <?php else: ?><select name="retail[return_type]"
-                                                        class="form-select form-select-sm">
-                                                        <option value="">-- Select --</option>
-                                                        <?php foreach (['D1', 'D2', 'D3', 'D4'] as $rt): ?>
-                                                            <option value="<?= $rt ?>" <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?>
-                                                            </option><?php endforeach; ?>
-                                                    </select><?php endif; ?>
+                                            <div class="col-md-3"><label class="form-label-mis">File Type</label><select name="retail[file_type_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($fileTypes as $ft): ?><option value="<?= $ft['id'] ?>" <?= ($detail['file_type_id'] ?? '') == $ft['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ft['type_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-3"><label class="form-label-mis">PAN / VAT</label><select name="retail[pan_vat_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($panVatTypes as $pv): ?><option value="<?= $pv['id'] ?>" <?= $cPanVatId == $pv['id'] ? 'selected' : '' ?>><?= htmlspecialchars($pv['type_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-3"><label class="form-label-mis">VAT Client</label><select name="retail[vat_client_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($yesNoOpts as $yn): ?><option value="<?= $yn['id'] ?>" <?= $cVatClientId == $yn['id'] ? 'selected' : '' ?>><?= htmlspecialchars($yn['value']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-3"><label class="form-label-mis">Return Type <?php if ($cReturnType && $task['company_id']): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label>
+                                                <?php if ($cReturnType && $task['company_id']): ?>
+                                                    <input type="text" class="form-control form-control-sm" value="<?= htmlspecialchars($cReturnType) ?>" <?= $ro ?>>
+                                                    <input type="hidden" name="retail[return_type]" value="<?= htmlspecialchars($cReturnType) ?>">
+                                                <?php else: ?>
+                                                    <select name="retail[return_type]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach (['D1','D2','D3','D4'] as $rt): ?><option value="<?= $rt ?>" <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?></option><?php endforeach; ?></select>
+                                                <?php endif; ?>
                                             </div>
-                                            <div class="col-md-3"><label class="form-label-mis">Audit Type</label><select
-                                                    name="retail[audit_type_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($auditTypes2 as $at): ?>
-                                                        <option value="<?= $at['id'] ?>" <?= ($detail['audit_type_id'] ?? '') == $at['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($at['type_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3">
-                                                <label class="form-label-mis">Fiscal Year</label>
-                                                <?= fiscalYearSelect('retail[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?>
+                                            <div class="col-md-3"><label class="form-label-mis">Audit Type</label><select name="retail[audit_type_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($auditTypes2 as $at): ?><option value="<?= $at['id'] ?>" <?= ($detail['audit_type_id'] ?? '') == $at['id'] ? 'selected' : '' ?>><?= htmlspecialchars($at['type_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-3"><label class="form-label-mis">Fiscal Year</label><?= fiscalYearSelect('retail[fiscal_year]', $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy), $fys) ?></div>
+                                            <div class="col-md-3"><label class="form-label-mis">No. of Audit Years <span style="font-size:.65rem;color:#f59e0b;margin-left:.3rem;"><i class="fas fa-pen me-1"></i>editable</span></label><input type="number" name="retail[no_of_audit_year]" class="form-control form-control-sm" min="1" value="<?= htmlspecialchars($detail['no_of_audit_year'] ?? '1') ?>" style="border-color:#f59e0b;"></div>
+                                            <div class="col-md-3"><label class="form-label-mis">PAN No <?php if ($cPanNo && $task['company_id']): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label><input type="text" name="retail[pan_no]" class="form-control form-control-sm" value="<?= htmlspecialchars($cPanNo) ?>" <?= ($cPanNo && $task['company_id']) ? $ro : '' ?>></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Assigned To <span style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from task</span></label>
+                                                <div class="form-control form-control-sm" style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
+                                                    <i class="fas fa-user-circle" style="color:#3b82f6;"></i><?= htmlspecialchars($taskAssignedToName) ?>
+                                                </div>
+                                                <input type="hidden" name="retail[assigned_to]" value="<?= $taskAssignedToId ?>">
                                             </div>
-                                            <div class="col-md-3"><label class="form-label-mis">No. of Audit Years <span
-                                                        style="font-size:.65rem;color:#f59e0b;margin-left:.3rem;"><i
-                                                            class="fas fa-pen me-1"></i>editable</span></label><input
-                                                    type="number" name="retail[no_of_audit_year]"
-                                                    class="form-control form-control-sm" min="1"
-                                                    value="<?= htmlspecialchars($detail['no_of_audit_year'] ?? '1') ?>"
-                                                    style="border-color:#f59e0b;"></div>
-                                            <div class="col-md-3"><label class="form-label-mis">PAN No
-                                                    <?php if ($cPanNo && $task['company_id']): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label><input type="text"
-                                                    name="retail[pan_no]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cPanNo) ?>" <?= ($cPanNo && $task['company_id']) ? $ro : '' ?>></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Assigned To <span
-                                                        style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i
-                                                            class="fas fa-link me-1"></i>from task</span></label>
-                                                <div class="form-control form-control-sm"
-                                                    style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
-                                                    <i class="fas fa-user-circle"
-                                                        style="color:#3b82f6;"></i><?= htmlspecialchars($taskAssignedToName) ?>
-                                                </div><input type="hidden" name="retail[assigned_to]"
-                                                    value="<?= $taskAssignedToId ?>">
-                                            </div>
-
-                                            <div class="col-md-4"><label class="form-label-mis">ECD</label><input type="date"
-                                                    name="retail[ecd]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['ecd'] ?? '') ?>"></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Opening Due (Rs.)</label><input
-                                                    type="number" step="0.01" name="retail[opening_due]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['opening_due'] ?? '0') ?>"></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Work Status</label><select
-                                                    name="retail[work_status_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Finalisation
-                                                    Status</label><select name="retail[finalisation_status_id]"
-                                                    class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['finalisation_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">ECD</label><input type="date" name="retail[ecd]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['ecd'] ?? '') ?>"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Opening Due (Rs.)</label><input type="number" step="0.01" name="retail[opening_due]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['opening_due'] ?? '0') ?>"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Work Status</label><select name="retail[work_status_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($taskStatuses as $ts): ?><option value="<?= $ts['id'] ?>" <?= ($detail['work_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Finalisation Status</label><select name="retail[finalisation_status_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($taskStatuses as $ts): ?><option value="<?= $ts['id'] ?>" <?= ($detail['finalisation_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?></select></div>
                                             <div class="col-md-4"><label class="form-label-mis">Finalised By</label>
-                                                <select name="retail[finalised_by]" id="retail_finalised_by"
-                                                    class="form-select form-select-sm">
+                                                <select name="retail[finalised_by]" id="retail_finalised_by" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($allFinal as $s): ?>
-                                                        <option value="<?= $s['id'] ?>"
-                                                            data-branch="<?= htmlspecialchars($s['branch_name'] ?? '') ?>"
-                                                            <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($s['full_name']) ?>
-                                                            <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
-                                                        </option>
+                                                        <option value="<?= $s['id'] ?>" data-branch="<?= htmlspecialchars($s['branch_name'] ?? '') ?>" <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?><?= !empty($s['employee_id']) ? ' ('.$s['employee_id'].')' : '' ?></option>
                                                     <?php endforeach; ?>
                                                 </select>
                                             </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
-                                                    type="date" name="retail[completed_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['completed_date'] ?? '') ?>"></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance
-                                                    Status</label><select name="retail[tax_clearance_status_id]"
-                                                    class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($taskStatuses as $ts): ?>
-                                                        <option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($ts['status_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-4"><label class="form-label-mis">Backup Status</label><select
-                                                    name="retail[backup_status_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option><?php foreach ($yesNoOpts as $yn): ?>
-                                                        <option value="<?= $yn['id'] ?>" <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($yn['value']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select></div>
-                                            <div class="col-md-3"><label class="form-label-mis">Follow-up Date</label>
-                                                <input type="date" name="retail[follow_up_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($detail['follow_up_date'] ?? '') ?>">
-                                            </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Follow-up Note
-                                                    <span style="font-size:.65rem;color:#9ca3af;">(optional, logged on date
-                                                        change)</span>
-                                                </label>
-                                                <input type="text" name="retail[follow_up_note]"
-                                                    class="form-control form-control-sm"
-                                                    placeholder="e.g. Called client, waiting for docs...">
-                                            </div>
-                                            <div class="col-12"><label class="form-label-mis">Notes</label><textarea
-                                                    name="retail[notes]" class="form-control form-control-sm"
-                                                    rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Retail Details</button></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input type="date" name="retail[completed_date]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['completed_date'] ?? '') ?>"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Tax Clearance Status</label><select name="retail[tax_clearance_status_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($taskStatuses as $ts): ?><option value="<?= $ts['id'] ?>" <?= ($detail['tax_clearance_status_id'] ?? '') == $ts['id'] ? 'selected' : '' ?>><?= htmlspecialchars($ts['status_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Backup Status</label><select name="retail[backup_status_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($yesNoOpts as $yn): ?><option value="<?= $yn['id'] ?>" <?= ($detail['backup_status_id'] ?? '') == $yn['id'] ? 'selected' : '' ?>><?= htmlspecialchars($yn['value']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-3"><label class="form-label-mis">Follow-up Date</label><input type="date" name="retail[follow_up_date]" class="form-control form-control-sm" value="<?= htmlspecialchars($detail['follow_up_date'] ?? '') ?>"></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Follow-up Note <span style="font-size:.65rem;color:#9ca3af;">(optional, logged on date change)</span></label><input type="text" name="retail[follow_up_note]" class="form-control form-control-sm" placeholder="e.g. Called client, waiting for docs..."></div>
+                                            <div class="col-12"><label class="form-label-mis">Notes</label><textarea name="retail[notes]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
+                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save Retail Details</button></div>
                                         </div>
                                     </form>
                                 <?php endif; ?>
                             </div>
                         </div>
+                        <!-- Follow-up History for RETAIL -->
                         <?php if (!empty($followupHistory)): ?>
-                            <div
-                                style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
-                                <div
-                                    style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
-                                    <i class="fas fa-clock-rotate-left me-1"></i>
-                                    Follow-up History
-                                    <span
-                                        style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;">
-                                        <?= count($followupHistory) ?> times
-                                    </span>
+                            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+                                <div style="font-size:.72rem;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:.75rem;">
+                                    <i class="fas fa-clock-rotate-left me-1"></i>Follow-up History
+                                    <span style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;margin-left:.4rem;"><?= count($followupHistory) ?> times</span>
                                 </div>
                                 <div style="position:relative;">
-                                    <!-- vertical line -->
-                                    <div style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;">
-                                    </div>
+                                    <div style="position:absolute;left:11px;top:0;bottom:0;width:2px;background:#fde68a;"></div>
                                     <?php foreach ($followupHistory as $i => $fu): ?>
                                         <div style="display:flex;gap:.75rem;margin-bottom:.75rem;position:relative;">
-                                            <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;
-                                                        display:flex;align-items:center;justify-content:center;font-size:.68rem;
-                                                        font-weight:700;flex-shrink:0;z-index:1;">
-                                                <?= $i + 1 ?>
-                                            </div>
-                                            <div style="background:white;border:1px solid #fde68a;border-radius:8px;
-                                                            padding:.5rem .75rem;flex:1;">
+                                            <div style="width:24px;height:24px;border-radius:50%;background:#f59e0b;color:white;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;flex-shrink:0;z-index:1;"><?= $i + 1 ?></div>
+                                            <div style="background:white;border:1px solid #fde68a;border-radius:8px;padding:.5rem .75rem;flex:1;">
                                                 <div style="font-size:.82rem;font-weight:700;color:#92400e;">
                                                     <?= date('d M Y', strtotime($fu['followup_date'])) ?>
-                                                    <span style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">
-                                                        set on
-                                                        <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
-                                                        by
-                                                        <?= htmlspecialchars($fu['added_by_name']) ?>
-                                                    </span>
+                                                    <span style="font-weight:400;color:#9ca3af;font-size:.72rem;margin-left:.5rem;">set on <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?> by <?= htmlspecialchars($fu['added_by_name']) ?></span>
                                                 </div>
-                                                <?php if ($fu['notes']): ?>
-                                                    <div style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
-                                                        "
-                                                        <?= htmlspecialchars($fu['notes']) ?>"
-                                                    </div>
-                                                <?php endif; ?>
+                                                <?php if ($fu['notes']): ?><div style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">"<?= htmlspecialchars($fu['notes']) ?>"</div><?php endif; ?>
                                             </div>
                                         </div>
                                     <?php endforeach; ?>
@@ -1705,155 +1451,86 @@ include '../../includes/header.php';
                             </div>
                         <?php endif; ?>
 
-
-                        <!-- ════ CORP ════ -->
-                    <?php elseif ($task['dept_code'] === 'CORP'): ?>
+                    <!-- ════ CORP ════ -->
+                    <?php elseif ($task['dept_code'] === 'CORP' && ($adminDeptCode === 'CORP' || $isStaff)): ?>
                         <div class="card-mis mb-4">
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-building text-warning me-2"></i>Corporate Details</h5>
-                                <?php if (!$canEditDept): ?><span
-                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i
-                                            class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
+                                <?php if (!$canEditDept): ?><span style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;"><i class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
                             </div>
                             <div class="card-mis-body">
                                 <?php if ($detail): ?>
                                     <div class="row g-3 mb-4">
                                         <?php foreach ([
-                                            'Firm Name' => htmlspecialchars($detail['firm_name'] ?? $task['company_name'] ?? '—'),
-                                            'PAN No' => htmlspecialchars($detail['pan_no'] ?? ($companyData['pan_number'] ?? '—')),
-                                            'Grade' => htmlspecialchars($detail['grade_name'] ?? '—'),
-                                            'Fiscal Year' => htmlspecialchars($detail['fiscal_year_label'] ?: ($detail['fiscal_year'] ?? $task['fiscal_year'] ?? '—')),
-                                            'Assigned To' => htmlspecialchars($detail['assigned_to_name'] ?? $taskAssignedToName),
-                                            'Finalised By' => htmlspecialchars($detail['finalised_by_name'] ?? '—'),
-                                            'Completed Date' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
-                                            'Remarks' => htmlspecialchars($detail['remarks'] ?? '—'),
+                                            'Firm Name'     => htmlspecialchars($detail['firm_name'] ?? $task['company_name'] ?? '—'),
+                                            'PAN No'        => htmlspecialchars($detail['pan_no'] ?? ($companyData['pan_number'] ?? '—')),
+                                            'Grade'         => htmlspecialchars($detail['grade_name'] ?? '—'),
+                                            'Fiscal Year'   => htmlspecialchars($detail['fiscal_year_label'] ?: ($detail['fiscal_year'] ?? $task['fiscal_year'] ?? '—')),
+                                            'Assigned To'   => htmlspecialchars($detail['assigned_to_name'] ?? $taskAssignedToName),
+                                            'Finalised By'  => htmlspecialchars($detail['finalised_by_name'] ?? '—'),
+                                            'Completed Date'=> ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
+                                            'Remarks'       => htmlspecialchars($detail['remarks'] ?? '—'),
                                         ] as $lbl => $val): ?>
                                             <div class="col-md-4">
-                                                <div
-                                                    style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
-                                                    <?= $lbl ?>
-                                                </div>
+                                                <div style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;"><?= $lbl ?></div>
                                                 <div style="font-size:.88rem;margin-top:.2rem;"><?= $val ?></div>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
-                                    <?php if ($canEditDept): ?>
-                                        <hr style="border-color:#f3f4f6;"><?php endif; ?>
+                                    <?php if ($canEditDept): ?><hr style="border-color:#f3f4f6;"><?php endif; ?>
                                 <?php elseif (!$canEditDept): ?>
-                                    <div class="text-center py-4 text-muted"><i
-                                            class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>
-                                        <p style="font-size:.9rem;">No corporate details yet.</p>
-                                    </div>
+                                    <div class="text-center py-4 text-muted"><i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i><p style="font-size:.9rem;">No corporate details yet.</p></div>
                                 <?php endif; ?>
-
                                 <?php if ($canEditDept):
-                                    // Resolve: saved → company → task → current FY
-                                    $cf_firm = $detail['firm_name'] ?? $task['company_name'] ?? '';
-                                    $cf_pan = $detail['pan_no'] ?? ($companyData['pan_number'] ?? '');
-                                    $cf_grade = $detail['grade_id'] ?? '';
-                                    $cf_fy = $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy);
-                                    $cf_at_id = $taskAssignedToId;
+                                    $cf_firm    = $detail['firm_name'] ?? $task['company_name'] ?? '';
+                                    $cf_pan     = $detail['pan_no'] ?? ($companyData['pan_number'] ?? '');
+                                    $cf_grade   = $detail['grade_id'] ?? '';
+                                    $cf_fy      = $detail['fiscal_year'] ?? ($task['fiscal_year'] ?? $currentFy);
+                                    $cf_at_id   = $taskAssignedToId;
                                     $cf_at_name = $taskAssignedToName;
-                                    $cf_fb = $detail['finalised_by'] ?? '';
-                                    $cf_cd = $detail['completed_date'] ?? '';
+                                    $cf_fb      = $detail['finalised_by'] ?? '';
+                                    $cf_cd      = $detail['completed_date'] ?? '';
                                     $cf_remarks = $detail['remarks'] ?? '';
-                                    $isLinked = !empty($task['company_id']);
-                                    $firmRo = $isLinked ? 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"' : '';
-                                    $panRo = ($isLinked && !empty($companyData['pan_number'])) ? 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"' : '';
-                                    ?>
-                                    <div
-                                        style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
-                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Corporate Details
-                                    </div>
+                                    $isLinked   = !empty($task['company_id']);
+                                    $firmRo     = $isLinked ? 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"' : '';
+                                    $panRo      = ($isLinked && !empty($companyData['pan_number'])) ? 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"' : '';
+                                ?>
+                                    <div style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;"><i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> Corporate Details</div>
                                     <form method="POST">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="save_corporate" value="1">
                                         <div class="row g-3">
-                                            <div class="col-md-6">
-                                                <label class="form-label-mis">Firm Name <?php if ($isLinked): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label>
-                                                <input type="text" name="corporate[firm_name]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cf_firm) ?>" <?= $firmRo ?>>
-                                            </div>
-                                            <div class="col-md-3">
-                                                <label class="form-label-mis">PAN No
-                                                    <?php if ($isLinked && !empty($companyData['pan_number'])): ?><span
-                                                            style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from
-                                                            company</span><?php endif; ?></label>
-                                                <input type="text" name="corporate[pan_no]" class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cf_pan) ?>" <?= $panRo ?>>
-                                            </div>
-                                            <div class="col-md-3">
-                                                <label class="form-label-mis">Grade</label>
-                                                <select name="corporate[grade_id]" class="form-select form-select-sm">
-                                                    <option value="">-- Select --</option>
-                                                    <?php foreach ($corpGrades as $cg): ?>
-                                                        <option value="<?= $cg['id'] ?>" <?= $cf_grade == $cg['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($cg['grade_name']) ?>
-                                                        </option><?php endforeach; ?>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-4">
-                                                <label class="form-label-mis">Fiscal Year <span class="required-star">*</span>
-                                                    <?php if (!($detail['fiscal_year'] ?? '') && ($task['fiscal_year'] ?? '')): ?><span
-                                                            style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i
-                                                                class="fas fa-link me-1"></i>from task</span><?php endif; ?>
-                                                </label>
-                                                <?= fiscalYearSelect('corporate[fiscal_year]', $cf_fy, $fys, 'form-select form-select-sm', true) ?>
-                                            </div>
-                                            <div class="col-md-4">
-                                                <label class="form-label-mis">Assigned To <span
-                                                        style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i
-                                                            class="fas fa-link me-1"></i>from task</span></label>
-                                                <div class="form-control form-control-sm"
-                                                    style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;">
-                                                    <i class="fas fa-user-circle"
-                                                        style="color:#3b82f6;"></i><?= htmlspecialchars($cf_at_name) ?>
-                                                </div>
-                                                <input type="hidden" name="corporate[assigned_to]"
-                                                    value="<?= htmlspecialchars($cf_at_id ?? '') ?>">
+                                            <div class="col-md-6"><label class="form-label-mis">Firm Name <?php if ($isLinked): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label><input type="text" name="corporate[firm_name]" class="form-control form-control-sm" value="<?= htmlspecialchars($cf_firm) ?>" <?= $firmRo ?>></div>
+                                            <div class="col-md-3"><label class="form-label-mis">PAN No <?php if ($isLinked && !empty($companyData['pan_number'])): ?><span style="font-size:.65rem;color:#16a34a;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from company</span><?php endif; ?></label><input type="text" name="corporate[pan_no]" class="form-control form-control-sm" value="<?= htmlspecialchars($cf_pan) ?>" <?= $panRo ?>></div>
+                                            <div class="col-md-3"><label class="form-label-mis">Grade</label><select name="corporate[grade_id]" class="form-select form-select-sm"><option value="">-- Select --</option><?php foreach ($corpGrades as $cg): ?><option value="<?= $cg['id'] ?>" <?= $cf_grade == $cg['id'] ? 'selected' : '' ?>><?= htmlspecialchars($cg['grade_name']) ?></option><?php endforeach; ?></select></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Fiscal Year <span class="required-star">*</span></label><?= fiscalYearSelect('corporate[fiscal_year]', $cf_fy, $fys, 'form-select form-select-sm', true) ?></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Assigned To <span style="font-size:.65rem;color:#3b82f6;margin-left:.3rem;"><i class="fas fa-link me-1"></i>from task</span></label>
+                                                <div class="form-control form-control-sm" style="background:#eff6ff;color:#1d4ed8;font-weight:600;cursor:default;display:flex;align-items:center;gap:.4rem;"><i class="fas fa-user-circle" style="color:#3b82f6;"></i><?= htmlspecialchars($cf_at_name) ?></div>
+                                                <input type="hidden" name="corporate[assigned_to]" value="<?= htmlspecialchars($cf_at_id ?? '') ?>">
                                             </div>
                                             <div class="col-md-4"><label class="form-label-mis">Finalised By</label>
-                                                <select name="retail[finalised_by]" id="retail_finalised_by"
-                                                    class="form-select form-select-sm">
+                                                <select name="corporate[finalised_by]" id="corp_finalised_by" class="form-select form-select-sm">
                                                     <option value="">-- Select --</option>
                                                     <?php foreach ($allFinal as $s): ?>
-                                                        <option value="<?= $s['id'] ?>"
-                                                            data-branch="<?= htmlspecialchars($s['branch_name'] ?? '') ?>"
-                                                            <?= ($detail['finalised_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
-                                                            <?= htmlspecialchars($s['full_name']) ?>
-                                                            <?= !empty($s['employee_id']) ? ' (' . $s['employee_id'] . ')' : '' ?>
-                                                        </option>
+                                                        <option value="<?= $s['id'] ?>" <?= $cf_fb == $s['id'] ? 'selected' : '' ?>><?= htmlspecialchars($s['full_name']) ?><?= !empty($s['employee_id']) ? ' ('.$s['employee_id'].')' : '' ?></option>
                                                     <?php endforeach; ?>
                                                 </select>
                                             </div>
-                                            <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input
-                                                    type="date" name="corporate[completed_date]"
-                                                    class="form-control form-control-sm"
-                                                    value="<?= htmlspecialchars($cf_cd) ?>"></div>
-                                            <div class="col-12"><label class="form-label-mis">Remarks</label><textarea
-                                                    name="corporate[remarks]" class="form-control form-control-sm"
-                                                    rows="2"><?= htmlspecialchars($cf_remarks) ?></textarea></div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Corporate Details</button></div>
+                                            <div class="col-md-4"><label class="form-label-mis">Completed Date</label><input type="date" name="corporate[completed_date]" class="form-control form-control-sm" value="<?= htmlspecialchars($cf_cd) ?>"></div>
+                                            <div class="col-12"><label class="form-label-mis">Remarks</label><textarea name="corporate[remarks]" class="form-control form-control-sm" rows="2"><?= htmlspecialchars($cf_remarks) ?></textarea></div>
+                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save Corporate Details</button></div>
                                         </div>
                                     </form>
                                 <?php endif; ?>
                             </div>
                         </div>
 
-                    <?php elseif ($detailTable && !$detail): ?>
+                    <?php elseif ($detailTable && !$detail && $canEditDept): ?>
                         <div class="card-mis mb-4" style="border-left:3px solid #f59e0b;">
-                            <div class="card-mis-body text-center py-4"><i
-                                    class="fas fa-table fa-2x mb-2 d-block text-warning"></i>
-                                <p style="font-size:.9rem;color:#6b7280;"><?= htmlspecialchars($task['dept_name']) ?>
-                                    details not filled yet.</p>
-                                <?php if ($canEditDept): ?><a href="edit.php?id=<?= $id ?>" class="btn btn-gold btn-sm"><i
-                                            class="fas fa-plus me-1"></i>Add Details</a><?php endif; ?>
+                            <div class="card-mis-body text-center py-4">
+                                <i class="fas fa-table fa-2x mb-2 d-block text-warning"></i>
+                                <p style="font-size:.9rem;color:#6b7280;"><?= htmlspecialchars($task['dept_name']) ?> details not filled yet.</p>
+                                <?php if ($canEditDept): ?><a href="edit.php?id=<?= $id ?>" class="btn btn-gold btn-sm"><i class="fas fa-plus me-1"></i>Add Details</a><?php endif; ?>
                             </div>
                         </div>
                     <?php endif; ?>
@@ -1866,73 +1543,39 @@ include '../../includes/header.php';
                         <div class="card-mis-body">
                             <?php foreach ($comments as $c): ?>
                                 <div class="d-flex gap-3 mb-3">
-                                    <div class="avatar-circle avatar-sm flex-shrink-0">
-                                        <?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?>
-                                    </div>
+                                    <div class="avatar-circle avatar-sm flex-shrink-0"><?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?></div>
                                     <div class="flex-grow-1">
-                                        <div class="d-flex gap-2 align-items-center"><strong
-                                                style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong><span
-                                                style="font-size:.72rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span>
-                                        </div>
-                                        <div
-                                            style="font-size:.88rem;margin-top:.25rem;background:#f9fafb;padding:.6rem .9rem;border-radius:8px;">
-                                            <?= nl2br(htmlspecialchars($c['comment'])) ?>
-                                        </div>
+                                        <div class="d-flex gap-2 align-items-center"><strong style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong><span style="font-size:.72rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span></div>
+                                        <div style="font-size:.88rem;margin-top:.25rem;background:#f9fafb;padding:.6rem .9rem;border-radius:8px;"><?= nl2br(htmlspecialchars($c['comment'])) ?></div>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
-                            <?php if (empty($comments)): ?>
-                                <div class="text-muted text-center py-3" style="font-size:.85rem;">No comments yet.</div>
-                            <?php endif; ?>
-                            <form method="POST" class="mt-3 d-flex gap-2"><input type="hidden" name="csrf_token"
-                                    value="<?= csrfToken() ?>"><input type="hidden" name="add_comment" value="1"><input
-                                    type="text" name="comment" class="form-control" placeholder="Add a comment…"
-                                    required><button type="submit"
-                                    class="btn btn-gold btn-sm flex-shrink-0">Post</button></form>
+                            <?php if (empty($comments)): ?><div class="text-muted text-center py-3" style="font-size:.85rem;">No comments yet.</div><?php endif; ?>
+                            <form method="POST" class="mt-3 d-flex gap-2">
+                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                <input type="hidden" name="add_comment" value="1">
+                                <input type="text" name="comment" class="form-control" placeholder="Add a comment…" required>
+                                <button type="submit" class="btn btn-gold btn-sm flex-shrink-0">Post</button>
+                            </form>
                         </div>
                     </div>
 
-                    <!-- Workflow -->
+                    <!-- Workflow History -->
                     <?php if (!empty($workflow)): ?>
                         <div class="card-mis mt-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-history text-warning me-2"></i>Workflow History</h5>
-                            </div>
+                            <div class="card-mis-header"><h5><i class="fas fa-history text-warning me-2"></i>Workflow History</h5></div>
                             <div class="card-mis-body">
                                 <?php foreach ($workflow as $w): ?>
                                     <div class="d-flex gap-3 mb-3">
-                                        <div
-                                            style="width:32px;height:32px;border-radius:50%;background:#eff6ff;color:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.75rem;">
-                                            <i
-                                                class="fas fa-<?= match ($w['action']) { 'created' => 'plus', 'assigned' => 'user-check', 'status_changed' => 'circle-dot', 'transferred_dept' => 'exchange-alt', 'transferred_staff' => 'user-arrows', 'completed' => 'check-circle', default => 'pen'} ?>"></i>
+                                        <div style="width:32px;height:32px;border-radius:50%;background:#eff6ff;color:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.75rem;">
+                                            <i class="fas fa-<?= match($w['action']) { 'created'=>'plus','assigned'=>'user-check','status_changed'=>'circle-dot','transferred_dept'=>'exchange-alt','transferred_staff'=>'user-arrows','completed'=>'check-circle',default=>'pen'} ?>"></i>
                                         </div>
                                         <div class="flex-grow-1">
-                                            <div style="font-size:.82rem;font-weight:600;color:#1f2937;">
-                                                <?= ucwords(str_replace('_', ' ', $w['action'])) ?>
-                                                <?php if ($w['from_name']): ?>
-                                                    by
-                                                    <?= htmlspecialchars($w['from_name']) ?>         <?php endif; ?>
-                                                <?php if ($w['to_name']): ?>
-                                                    → <?= htmlspecialchars($w['to_name']) ?><?php endif; ?>
-                                            </div>
-                                            <?php if ($w['from_dept'] || $w['to_dept']): ?>
-                                                <div style="font-size:.75rem;color:#8b5cf6;">
-                                                    <?= htmlspecialchars($w['from_dept'] ?? '') ?>
-                                                    <?= ($w['from_dept'] && $w['to_dept']) ? ' → ' : '' ?>
-                                                    <?= htmlspecialchars($w['to_dept'] ?? '') ?>
-                                                </div><?php endif; ?>
-                                            <?php if ($w['old_status'] || $w['new_status']): ?>
-                                                <div style="font-size:.75rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($w['old_status'] ?? '') ?>
-                                                    <?= ($w['old_status'] && $w['new_status']) ? ' → ' : '' ?>
-                                                    <?= htmlspecialchars($w['new_status'] ?? '') ?>
-                                                </div><?php endif; ?>
-                                            <?php if ($w['remarks']): ?>
-                                                <div style="font-size:.78rem;color:#6b7280;font-style:italic;margin-top:.2rem;">
-                                                    "<?= htmlspecialchars($w['remarks']) ?>"</div><?php endif; ?>
-                                            <div style="font-size:.7rem;color:#9ca3af;margin-top:.2rem;">
-                                                <?= date('d M Y, H:i', strtotime($w['created_at'])) ?>
-                                            </div>
+                                            <div style="font-size:.82rem;font-weight:600;color:#1f2937;"><?= ucwords(str_replace('_',' ',$w['action'])) ?><?php if ($w['from_name']): ?> by <?= htmlspecialchars($w['from_name']) ?><?php endif; ?><?php if ($w['to_name']): ?> → <?= htmlspecialchars($w['to_name']) ?><?php endif; ?></div>
+                                            <?php if ($w['from_dept'] || $w['to_dept']): ?><div style="font-size:.75rem;color:#8b5cf6;"><?= htmlspecialchars($w['from_dept']??'') ?><?= ($w['from_dept']&&$w['to_dept'])?' → ':'' ?><?= htmlspecialchars($w['to_dept']??'') ?></div><?php endif; ?>
+                                            <?php if ($w['old_status'] || $w['new_status']): ?><div style="font-size:.75rem;color:#9ca3af;"><?= htmlspecialchars($w['old_status']??'') ?><?= ($w['old_status']&&$w['new_status'])?' → ':'' ?><?= htmlspecialchars($w['new_status']??'') ?></div><?php endif; ?>
+                                            <?php if ($w['remarks']): ?><div style="font-size:.78rem;color:#6b7280;font-style:italic;margin-top:.2rem;">"<?= htmlspecialchars($w['remarks']) ?>"</div><?php endif; ?>
+                                            <div style="font-size:.7rem;color:#9ca3af;margin-top:.2rem;"><?= date('d M Y, H:i', strtotime($w['created_at'])) ?></div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -1945,41 +1588,40 @@ include '../../includes/header.php';
                 <!-- Right Column -->
                 <div class="col-lg-4">
 
+                    <!-- Update Status -->
                     <div class="card-mis mb-3">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-circle-dot text-warning me-2"></i>Update Status</h5>
-                        </div>
+                        <div class="card-mis-header"><h5><i class="fas fa-circle-dot text-warning me-2"></i>Update Status</h5></div>
                         <div class="card-mis-body">
-                            <form method="POST"><input type="hidden" name="csrf_token" value="<?= csrfToken() ?>"><input
-                                    type="hidden" name="update_status" value="1">
+                            <form method="POST">
+                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                <input type="hidden" name="update_status" value="1">
                                 <div class="mb-3">
                                     <?php foreach ($taskStatuses as $ts):
                                         $sKey = $ts['status_name'];
                                         $sCol = $ts['color'] ?? '#9ca3af';
-                                        $sBg = $ts['bg_color'] ?? '#f3f4f6'; ?>
-                                        <div class="form-check mb-2"><input class="form-check-input" type="radio"
-                                                name="new_status" value="<?= htmlspecialchars($sKey) ?>"
-                                                id="st_<?= $ts['id'] ?>" <?= ($task['status'] ?? '') === $sKey ? 'checked' : '' ?>><label class="form-check-label" for="st_<?= $ts['id'] ?>"><span
-                                                    style="background:<?= $sBg ?>;color:<?= $sCol ?>;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;font-weight:600;"><?= htmlspecialchars($sKey) ?></span></label>
+                                        $sBg  = $ts['bg_color'] ?? '#f3f4f6'; ?>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="radio" name="new_status" value="<?= htmlspecialchars($sKey) ?>" id="st_<?= $ts['id'] ?>" <?= ($task['status'] ?? '') === $sKey ? 'checked' : '' ?>>
+                                            <label class="form-check-label" for="st_<?= $ts['id'] ?>">
+                                                <span style="background:<?= $sBg ?>;color:<?= $sCol ?>;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;font-weight:600;"><?= htmlspecialchars($sKey) ?></span>
+                                            </label>
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
-                                <button type="submit" class="btn btn-gold w-100 btn-sm"><i
-                                        class="fas fa-save me-1"></i>Update Status</button>
+                                <button type="submit" class="btn btn-gold w-100 btn-sm"><i class="fas fa-save me-1"></i>Update Status</button>
                             </form>
                         </div>
                     </div>
 
+                    
+
+                    <!-- Task Meta -->
                     <div class="card-mis p-3" style="font-size:.8rem;color:#6b7280;border-left:3px solid var(--gold);">
                         <div class="mb-2"><strong>Task #:</strong> <?= htmlspecialchars($task['task_number']) ?></div>
-                        <div class="mb-2"><strong>Department:</strong>
-                            <?= htmlspecialchars($task['dept_name'] ?? '—') ?>
-                        </div>
-                        <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($task['branch_name'] ?? '—') ?>
-                        </div>
+                        <div class="mb-2"><strong>Department:</strong> <?= htmlspecialchars($task['dept_name'] ?? '—') ?></div>
+                        <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($task['branch_name'] ?? '—') ?></div>
                         <div class="mb-2"><strong>Priority:</strong> <?= ucfirst($task['priority'] ?? '—') ?></div>
-                        <div class="mb-2"><strong>Created:</strong>
-                            <?= date('d M Y, H:i', strtotime($task['created_at'])) ?></div>
+                        <div class="mb-2"><strong>Created:</strong> <?= date('d M Y, H:i', strtotime($task['created_at'])) ?></div>
                         <div><strong>Updated:</strong> <?= date('d M Y, H:i', strtotime($task['updated_at'])) ?></div>
                     </div>
 
@@ -1988,55 +1630,72 @@ include '../../includes/header.php';
         </div>
     </div>
 </div>
+
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function () {
 
-        if (document.getElementById('retail_finalised_by')) {
-            new TomSelect('#retail_finalised_by', {
+    // TomSelect for TAX fields
+    ['tax_file_received_by', 'tax_updated_by', 'tax_verify_by'].forEach(function (selId) {
+        const el = document.getElementById(selId);
+        if (el) new TomSelect('#' + selId, { placeholder: 'Search by name...', allowEmptyOption: true, maxOptions: 500 });
+    });
+
+    // TomSelect for Retail/Corp Finalised By
+    ['retail_finalised_by', 'corp_finalised_by'].forEach(function (selId) {
+        const el = document.getElementById(selId);
+        if (el) {
+            new TomSelect('#' + selId, {
                 placeholder: 'Search by name or employee ID...',
                 allowEmptyOption: true,
                 maxOptions: 500,
-                searchField: ['text'],
                 render: {
                     option: function (data, escape) {
                         const branch = data.$option ? data.$option.dataset.branch : '';
-                        return `
-                        <div style="padding:6px 0;">
-                            <div style="margin-left:10px; font-weight:600;">
-                                ${escape(data.text)}
-                            </div>
-                            ${branch ? `<div style="margin-left:10px; font-size:11px; color:#6b7280;">
-                                <i class="fas fa-code-branch" style="font-size:10px;"></i> ${escape(branch)}
-                            </div>` : ''}
-                        </div>
-                    `;
+                        return `<div style="padding:6px 0;">
+                            <div style="margin-left:10px;font-weight:600;">${escape(data.text)}</div>
+                            ${branch ? `<div style="margin-left:10px;font-size:11px;color:#6b7280;">${escape(branch)}</div>` : ''}
+                        </div>`;
                     },
-                    item: function (data, escape) {
-                        return `<div>${escape(data.text)}</div>`;
-                    }
+                    item: function (data, escape) { return `<div>${escape(data.text)}</div>`; }
                 }
             });
         }
-
-        if (document.getElementById('bank_select')) {
-            new TomSelect('#bank_select', {
-                placeholder: 'Search bank or address...',
-                allowEmptyOption: true,
-                maxOptions: 500,
-                searchField: ['text'],
-                render: {
-                    option: function (data, escape) {
-                        return `<div>${escape(data.text)}</div>`;
-                    },
-                    item: function (data, escape) {
-                        return `<div>${escape(data.text)}</div>`;
-                    }
-                }
-            });
-        }
-
     });
+
+    // TomSelect for Bank select
+    if (document.getElementById('bank_select')) {
+        new TomSelect('#bank_select', { placeholder: 'Search bank or address...', allowEmptyOption: true, maxOptions: 500 });
+    }
+
+    // ── Transfer: filter staff by selected department ─────────────────────────
+    const deptSel  = document.getElementById('transfer_dept_select');
+    const staffSel = document.getElementById('transfer_staff_select');
+    if (deptSel && staffSel) {
+        // Store all options
+        const allOpts = Array.from(staffSel.options).map(o => ({ value: o.value, text: o.text, deptCode: o.dataset.deptcode || '' }));
+
+        deptSel.addEventListener('change', function () {
+            // Find selected dept code
+            const selectedOpt = deptSel.options[deptSel.selectedIndex];
+            const selectedDeptCode = selectedOpt ? (selectedOpt.dataset.deptcode || '') : '';
+            // Rebuild staff select
+            staffSel.innerHTML = '<option value="">-- Select Staff --</option>';
+            allOpts.forEach(o => {
+                if (!o.value) return;
+                // Show all staff if no dept code filter, else show matching
+                if (!selectedDeptCode || o.deptCode === selectedDeptCode) {
+                    const opt = document.createElement('option');
+                    opt.value = o.value;
+                    opt.text  = o.text;
+                    opt.dataset.deptcode = o.deptCode;
+                    staffSel.appendChild(opt);
+                }
+            });
+        });
+    }
+
+});
 </script>
 <?php include '../../includes/footer.php'; ?>

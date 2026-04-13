@@ -34,7 +34,16 @@ if (!$company) {
     exit;
 }
 
-// All tasks for this company
+// Get current user's department
+$userDeptStmt = $db->prepare("SELECT department_id FROM users WHERE id = ?");
+$userDeptStmt->execute([$user['id']]);
+$userDept = $userDeptStmt->fetchColumn();
+if (!$userDept) {
+    setFlash('error', 'Your account has no department assigned.');
+    header('Location: index.php');
+    exit;
+}
+// All tasks for this company — filtered to login user's department
 $taskStmt = $db->prepare("
     SELECT t.*,
            ts.status_name AS status,
@@ -48,10 +57,12 @@ $taskStmt = $db->prepare("
     LEFT JOIN branches b     ON b.id  = t.branch_id
     LEFT JOIN users cb       ON cb.id = t.created_by
     LEFT JOIN users at       ON at.id = t.assigned_to
-    WHERE t.company_id = ? AND t.is_active = 1
+    WHERE t.company_id = ?
+      AND t.is_active = 1
+      AND t.department_id = ?
     ORDER BY t.created_at DESC
 ");
-$taskStmt->execute([$id]);
+$taskStmt->execute([$id, $userDept]);
 $tasks = $taskStmt->fetchAll();
 
 // Task stats
@@ -82,9 +93,10 @@ $retailStmt = $db->prepare("
     LEFT JOIN users fb        ON fb.id  = tr.finalised_by
     LEFT JOIN users au        ON au.id  = tr.assigned_to
     WHERE t.company_id = ? AND t.is_active = 1
+      AND t.department_id = ?   -- ADD THIS
     ORDER BY t.created_at DESC
 ");
-$retailStmt->execute([$id]);
+$retailStmt->execute([$id, $userDept]);  // ADD $userDept
 $retailDetails = $retailStmt->fetchAll();
 
 // Workflow history for this company's tasks
@@ -102,10 +114,11 @@ $workflowStmt = $db->prepare("
     LEFT JOIN departments fd  ON fd.id  = tw.from_dept_id
     LEFT JOIN departments td  ON td.id  = tw.to_dept_id
     WHERE t.company_id = ? AND t.is_active = 1
+      AND t.department_id = ?   -- ADD THIS
     ORDER BY tw.created_at DESC
     LIMIT 20
 ");
-$workflowStmt->execute([$id]);
+$workflowStmt->execute([$id, $userDept]);  // ADD $userDept
 $workflow = $workflowStmt->fetchAll();
 $pageTitle = 'Company: ' . $company['company_name'];
 $statuses = $db->query("

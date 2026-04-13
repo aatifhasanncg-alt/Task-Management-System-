@@ -18,6 +18,7 @@ $fiscalYears = $db->query("
     FROM fiscal_years WHERE is_active!=0
     ORDER BY fy_code DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
+$filterBank = trim($_GET['search_bank'] ?? '');
 
 $filterBranch = (int) ($_GET['branch_id'] ?? 0);
 $filterFY = $_GET['fiscal_year'] ?? '';
@@ -77,7 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_summary'])) {
     $support = (int) ($_POST['support'] ?? 0);
     $cancelled = (int) ($_POST['cancelled'] ?? 0);
     // Checkbox: only present in POST when ticked — default 0
-    $isChecked = !empty($_POST['is_checked']) ? 1 : 0;
+    $isChecked = (($completed + $hbc + $pending + $support + $cancelled) === $totalFiles) ? 1 : 0;
 
     if (!$bankRefId || !$branchId || !$fy) {
         setFlash('error', 'Invalid submission — bank, branch or fiscal year missing.');
@@ -149,6 +150,10 @@ if ($filterFY) {
     $where[] = 'bs.fiscal_year = ?';
     $params[] = $filterFY;
 }
+if ($filterBank) {
+    $where[] = 'br.bank_name LIKE ?';
+    $params[] = '%' . $filterBank . '%';
+}
 $ws = implode(' AND ', $where);
 
 $summaryStmt = $db->prepare("
@@ -166,15 +171,17 @@ $summary = $summaryStmt->fetchAll();
 $grandTotal = array_sum(array_column($summary, 'total_files'));   // e.g. 10
 
 foreach ($summary as &$row) {
-    // % share: this bank's files out of ALL banks' total files
     $row['pct_share'] = ($grandTotal > 0)
         ? round(($row['total_files'] / $grandTotal) * 100, 2)
         : 0.00;
 
-    // % done: completed out of this bank's own total
     $row['pct_done'] = ($row['total_files'] > 0)
         ? round((min($row['completed'], $row['total_files']) / $row['total_files']) * 100, 2)
         : 0.00;
+
+    // Auto-compute is_checked from actual counts
+    $statusSum = $row['completed'] + $row['hbc'] + $row['pending'] + $row['support'] + $row['cancelled'];
+    $row['is_checked'] = ($row['total_files'] > 0 && $statusSum === (int)$row['total_files']) ? 1 : 0;
 }
 unset($row);
 
@@ -234,6 +241,12 @@ include '../../includes/header.php';
             <div class="filter-bar mb-4 w-100">
                 <form method="GET" class="row g-2 align-items-end w-100">
                     <div class="col-md-3">
+                    <label class="form-label-mis">Search Bank</label>
+                    <input type="text" name="search_bank" class="form-control form-control-sm"
+                        placeholder="Type bank name..."
+                        value="<?= htmlspecialchars($_GET['search_bank'] ?? '') ?>">
+                </div>
+                    <div class="col-md-3">
                         <label class="form-label-mis">Branch</label>
                         <select name="branch_id" class="form-select form-select-sm">
                             <option value="">All Branches</option>
@@ -253,7 +266,7 @@ include '../../includes/header.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="col-md-2 d-flex gap-1">
+                    <div class="col-md-1 d-flex gap-1">
                         <button type="submit" class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i>
                             Filter</button>
                         <a href="summary.php" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times"></i></a>
@@ -509,14 +522,6 @@ include '../../includes/header.php';
                                                     class="form-control form-control-sm" min="0" value="0">
                                             </div>
                                         <?php endforeach; ?>
-                                        <div class="col-12">
-                                            <div class="form-check form-switch">
-                                                <input class="form-check-input" type="checkbox" name="is_checked"
-                                                    id="edit_is_checked">
-                                                <label class="form-check-label" for="edit_is_checked">Mark as Checked
-                                                    (TRUE)</label>
-                                            </div>
-                                        </div>
                                     </div>
                                 </form>
                             </div>
@@ -666,8 +671,6 @@ include '../../includes/header.php';
                         document.getElementById('edit_pending').value = row.pending ?? 0;
                         document.getElementById('edit_support').value = row.support ?? 0;
                         document.getElementById('edit_cancelled').value = row.cancelled ?? 0;
-                        // Checkbox: must be set as boolean, not string "0"/"1"
-                        document.getElementById('edit_is_checked').checked = (parseInt(row.is_checked) === 1);
 
                         new bootstrap.Modal(document.getElementById('editModal')).show();
                     }

@@ -24,7 +24,7 @@ foreach ($statusRows as $sr) {
 }
 
 $deptStmt = $db->prepare("
-    SELECT d.id as dept_id, d.dept_name, d.color, d.icon,
+    SELECT d.id as dept_id, d.dept_name,  d.dept_code, d.color, d.icon,
            COUNT(t.id) as total,
            {$statusCases}
            SUM(CASE WHEN t.due_date < CURDATE()
@@ -219,10 +219,12 @@ a.status-tile:hover {
                                 // Link → executive tasks list filtered by dept + status
                                 $tileLink = APP_URL . '/executive/tasks/index.php?'
                                     . http_build_query([
-                                        'dept'   => $d['dept_id'],
-                                        'status' => $sr['status_name'],
+                                        'dept'      => strtolower($d['dept_code']),
+                                        'status'    => $sr['status_name'],
+                                        'date_from' => $fromDate,
+                                        'date_to'   => $toDate,
                                     ]);
-                            ?>
+                                            ?>
                                 <a href="<?= $tileLink ?>" class="status-tile"
                                    style="background:<?= htmlspecialchars($bg) ?>;
                                           border-color:<?= htmlspecialchars($color) ?>33;"
@@ -245,8 +247,13 @@ a.status-tile:hover {
                             <!-- Overdue tile -->
                             <?php
                                 $overdueLink = APP_URL . '/executive/tasks/index.php?'
-                                    . http_build_query(['dept' => $d['dept_id'], 'overdue' => 1]);
-                                $overduePct  = $d['total'] > 0 ? round(($d['overdue'] / $d['total']) * 100) : 0;
+                                    . http_build_query([
+                                        'dept'      => strtolower($d['dept_code']),
+                                        'overdue'   => 1,
+                                        'date_from' => $fromDate,
+                                        'date_to'   => $toDate,
+                                    ]);
+                                                $overduePct  = $d['total'] > 0 ? round(($d['overdue'] / $d['total']) * 100) : 0;
                             ?>
                             <a href="<?= $overdueLink ?>" class="status-tile"
                                style="background:#fef2f2;border-color:#fecaca;"

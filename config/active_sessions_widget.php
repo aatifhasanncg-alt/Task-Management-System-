@@ -37,12 +37,20 @@ function handleSessionRevoke(): void
         setFlash('success', 'Device logged out successfully.');
     }
 
-    if ($_POST['session_action'] === 'revoke_all') {
-        $currentHash = hash('sha256', $_COOKIE[REMEMBER_COOKIE] ?? '');
-        $db->prepare("
-            DELETE FROM remember_tokens WHERE user_id = ? AND token != ?
-        ")->execute([$uid, $currentHash]);
-        setFlash('success', 'All other devices have been logged out.');
+     if ($_POST['session_action'] === 'revoke_all') {
+            $currentHash = hash('sha256', $_COOKIE[REMEMBER_COOKIE] ?? '');
+            $db->prepare("
+                DELETE FROM remember_tokens WHERE user_id = ? AND token != ?
+            ")->execute([$uid, $currentHash]);
+            setFlash('success', 'All other devices have been logged out.');
+        }
+    // Logout current device = full logout
+    if ($_POST['session_action'] === 'logout_current') {
+        clearRememberToken();   // delete token from DB + clear cookie
+        session_unset();
+        session_destroy();
+        header('Location: /auth/login.php');
+        exit;
     }
 
     // Redirect back to same page
@@ -133,7 +141,18 @@ function renderSessionsWidget(): void
                                 </button>
                             </form>
                         <?php else: ?>
+                        <div class="d-flex align-items-center gap-2">
                             <span class="sw-this">This device</span>
+                            <form method="POST" style="margin:0;">
+                                <input type="hidden" name="csrf_token"     value="<?= csrfToken() ?>">
+                                <input type="hidden" name="session_action" value="logout_current">
+                                <button class="sw-revoke sw-revoke-current"
+                                        onclick="return confirm('This will log you out completely. Continue?')"
+                                        title="Logout from this device">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                </button>
+                            </form>
+                        </div>
                         <?php endif; ?>
 
                     </div>
@@ -306,6 +325,8 @@ function renderSessionsWidget(): void
             color: #dc2626;
             background: #fef2f2;
         }
+        .sw-revoke-current { border-color: #fde68a; color: #c9a84c; }
+        .sw-revoke-current:hover { border-color: #c9a84c; color: #92400e; background: #fffbeb; }
 
         .sw-this {
             font-size: .72rem;
