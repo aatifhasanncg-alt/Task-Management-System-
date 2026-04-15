@@ -246,12 +246,13 @@ include '../../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                         <?php if (isCoreAdmin()): ?>
+                                         
                                         <div class="d-flex gap-1">
                                             <a href="<?= APP_URL ?>/executive/staff/view.php?id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-secondary"
                                                 title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
+                                            <?php if (isCoreAdmin()): ?>
                                             <a href="<?= APP_URL ?>/executive/staff/edit.php?id=<?= $u['id'] ?>"
                                                 class="btn btn-sm btn-outline-warning" title="Edit">
                                                 <i class="fas fa-pen"></i>
