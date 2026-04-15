@@ -216,10 +216,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $assigneeStmt->execute([$assignTo]);
             $assigneeRole = $assigneeStmt->fetchColumn();
         
-            $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
-                ? APP_URL . '/admin/tasks/view.php?id=' . $taskId
-                : APP_URL . '/staff/tasks/view.php?id=' . $taskId;
-        
+           $isAdminSide = in_array($assigneeRole, ['admin', 'executive']);
+
+        $taskUrl = $isAdminSide
+            ? APP_URL . '/admin/tasks/view.php?id=' . $taskId
+            : APP_URL . '/staff/tasks/view.php?id=' . $taskId;
+                
             notify(
                 $assignTo,
                 "New Task: {$title}",

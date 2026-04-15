@@ -536,6 +536,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEd
         if ($lastDate !== $newFollowUpDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
                ->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
+                // 🔥 IF TODAY → TRIGGER EVERYTHING
+            if ($newFollowUpDate === date('Y-m-d')) {
+
+                $taskLink = APP_URL . "/admin/tasks/view.php?id=" . $id;
+                $stmt = $db->prepare("SELECT task_number FROM tasks WHERE id = ?");
+                $stmt->execute([$id]);
+                $task_number = $stmt->fetchColumn();
+                notify(
+                    $user['id'],
+                    "Follow-up Reminder",
+                    "Task #$task_number is scheduled for TODAY.",
+                    "reminder",
+                    $taskLink,
+                    true,
+                    [
+                        "template" => "task_status_changed",
+                        "task" => [
+                            "task_number" => $task_number
+                        ]
+                    ]
+                );
+            }
         }
     }
     if (!empty($t2['status_id']))
@@ -563,6 +585,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
         if ($lastDate !== $newFollowUpDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
                ->execute([$id, $newFollowUpDate, $newFollowUpNote ?: null, $user['id']]);
+            $stmt = $db->prepare("SELECT task_number FROM tasks WHERE id = ?");
+            $stmt->execute([$id]);
+            $task_number = $stmt->fetchColumn();
+               // 🔥 IF TODAY → TRIGGER EVERYTHING
+            if ($newFollowUpDate === date('Y-m-d')) {
+
+                $taskLink = APP_URL . "/admin/tasks/view.php?id=" . $id;
+
+                notify(
+                    $user['id'],
+                    "Follow-up Reminder",
+                    "Task #$task_number is scheduled for TODAY.",
+                    "reminder",
+                    $taskLink,
+                    true,
+                    [
+                        "template" => "task_status_changed",
+                        "task" => [
+                            "task_number" => $task_number
+                        ]
+                    ]
+                );
+            }
         }
     }
     // Ensure columns exist

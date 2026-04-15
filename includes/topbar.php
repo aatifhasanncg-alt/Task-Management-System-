@@ -47,7 +47,17 @@ $__typeMap = [
     'system' => ['fa-gear', '#6b7280', '#f3f4f6'],
     'reminder' => ['fa-bell', '#ef4444', '#fee2e2'],
 ];
-
+$reminders = $db->prepare("
+    SELECT n.*, t.task_number
+    FROM notifications n
+    LEFT JOIN tasks t ON t.id = REPLACE(n.link, '" . APP_URL . "/admin/tasks/view.php?id=', '')
+    WHERE n.user_id = ?
+      AND n.type = 'reminder'
+      AND n.is_read = 0
+    ORDER BY n.created_at DESC
+");
+$reminders->execute([$user['id']]);
+$reminders = $reminders->fetchAll(PDO::FETCH_ASSOC);
 $__viewerRole = $__u['role'] ?? 'staff';
 function __rewriteLink(string $link, string $role): string
 {
@@ -269,7 +279,49 @@ function __rewriteLink(string $link, string $role): string
 
     </div><!-- topbar-right -->
 </div><!-- topbar -->
+<?php if (!empty($reminders)): ?>
+<div id="followup-modal"
+     style="position:fixed;inset:0;background:rgba(0,0,0,.6);
+     z-index:999999;display:flex;align-items:center;justify-content:center;">
 
+    <div style="width:420px;background:#fff;border-radius:14px;padding:1.5rem;">
+
+        <h4 style="margin-bottom:1rem;">📌 Follow-up Reminder</h4>
+
+        <?php foreach ($reminders as $r): ?>
+
+            <?php $taskLink = $r['link']; ?>
+
+            <div style="padding:.8rem;border:1px solid #eee;border-radius:10px;margin-bottom:10px;">
+
+                <b><?= htmlspecialchars($r['title']) ?></b>
+
+                <div style="font-size:.8rem;color:#555;margin-top:5px;">
+                    <?= htmlspecialchars($r['message']) ?>
+                </div>
+
+                <div style="margin-top:10px;display:flex;gap:8px;">
+
+                    <a href="<?= $taskLink ?>"
+                       style="background:#c9a84c;color:#fff;
+                       padding:6px 10px;border-radius:6px;text-decoration:none;">
+                        Open Task
+                    </a>
+
+                    <button onclick="markReminderRead(<?= $r['id'] ?>)"
+                            style="background:#f3f4f6;border:none;
+                            padding:6px 10px;border-radius:6px;cursor:pointer;">
+                        Mark as Read
+                    </button>
+
+                </div>
+            </div>
+
+        <?php endforeach; ?>
+
+    </div>
+</div>
+<?php endif; ?>
 <script>
     // ── Topbar date ───────────────────────────────────────────────
     (function () {
@@ -285,7 +337,15 @@ function __rewriteLink(string $link, string $role): string
         if (modal) modal.style.display = 'none';
         fetch('<?= APP_URL ?>/ajax/snooze_pw_reminder.php', { method: 'POST' }).catch(() => { });
     }
-
+    function markReminderRead(id) {
+        fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: "id=" + id
+        }).then(() => {
+            location.reload(); // modal updates automatically
+        });
+    }
     // ── Badge helper — single source of truth ────────────────────
     function setBadge(count) {
         const badge = document.getElementById('notif-count');
