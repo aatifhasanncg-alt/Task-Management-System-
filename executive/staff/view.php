@@ -6,11 +6,6 @@ require_once '../../vendor/GoogleAuthenticator.php';
 
 requireExecutive();
 
-if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied.');
-    header('Location: index.php');
-    exit;
-}
 
 $db = getDB();
 $currentUser = currentUser(); // ← renamed — never overwrite this
