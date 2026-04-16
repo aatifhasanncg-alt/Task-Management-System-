@@ -335,7 +335,14 @@ function __rewriteLink(string $link, string $role): string
     function dismissPwReminder() {
         const modal = document.getElementById('pw-reminder-modal');
         if (modal) modal.style.display = 'none';
-        fetch('<?= APP_URL ?>/ajax/snooze_pw_reminder.php', { method: 'POST' }).catch(() => { });
+
+        fetch("<?= APP_URL ?>/ajax/snooze_pw_reminder.php", {
+            method: "POST",
+            credentials: "same-origin"
+        })
+        .then(res => res.json())
+        .then(data => console.log(data))
+        .catch(err => console.error(err));
     }
     function markReminderRead(id) {
         fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {

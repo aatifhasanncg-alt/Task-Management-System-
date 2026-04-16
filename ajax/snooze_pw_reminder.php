@@ -4,7 +4,7 @@ require_once __DIR__ . '/../config/session.php';
 requireLogin();
 
 // Set today's cache key to false so the modal won't show again this session
-$_SESSION['pw_check_' . date('Y-m-d')] = false;
+$_SESSION['pw_check_' . date('Y-m-d')] = true;
 
 header('Content-Type: application/json');
 echo json_encode(['ok' => true]);

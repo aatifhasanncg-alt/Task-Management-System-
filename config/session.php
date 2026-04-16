@@ -105,13 +105,16 @@ function shouldPromptPasswordChange(): bool {
     $user = currentUser();
     if (!$user['id']) return false;
 
-    // Only check once per session per day to avoid repeated DB hits
+    // ✅ 1. Snooze override (PUT THIS FIRST)
     $cacheKey = 'pw_check_' . date('Y-m-d');
-    if (isset($_SESSION[$cacheKey])) return $_SESSION[$cacheKey];
+    if (!empty($_SESSION[$cacheKey])) {
+        return false; // user snoozed today
+    }
 
     try {
-        $db   = getDB();
-        // Last password change for this user
+        $db = getDB();
+
+        // Last password change
         $stmt = $db->prepare("
             SELECT changed_at FROM password_change_logs
             WHERE changed_for = ?
@@ -123,18 +126,17 @@ function shouldPromptPasswordChange(): bool {
 
         if ($row) {
             $daysSince = (time() - strtotime($row)) / 86400;
-            $result = $daysSince >= 30;
-        } else {
-            // No change log at all — check account creation date
-            $stmt2 = $db->prepare("SELECT created_at FROM users WHERE id = ?");
-            $stmt2->execute([$user['id']]);
-            $created = $stmt2->fetchColumn();
-            $daysSince = $created ? (time() - strtotime($created)) / 86400 : 0;
-            $result = $daysSince >= 30;
+            return $daysSince >= 30;
         }
 
-        $_SESSION[$cacheKey] = $result;
-        return $result;
+        // No log → check user creation date
+        $stmt2 = $db->prepare("SELECT created_at FROM users WHERE id = ?");
+        $stmt2->execute([$user['id']]);
+        $created = $stmt2->fetchColumn();
+
+        $daysSince = $created ? (time() - strtotime($created)) / 86400 : 0;
+        return $daysSince >= 30;
+
     } catch (Exception $e) {
         return false;
     }
