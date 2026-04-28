@@ -1,0 +1,463 @@
+<?php
+/**
+ * consulting/executive/plan_create.php — Executive: Create Plan for a Staff Member
+ */
+require_once '../../config/db.php';
+require_once '../../config/config.php';
+require_once '../../config/session.php';
+require_once '../../config/helpers.php';
+requireAnyRole();
+
+$db   = getDB();
+$user = currentUser();
+$uid  = (int)$user['id'];
+
+
+$branchId = (int)$user['branch_id'];
+$deptId   = (int)$user['department_id'];
+
+$now     = new DateTime();
+$today   = $now->format('Y-m-d');
+$month   = $_GET['month'] ?? $now->format('Y-m');
+
+// Staff list
+// NEW
+$staffList = $db->query("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    WHERE u.is_active = 1
+      AND u.branch_id = {$branchId}
+      AND (
+          u.id = {$uid}
+          OR u.id IN (
+              -- Primary department directly on users table
+              SELECT u2.id FROM users u2
+              JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
+              WHERE u2.is_active = 1
+              UNION
+              -- Secondary/multi department assignments
+              SELECT uda.user_id FROM user_department_assignments uda
+              JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+          )
+      )
+    ORDER BY u.full_name
+")->fetchAll();
+
+// Companies
+$companies = $db->prepare("SELECT id, company_name, company_code, pan_number FROM companies WHERE is_active=1 ORDER BY company_name");
+$companies->execute();
+$companies = $companies->fetchAll();
+
+$errors = [];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verifyCsrf();
+
+    $targetUid  = (int)($_POST['target_user_id'] ?? 0);
+    $weekNumber = (int)($_POST['week_number'] ?? 0);
+    $weekStart  = $_POST['week_start_date'] ?? '';
+    $weekEnd    = $_POST['week_end_date']   ?? '';
+    $planMonth  = $_POST['plan_month']      ?? '';
+
+    $entries    = $_POST['entries']         ?? [];
+
+    if (!$targetUid)   $errors[] = 'Please select a staff member.';
+    if (!$weekNumber)  $errors[] = 'Week number is required.';
+    if (!$weekStart)   $errors[] = 'Week start date is required.';
+    if (!$weekEnd)     $errors[] = 'Week end date is required.';
+    if (!$planMonth)   $errors[] = 'Plan month is required.';
+    if (empty($entries)) $errors[] = 'At least one entry is required.';
+
+    // Check duplicate plan
+    if (!$errors) {
+        $dup = $db->prepare("SELECT id FROM work_plans WHERE user_id=? AND week_number=? AND plan_month=?");
+        $dup->execute([$targetUid, $weekNumber, $planMonth.'-01']);
+        if ($dup->fetch()) $errors[] = 'A plan for Week '.$weekNumber.' already exists for this staff member.';
+    }
+
+    if (!$errors) {
+        $ins = $db->prepare("
+            INSERT INTO work_plans (user_id, department_id, branch_id, week_number,
+                week_start_date, week_end_date, plan_month, status, created_by)
+            VALUES (?,?,?,?,?,?,?,'draft',?)
+        ");
+        $ins->execute([$targetUid, $deptId, $branchId, $weekNumber, $weekStart, $weekEnd, $planMonth.'-01', $uid]);
+        $planId = $db->lastInsertId();
+
+        foreach ($entries as $e) {
+            if (empty($e['client_id'])) continue;
+            $planDate  = $e['plan_date']       ?? '';
+            $clientId  = (int)$e['client_id'];
+            $timeIn    = $e['planned_time_in']  ?: null;
+            $timeOut   = $e['planned_time_out'] ?: null;
+            $hours     = 0;
+            if ($timeIn && $timeOut) {
+                $diff  = strtotime($timeOut) - strtotime($timeIn);
+                $hours = round($diff / 3600, 2);
+            }
+            $notes = trim($e['notes'] ?? '');
+            $db->prepare("
+                INSERT INTO work_plan_entries
+                (plan_id, assigned_to, client_id, plan_date, planned_time_in, planned_time_out, planned_hours, notes)
+                VALUES (?,?,?,?,?,?,?,?)
+            ")->execute([$planId, $targetUid, $clientId, $planDate, $timeIn, $timeOut, $hours, $notes]);
+        }
+
+        // Notify the staff member
+        notify($targetUid, 'New Work Plan Created',
+            $user['full_name'].' created a Week '.$weekNumber.' plan for you.',
+            'task', APP_URL.'/consulting/staff/plan_view.php?id='.$planId, false, []);
+
+        logActivity('Executive created plan for user #'.$targetUid, 'consulting', 'plan_id='.$planId);
+        setFlash('success', 'Work plan created and assigned successfully!');
+        header('Location: plan_view.php?id='.$planId);
+        exit;
+    }
+}
+
+$pageTitle = 'Create Plan for Staff';
+include '../../includes/header.php';
+?>
+<link rel="stylesheet" href="../../staff/planning/consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<style>
+.entry-row { background:#f9fafb;border-radius:8px;padding:12px;margin-bottom:8px;border:1.5px solid #f1f5f9;position:relative; }
+.entry-row:hover { border-color:#e5e7eb; }
+.remove-entry { position:absolute;top:8px;right:8px;background:none;border:none;color:#9ca3af;cursor:pointer;font-size:.9rem;padding:2px 6px;border-radius:4px; }
+.remove-entry:hover { color:#ef4444;background:#fef2f2; }
+</style>
+
+<div class="app-wrapper">
+    <?php include '../../includes/sidebar_executive.php'; ?>
+    <div class="main-content">
+        <?php include '../../includes/topbar.php'; ?>
+        <div class="cn-wrap">
+
+            <!-- PAGE HERO -->
+            <div class="page-hero mb-4">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <div class="page-hero-badge"><i class="fas fa-briefcase"></i> Executive · Consulting</div>
+                        <h4>Create Work Plan</h4>
+                        <p>Assign a work plan to a staff member · <?= date('d M Y') ?></p>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap align-items-center">
+                        <a href="plans.php" class="btn btn-sm btn-outline-secondary">
+                            <i class="fas fa-list me-1"></i> All Plans
+                        </a>
+                        <a href="dashboard.php" class="btn btn-sm btn-outline-secondary">
+                            <i class="fas fa-home me-1"></i> Dashboard
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <?php if (!empty($errors)): ?>
+            <div class="cn-alert cn-alert-danger" style="margin-bottom:16px;">
+                <div style="font-weight:700;font-size:.84rem;margin-bottom:5px;">
+                    <i class="fas fa-exclamation-circle me-1"></i>Please fix the following:
+                </div>
+                <ul style="margin:0;padding-left:1.2rem;font-size:.8rem;">
+                    <?php foreach ($errors as $e): ?><li><?= htmlspecialchars($e) ?></li><?php endforeach; ?>
+                </ul>
+            </div>
+            <?php endif; ?>
+
+            <form method="POST" id="planForm">
+                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+
+                <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;">
+
+                    <!-- LEFT -->
+                    <div>
+
+                        <!-- Staff + Week Selection -->
+                        <div class="cn-panel mb-3">
+                            <div class="cn-panel-hd">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-user-tie me-2" style="color:var(--gold)"></i>Assign To
+                                </span>
+                            </div>
+                            <div style="padding:16px 18px;">
+                                <div class="row g-3">
+                                    <div class="col-12">
+                                        <label class="cn-label">Staff Member <span class="required-star">*</span></label>
+                                        <select name="target_user_id" id="staffSelect" class="cn-input" required>
+                                            <option value="">— Select Staff Member —</option>
+                                            <?php foreach ($staffList as $sl): ?>
+                                            <option value="<?= $sl['id'] ?>" <?= ($_POST['target_user_id'] ?? '') == $sl['id'] ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($sl['full_name']) ?>
+                                                <?= $sl['employee_id'] ? ' — '.$sl['employee_id'] : '' ?>
+                                            </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <div id="staffBadge" style="display:none;margin-top:8px;padding:6px 10px;background:#eff6ff;border-radius:6px;font-size:.78rem;color:#1d4ed8;">
+                                            <i class="fas fa-user-check me-1"></i><span id="staffBadgeName"></span>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="cn-label">Plan Month <span class="required-star">*</span></label>
+                                        <input type="month" name="plan_month" class="cn-input" required
+                                            value="<?= htmlspecialchars($_POST['plan_month'] ?? $month) ?>">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="cn-label">Week Number <span class="required-star">*</span></label>
+                                        <select name="week_number" class="cn-input" required>
+                                            <option value="">—</option>
+                                            <?php for ($w=1;$w<=5;$w++): ?>
+                                            <option value="<?= $w ?>" <?= ($_POST['week_number'] ?? '') == $w ? 'selected' : '' ?>>Week <?= $w ?></option>
+                                            <?php endfor; ?>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="cn-label">Week Start <span class="required-star">*</span></label>
+                                        <input type="date" name="week_start_date" class="cn-input" required
+                                            value="<?= htmlspecialchars($_POST['week_start_date'] ?? '') ?>">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="cn-label">Week End <span class="required-star">*</span></label>
+                                        <input type="date" name="week_end_date" class="cn-input" required
+                                            value="<?= htmlspecialchars($_POST['week_end_date'] ?? '') ?>">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Plan Entries -->
+                        <div class="cn-panel mb-3">
+                            <div class="cn-panel-hd" style="justify-content:space-between;">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-clipboard-list me-2" style="color:var(--gold)"></i>Plan Entries
+                                </span>
+                                <button type="button" class="cn-btn cn-btn-blue cn-btn-sm" onclick="addEntry()">
+                                    <i class="fas fa-plus"></i> Add Entry
+                                </button>
+                            </div>
+                            <div style="padding:16px 18px;">
+                                <div id="entriesContainer">
+                                    <!-- Entries added by JS -->
+                                </div>
+                                <div id="noEntries" style="text-align:center;color:#9ca3af;font-size:.8rem;padding:20px 0;">
+                                    <i class="fas fa-calendar-plus" style="font-size:1.5rem;display:block;margin-bottom:8px;"></i>
+                                    Click "Add Entry" to add client visits to this plan.
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- RIGHT -->
+                    <div>
+                        <div class="cn-panel mb-3">
+                            <div class="cn-panel-hd">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-info-circle me-2" style="color:var(--gold)"></i>Summary
+                                </span>
+                            </div>
+                            <div style="padding:14px 16px;">
+                                <div style="display:flex;flex-direction:column;gap:10px;">
+                                    <div style="display:flex;justify-content:space-between;font-size:.83rem;">
+                                        <span style="color:#9ca3af;">Entries</span>
+                                        <strong id="entryCount">0</strong>
+                                    </div>
+                                    <div style="display:flex;justify-content:space-between;font-size:.83rem;">
+                                        <span style="color:#9ca3af;">Total Hours</span>
+                                        <strong style="color:#c9a84c;" id="totalHoursDisp">0h</strong>
+                                    </div>
+                                </div>
+                                <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;font-size:.75rem;color:#6b7280;">
+                                    <i class="fas fa-info-circle me-1 text-warning"></i>
+                                    Plan will be saved as <strong>Draft</strong>. The staff member will be notified.
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="cn-panel">
+                            <div class="cn-panel-hd">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-save me-2" style="color:var(--gold)"></i>Save
+                                </span>
+                            </div>
+                            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
+                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <i class="fas fa-save"></i> Create Plan
+                                </button>
+                                <button type="submit" name="auto_submit" value="1" class="cn-btn cn-btn-blue" style="justify-content:center;">
+                                    <i class="fas fa-paper-plane"></i> Create & Auto-Approve
+                                </button>
+                                <a href="plan_list.php" class="cn-btn cn-btn-out" style="justify-content:center;">
+                                    <i class="fas fa-times"></i> Cancel
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+// Companies data for entries
+// NEW
+const companies = <?= json_encode(array_map(fn($c) => [
+    'id'   => $c['id'],
+    'name' => $c['company_name'],
+    'code' => $c['company_code'],
+    'pan'  => $c['pan_number'] ?? ''
+], $companies)) ?>;
+let entryCount = 0;
+
+const staffSelect = new TomSelect('#staffSelect', {
+    placeholder: 'Search staff member...',
+    maxOptions: 100,
+    allowEmptyOption: true,
+    onChange(val) {
+        const opt = this.options[val];
+        const badge = document.getElementById('staffBadge');
+        const name  = document.getElementById('staffBadgeName');
+        if (opt && val) {
+            name.textContent = 'Creating plan for: ' + opt.text;
+            badge.style.display = 'block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+});
+
+// NEW
+function addEntry() {
+    const idx = entryCount++;
+    const container = document.getElementById('entriesContainer');
+    document.getElementById('noEntries').style.display = 'none';
+
+    const opts = companies.map(c =>
+        `<option value="${c.id}" data-pan="${c.pan}" data-code="${c.code}">
+            ${c.name}${c.code ? ' — ' + c.code : ''}${c.pan ? ' | PAN: ' + c.pan : ''}
+        </option>`
+    ).join('');
+
+    const div = document.createElement('div');
+    div.className = 'entry-row';
+    div.id = 'entry_' + idx;
+    div.innerHTML = `
+        <button type="button" class="remove-entry" onclick="removeEntry(${idx})"><i class="fas fa-times"></i></button>
+        <div class="row g-2">
+            <div class="col-md-5">
+                <label class="cn-label" style="font-size:.72rem;">Client</label>
+                <select name="entries[${idx}][client_id]" id="clientSelect_${idx}" class="cn-input" style="font-size:.8rem;" required>
+                    <option value="">— Search by name or PAN —</option>${opts}
+                </select>
+                <div id="clientInfo_${idx}" style="display:none;margin-top:5px;padding:4px 8px;
+                     background:#f0fdf4;border-radius:5px;font-size:.72rem;color:#166534;">
+                    <i class="fas fa-building me-1"></i><span id="clientInfoText_${idx}"></span>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <label class="cn-label" style="font-size:.72rem;">Date</label>
+                <input type="date" name="entries[${idx}][plan_date]" class="cn-input" style="font-size:.8rem;" required>
+            </div>
+            <div class="col-md-2">
+                <label class="cn-label" style="font-size:.72rem;">Time In</label>
+                <input type="time" name="entries[${idx}][planned_time_in]" class="cn-input" style="font-size:.8rem;" onchange="calcEntry(${idx})">
+            </div>
+            <div class="col-md-2">
+                <label class="cn-label" style="font-size:.72rem;">Time Out</label>
+                <input type="time" name="entries[${idx}][planned_time_out]" class="cn-input" style="font-size:.8rem;" onchange="calcEntry(${idx})">
+            </div>
+            <div class="col-12">
+                <label class="cn-label" style="font-size:.72rem;">Notes</label>
+                <input type="text" name="entries[${idx}][notes]" class="cn-input" style="font-size:.8rem;" placeholder="Optional notes...">
+            </div>
+            <div class="col-12">
+                <span style="font-size:.72rem;color:#9ca3af;">Duration: <strong id="dur_${idx}" style="color:#c9a84c;">—</strong></span>
+            </div>
+        </div>
+    `;
+    container.appendChild(div);
+
+    // Init Tom Select on the client dropdown with custom search (name + PAN)
+    new TomSelect(`#clientSelect_${idx}`, {
+        placeholder: 'Search by name or PAN...',
+        maxOptions: 200,
+        allowEmptyOption: true,
+        searchField: ['text'],   // text includes name, code, PAN all baked in
+        render: {
+            option: function(data, escape) {
+                const c = companies.find(x => x.id == data.value);
+                if (!c) return `<div>${escape(data.text)}</div>`;
+                return `<div style="padding:6px 10px;line-height:1.4;">
+                    <div style="font-weight:600;font-size:.82rem;">${escape(c.name)}</div>
+                    <div style="font-size:.7rem;color:#6b7280;">
+                        ${c.code ? '<span style="margin-right:8px;">Code: '+escape(c.code)+'</span>' : ''}
+                        ${c.pan  ? '<span>PAN: '+escape(c.pan)+'</span>' : ''}
+                    </div>
+                </div>`;
+            },
+            item: function(data, escape) {
+                const c = companies.find(x => x.id == data.value);
+                if (!c) return `<div>${escape(data.text)}</div>`;
+                return `<div>${escape(c.name)}${c.pan ? ' — '+escape(c.pan) : ''}</div>`;
+            }
+        },
+        onChange(val) {
+            const infoBox  = document.getElementById(`clientInfo_${idx}`);
+            const infoText = document.getElementById(`clientInfoText_${idx}`);
+            const c = companies.find(x => x.id == val);
+            if (c && val) {
+                let parts = [c.name];
+                if (c.code) parts.push('Code: ' + c.code);
+                if (c.pan)  parts.push('PAN: '  + c.pan);
+                infoText.textContent = parts.join(' · ');
+                infoBox.style.display = 'block';
+            } else {
+                infoBox.style.display = 'none';
+            }
+        }
+    });
+
+    updateSummary();
+}
+
+function removeEntry(idx) {
+    document.getElementById('entry_' + idx)?.remove();
+    if (!document.querySelector('.entry-row')) {
+        document.getElementById('noEntries').style.display = 'block';
+    }
+    updateSummary();
+}
+
+function calcEntry(idx) {
+    const tin  = document.querySelector(`[name="entries[${idx}][planned_time_in]"]`)?.value;
+    const tout = document.querySelector(`[name="entries[${idx}][planned_time_out]"]`)?.value;
+    const disp = document.getElementById('dur_' + idx);
+    if (tin && tout && disp) {
+        const diff = (new Date('1970-01-01T'+tout) - new Date('1970-01-01T'+tin)) / 3600000;
+        disp.textContent = diff > 0 ? diff.toFixed(2)+'h' : '—';
+        disp.style.color = diff > 0 ? '#c9a84c' : '#ef4444';
+    }
+    updateSummary();
+}
+
+function updateSummary() {
+    const rows = document.querySelectorAll('.entry-row');
+    document.getElementById('entryCount').textContent = rows.length;
+    let total = 0;
+    rows.forEach((r, i) => {
+        const durEl = r.querySelector('[id^="dur_"]');
+        if (durEl) {
+            const v = parseFloat(durEl.textContent);
+            if (!isNaN(v)) total += v;
+        }
+    });
+    document.getElementById('totalHoursDisp').textContent = total.toFixed(1) + 'h';
+}
+
+// Add first entry by default
+addEntry();
+</script>
+<?php include '../../includes/footer.php'; ?>

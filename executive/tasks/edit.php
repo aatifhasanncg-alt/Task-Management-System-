@@ -56,16 +56,20 @@ $fyList = $db->query("
 
 // Staff for assigned_to — all staff in this task's department
 $staffList = $db->prepare("
-    SELECT u.id, u.full_name, u.employee_id, b.branch_name
+    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name
     FROM users u
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
     WHERE r.role_name IN ('staff','admin')
       AND u.is_active = 1
-      AND u.department_id = ?
+      AND (
+          u.department_id = ?
+          OR uda.department_id = ?
+      )
     ORDER BY u.full_name
 ");
-$staffList->execute([$task['department_id']]);
+$staffList->execute([$task['department_id'], $task['department_id']]);
 $staffList = $staffList->fetchAll();
 
 // Auditors — fiscal-year aware

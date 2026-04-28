@@ -3,7 +3,6 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 
-requireExecutive();
 if (!isCoreAdmin()) {
     setFlash('error', 'Access denied. Only Core Admin executives can edit staff.');
     header('Location: index.php');
@@ -25,6 +24,12 @@ if (!$staff) {
 $allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 $allDepts    = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
 $allRoles    = $db->query("SELECT id, role_name FROM roles ORDER BY id")->fetchAll();
+// Fetch existing UDA departments
+$udaStmt = $db->prepare("
+    SELECT department_id FROM user_department_assignments WHERE user_id = ?
+");
+$udaStmt->execute([$staffId]);
+$existingUdaDepts = array_column($udaStmt->fetchAll(), 'department_id');
 $allAdmins = $db->query("
     SELECT u.id, u.full_name, u.employee_id, b.branch_name FROM users u
     LEFT JOIN roles r    ON r.id = u.role_id
@@ -82,6 +87,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $joiningDate ?: null, $address ?: null, $is_active, $gaEnabled,
             $staffId
         ]);
+        // Save additional departments (UDA)
+        $db->prepare("DELETE FROM user_department_assignments WHERE user_id = ?")->execute([$staffId]);
+        $extraDepts = $_POST['extra_departments'] ?? [];
+        foreach ($extraDepts as $extraDeptId) {
+            $extraDeptId = (int)$extraDeptId;
+            if ($extraDeptId && $extraDeptId !== $deptId) {
+                $db->prepare("
+                    INSERT IGNORE INTO user_department_assignments (user_id, department_id)
+                    VALUES (?, ?)
+                ")->execute([$staffId, $extraDeptId]);
+            }
+        }
 
         if ($oldRoleId != $roleId) {
             require_once '../../config/role_manager.php';
@@ -422,7 +439,32 @@ include '../../includes/header.php';
                                 <?php endforeach; ?>
                             </select>
                         </div>
-
+                        <div class="col-12">
+                        <label class="form-label-mis">
+                            Additional Departments
+                            <span style="font-size:.68rem;color:#9ca3af;margin-left:.3rem;">
+                                (beyond primary dept)
+                            </span>
+                        </label>
+                        <div id="extra-dept-list" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem;">
+                            <!-- Prepopulated by JS from existing UDA -->
+                        </div>
+                        <div class="d-flex gap-2">
+                            <select id="extra-dept-select" class="form-select form-select-sm" style="max-width:220px;">
+                                <option value="">-- Add Department --</option>
+                                <?php foreach ($allDepts as $d): ?>
+                                    <option value="<?= $d['id'] ?>">
+                                        <?= htmlspecialchars($d['dept_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                    onclick="addExtraDept()">
+                                <i class="fas fa-plus me-1"></i>Add
+                            </button>
+                        </div>
+                        <div id="extra-dept-inputs"></div>
+                    </div>
                         <div class="col-12">
                             <label class="form-label-mis">Managed By</label>
                             <select name="managed_by" class="form-select tomselect-input" id="managedBySelect">
@@ -636,7 +678,65 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
 });
+// ── Extra Departments (pre-loaded from UDA) ───────────────────────────────────
+const extraDeptMap = {};
+
+// Pre-populate from server
+<?php
+$udaDeptNames = [];
+foreach ($allDepts as $d) {
+    if (in_array($d['id'], $existingUdaDepts) && $d['id'] != $staff['department_id']) {
+        $udaDeptNames[$d['id']] = $d['dept_name'];
+    }
+}
+?>
+const preloadedDepts = <?= json_encode($udaDeptNames) ?>;
+for (const [id, name] of Object.entries(preloadedDepts)) {
+    extraDeptMap[id] = name;
+}
+renderExtraDepts();
+
+function addExtraDept() {
+    const sel  = document.getElementById('extra-dept-select');
+    const id   = sel.value;
+    const name = sel.options[sel.selectedIndex]?.text;
+    if (!id || extraDeptMap[id]) return;
+    extraDeptMap[id] = name;
+    renderExtraDepts();
+    sel.value = '';
+}
+
+function removeExtraDept(id) {
+    delete extraDeptMap[id];
+    renderExtraDepts();
+}
+
+function renderExtraDepts() {
+    const list   = document.getElementById('extra-dept-list');
+    const inputs = document.getElementById('extra-dept-inputs');
+    list.innerHTML   = '';
+    inputs.innerHTML = '';
+
+    for (const [id, name] of Object.entries(extraDeptMap)) {
+        list.insertAdjacentHTML('beforeend', `
+            <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
+                         border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
+                         font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
+                ${name}
+                <button type="button" onclick="removeExtraDept('${id}')"
+                        style="background:none;border:none;color:#3b82f6;
+                               cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </span>
+        `);
+        inputs.insertAdjacentHTML('beforeend',
+            `<input type="hidden" name="extra_departments[]" value="${id}">`
+        );
+    }
+}
 </script>
+
 <?php include '../../includes/footer.php'; ?>
 </div>
 </div>

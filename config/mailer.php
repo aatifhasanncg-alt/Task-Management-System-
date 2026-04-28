@@ -94,19 +94,38 @@ function emailTaskAssigned(array $user, array $task): bool {
             <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Due Date</td><td style='padding:8px;'>" . ($task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : 'Not set') . "</td></tr>
         </table>
         <p>Please log in to MISPro to view and update this task.</p>
-        <a href='" . APP_URL . "/staff/tasks/view.php?id={$task['id']}' style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>View Task</a>
+        <a href='" . ($task['url'] ?? APP_URL . '/staff/tasks/view.php?id=' . $task['id']) . "' style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>View Task</a>
     ");
     return sendMail($user['email'], $user['full_name'], $subject, $html);
 }
 
 function emailTaskTransferred(array $user, array $task, string $remarks): bool {
     $subject = "[MISPro] Task Transferred to You: {$task['task_number']}";
+
+    $remarksHtml = $remarks
+        ? "<div style='background:#f5f3ff;border-left:4px solid #8b5cf6;padding:12px 16px;border-radius:6px;margin:16px 0;'>
+               <strong style='color:#6d28d9;'>Transfer Note / Instructions:</strong>
+               <p style='margin:6px 0 0;color:#374151;'>" . nl2br(htmlspecialchars($remarks)) . "</p>
+           </div>"
+        : '';
+
+    $viewUrl = $task['url'] ?? (APP_URL . '/staff/tasks/view.php?id=' . $task['id']);
+
     $html = emailWrapper("
-        <h2 style='color:#0a0f1e;'>Task Transferred</h2>
+        <h2 style='color:#0a0f1e;'>Task Transferred to You</h2>
         <p>Dear <strong>{$user['full_name']}</strong>,</p>
-        <p>Task <strong>{$task['task_number']}</strong> — <em>{$task['title']}</em> has been transferred to you.</p>
-        " . ($remarks ? "<p><strong>Remarks:</strong> " . htmlspecialchars($remarks) . "</p>" : "") . "
-        <a href='" . APP_URL . "/staff/tasks/view.php?id={$task['id']}' style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>View Task</a>
+        <p>Task <strong>{$task['task_number']}</strong> — <em>" . htmlspecialchars($task['title']) . "</em>
+           has been transferred to the <strong>" . htmlspecialchars($task['department']) . "</strong> department and assigned to you.</p>
+        {$remarksHtml}
+        <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;width:140px;'>Task #</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$task['task_number']}</td></tr>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Title</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>" . htmlspecialchars($task['title']) . "</td></tr>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Department</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>" . htmlspecialchars($task['department']) . "</td></tr>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Status</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>" . htmlspecialchars($task['status']) . "</td></tr>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Due Date</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>" . ($task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : 'Not set') . "</td></tr>
+            <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Company</td><td style='padding:8px;'>" . htmlspecialchars($task['company'] ?? '—') . "</td></tr>
+        </table>
+        <a href='{$viewUrl}' style='display:inline-block;background:#8b5cf6;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>View Task</a>
     ");
     return sendMail($user['email'], $user['full_name'], $subject, $html);
 }

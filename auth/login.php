@@ -78,25 +78,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             // ── 2FA pending ──────────────────────────────────────────────
             // ── 2FA pending ──────────────────────────────────────────────
-           if ($user['ga_enabled'] && $user['ga_secret']) {
-            
+            if ($user['ga_enabled'] && $user['ga_secret']) {
+
                 // ── Save login time & IP for 2FA users too ────────────────────────
-                $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR'] 
-                           ?? $_SERVER['HTTP_CLIENT_IP'] 
-                           ?? $_SERVER['REMOTE_ADDR'] 
-                           ?? '0.0.0.0';
+                $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR']
+                    ?? $_SERVER['HTTP_CLIENT_IP']
+                    ?? $_SERVER['REMOTE_ADDR']
+                    ?? '0.0.0.0';
                 if (str_contains($loginIp, ',')) {
                     $loginIp = trim(explode(',', $loginIp)[0]);
                 }
                 $loginIp = filter_var($loginIp, FILTER_VALIDATE_IP) ? $loginIp : '0.0.0.0';
-            
+
                 $db->prepare("
                     UPDATE users 
                     SET last_login = NOW(),
                         last_login_ip = ?
                     WHERE id = ?
                 ")->execute([$loginIp, $user['id']]);
-            
+
                 $_SESSION['2fa_pending_user'] = $user['id'];
                 $_SESSION['2fa_pending_role'] = $role;
 
@@ -110,24 +110,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // ── Login success ─────────────────────────────────────────────
             // Login success (no 2FA)
             // ── Save login time & IP ──────────────────────────────────────────────────
-                $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR'] 
-                           ?? $_SERVER['HTTP_CLIENT_IP'] 
-                           ?? $_SERVER['REMOTE_ADDR'] 
-                           ?? '0.0.0.0';
-                // X-Forwarded-For can be a comma-separated list — take the first (real client)
-                if (str_contains($loginIp, ',')) {
-                    $loginIp = trim(explode(',', $loginIp)[0]);
-                }
-                $loginIp = filter_var($loginIp, FILTER_VALIDATE_IP) ? $loginIp : '0.0.0.0';
-                
-                $db->prepare("
+            $loginIp = $_SERVER['HTTP_X_FORWARDED_FOR']
+                ?? $_SERVER['HTTP_CLIENT_IP']
+                ?? $_SERVER['REMOTE_ADDR']
+                ?? '0.0.0.0';
+            // X-Forwarded-For can be a comma-separated list — take the first (real client)
+            if (str_contains($loginIp, ',')) {
+                $loginIp = trim(explode(',', $loginIp)[0]);
+            }
+            $loginIp = filter_var($loginIp, FILTER_VALIDATE_IP) ? $loginIp : '0.0.0.0';
+
+            $db->prepare("
                     UPDATE users 
                     SET last_login = NOW(),
                         last_login_ip = ?
                     WHERE id = ?
                 ")->execute([$loginIp, $user['id']]);
-                
-                session_regenerate_id(true);
+
+            session_regenerate_id(true);
 
             $_SESSION['user'] = [
                 'id' => $user['id'],
@@ -166,7 +166,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // ✅ ADD THIS — persistent login token
             setRememberToken($user['id'], true);
 
-            header('Location: ../' . $role . '/dashboard/index.php');
+            // Check if user belongs to Consulting department (dept_code = 'CORP' or id — adjust to your dept)
+            $isConsulting = false;
+            if (!empty($user['department_id'])) {
+                $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+                $deptChk->execute([$user['department_id']]);
+                $deptRow = $deptChk->fetch(PDO::FETCH_ASSOC);
+                // Change 'CONSULT' below to whatever dept_code your Consulting dept uses
+                $isConsulting = ($deptRow && $deptRow['dept_code'] === 'CON');
+            }
+
+            if ($isConsulting && $role === 'admin') {
+                header('Location: ../admin/planning/index.php');
+            } elseif ($isConsulting && $role === 'staff') {
+                header('Location: ../staff/planning/index.php');
+            } else {
+                header('Location: ../' . $role . '/dashboard/index.php');
+            }
             exit;
         }
     }
@@ -207,10 +223,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             font-family: 'Outfit', sans-serif;
             background: var(--navy);
             display: flex;
-            align-items: flex-start; /* ← changed from center */
+            align-items: flex-start;
+            /* ← changed from center */
             justify-content: center;
             position: relative;
-            overflow-y: auto;        /* ← allow scrolling */
+            overflow-y: auto;
+            /* ← allow scrolling */
             overflow-x: hidden;
         }
 

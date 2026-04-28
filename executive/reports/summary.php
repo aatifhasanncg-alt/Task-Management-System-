@@ -8,7 +8,7 @@ $db = getDB();
 $user = currentUser();
 $pageTitle = 'Bank Summary';
 
-$userRole = $user['role'] ?? 'staff';
+$userRole = $user['role_name'] ?? 'executive';
 
 // Lookups
 $allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
@@ -207,12 +207,7 @@ include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
     <?php
-    if ($userRole === 'executive')
         include '../../includes/sidebar_executive.php';
-    elseif ($userRole === 'admin')
-        include '../../includes/sidebar_admin.php';
-    else
-        include '../../includes/sidebar_staff.php';
     ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
@@ -233,6 +228,9 @@ include '../../includes/header.php';
                             style="background:#16a34a;color:white;border-radius:8px;padding:.4rem .9rem;">
                             <i class="fas fa-file-excel me-1"></i>Export Excel
                         </a>
+                        <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addBankModal">
+                            <i class="fas fa-plus me-1"></i>Add Bank
+                        </button>
                     </div>
                 </div>
             </div>
@@ -539,9 +537,7 @@ include '../../includes/header.php';
                 <div class="card-mis mb-4">
                     <div class="card-mis-header d-flex justify-content-between align-items-center">
                         <h5><i class="fas fa-university text-warning me-2"></i>Bank References</h5>
-                        <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addBankModal">
-                            <i class="fas fa-plus me-1"></i>Add Bank
-                        </button>
+                        
                     </div>
                     <div class="table-responsive">
                         <table class="table-mis w-100">

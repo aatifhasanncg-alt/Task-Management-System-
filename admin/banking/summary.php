@@ -7,7 +7,7 @@ requireAnyRole();
 $db        = getDB();
 $user      = currentUser();
 $pageTitle = 'Bank Summary';
-$userRole  = $user['role'] ?? 'staff';
+$userRole  = $user['role_name'] ?? 'admin';
 
 // ── Get the logged-in user's branch ──────────────────────────────────────────
 $userBranchStmt = $db->prepare("
@@ -149,11 +149,7 @@ $totals = [
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
-<?php
-if ($userRole === 'executive') include '../../includes/sidebar_executive.php';
-elseif ($userRole === 'admin') include '../../includes/sidebar_admin.php';
-else                           include '../../includes/sidebar_staff.php';
-?>
+    <?php include '../../includes/sidebar_admin.php'; ?>
 <div class="main-content">
 <?php include '../../includes/topbar.php'; ?>
 <div style="padding:1.5rem 0;">
@@ -179,7 +175,11 @@ else                           include '../../includes/sidebar_staff.php';
                class="btn btn-sm" style="background:#16a34a;color:white;border-radius:8px;padding:.4rem .9rem;">
                 <i class="fas fa-file-excel me-1"></i>Export Excel
             </a>
+            <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addBankModal">
+            <i class="fas fa-plus me-1"></i>Add Bank
+        </button>
         </div>
+        
     </div>
 </div>
 
@@ -264,8 +264,18 @@ else                           include '../../includes/sidebar_staff.php';
                 ?>
                 <tr>
                     <td style="color:#9ca3af;font-size:.78rem;"><?= $i + 1 ?></td>
-                    <td style="font-size:.87rem;font-weight:500;"><?= $bankLabel ?></td>
-                    <td style="min-width:140px;">
+                    <?php
+                    $taskLink = APP_URL.'/admin/tasks/index.php?bank_ref='.$row['bank_reference_id'];
+                    if ($filterFY) $taskLink .= '&fy='.urlencode($filterFY);
+                    ?>
+                    <td style="font-size:.87rem;font-weight:500;">
+                        <a href="<?= htmlspecialchars($taskLink) ?>"
+                            style="color:inherit;text-decoration:none;display:flex;align-items:center;gap:.4rem;"
+                            title="View tasks for this bank">
+                            <?= $bankLabel ?>
+                        <i class="fas fa-arrow-up-right-from-square" style="font-size:.65rem;color:#c9a84c;opacity:.7;"></i>
+                        </a>
+                    </td>                    <td style="min-width:140px;">
                         <div style="display:flex;align-items:center;gap:.4rem;">
                             <div style="flex:1;background:#1e2a45;border-radius:99px;height:5px;overflow:hidden;">
                                 <div style="width:<?= min(100, $pct) ?>%;background:#c9a84c;height:100%;border-radius:99px;transition:width .4s ease;"></div>
@@ -316,9 +326,7 @@ else                           include '../../includes/sidebar_staff.php';
 <div class="card-mis mb-4">
     <div class="card-mis-header d-flex justify-content-between align-items-center">
         <h5><i class="fas fa-university text-warning me-2"></i>Bank References</h5>
-        <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addBankModal">
-            <i class="fas fa-plus me-1"></i>Add Bank
-        </button>
+        
     </div>
 
     <?php if (empty($allBanks)): ?>
@@ -419,7 +427,8 @@ else                           include '../../includes/sidebar_staff.php';
             <div class="modal-footer">
                 <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
                 <button class="btn btn-gold btn-sm" onclick="document.getElementById('addBankForm').submit();">
-                    <i class="fas fa-plus me-1"></i>Add
+      
+                <i class="fas fa-plus me-1"></i>Add
                 </button>
             </div>
         </div>

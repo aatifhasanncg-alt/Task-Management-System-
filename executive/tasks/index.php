@@ -9,7 +9,7 @@ $user = currentUser();
 $pageTitle = 'All Tasks';
 
 // Filters
-$filterDept = $_GET['dept'] ?? '';
+$filterDeptId = (int) ($_GET['dept_id'] ?? 0);
 $filterStatus = $_GET['status'] ?? '';
 $filterBranch = (int) ($_GET['branch_id'] ?? 0);
 $filterStaff = (int) ($_GET['staff_id'] ?? 0);
@@ -26,10 +26,10 @@ $offset = ($page - 1) * $perPage;
 $where = ['t.is_active = 1'];
 $params = [];
 
-// dept_code not department_code
-if ($filterDept) {
-    $where[] = 'd.dept_code = ?';
-    $params[] = strtoupper($filterDept);
+// dept_id 
+if ($filterDeptId) {
+    $where[] = 't.department_id = ?';
+    $params[] = $filterDeptId;
 }
 // status via join
 if ($filterStatus) {
@@ -118,23 +118,49 @@ $statuses = $db->query("
     ORDER BY id ASC
 ")->fetchAll();
 // Status counts — via task_status join
-$stmt = $db->query("
-    SELECT ts.status_name, COUNT(t.id) as total
-    FROM task_status ts
-    LEFT JOIN tasks t 
-        ON t.status_id = ts.id AND t.is_active = 1
-    GROUP BY ts.status_name
-");
 $tabCounts = [];
-foreach ($stmt->fetchAll() as $row) {
-    $tabCounts[$row['status_name']] = $row['total'];
+foreach ($statuses as $s) {
+    $k = $s['status_name'];
+
+    // Strip the current status filter so each tab shows its own count
+    $tabWhere = $whereStr;
+    $tabParams = $params;
+    if ($filterStatus) {
+        $tabWhere = str_replace('ts.status_name = ?', '1=1', $tabWhere);
+        $idx = array_search($filterStatus, $tabParams);
+        if ($idx !== false) {
+            unset($tabParams[$idx]);
+            $tabParams = array_values($tabParams);
+        }
+    }
+    // Also strip the overdue Done-exclusion so counts aren't distorted
+    if ($filterOverdue) {
+        $tabWhere = str_replace("ts.status_name != ?", '1=1', $tabWhere);
+        $doneIdx = array_search('Done', $tabParams);
+        if ($doneIdx !== false) {
+            unset($tabParams[$doneIdx]);
+            $tabParams = array_values($tabParams);
+        }
+    }
+
+    $cntSt = $db->prepare("
+        SELECT COUNT(t.id)
+        FROM tasks t
+        LEFT JOIN task_status ts ON ts.id = t.status_id
+        LEFT JOIN departments d  ON d.id  = t.department_id
+        LEFT JOIN companies   c  ON c.id  = t.company_id
+        LEFT JOIN users       u  ON u.id  = t.assigned_to
+        WHERE {$tabWhere} AND ts.status_name = ?
+    ");
+    $cntSt->execute(array_merge($tabParams, [$k]));
+    $tabCounts[$k] = (int) $cntSt->fetchColumn();
 }
 
 // Dropdowns — dept_name not department_name, dept_code not department_code
 $allDepts = $db->query("
     SELECT id, dept_name, dept_code
     FROM departments
-    WHERE is_active = 1 AND dept_name !='CORE ADMIN'
+    WHERE is_active = 1 AND dept_name !='CORE ADMIN' AND LOWER(dept_name) NOT LIKE '%consult%'
     ORDER BY dept_name
 ")->fetchAll();
 
@@ -157,14 +183,25 @@ include '../../includes/header.php';
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
-        <?php include '../../includes/topbar.php'; ?>
+        <?php require_once '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
 
             <div class="page-hero">
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div>
                         <div class="page-hero-badge"><i class="fas fa-crown"></i> Executive View</div>
-                        <h4>All Tasks <?= $filterDept ? '— ' . strtoupper($filterDept) : '' ?></h4>
+                        <?php
+                        $filterDeptName = '';
+                        if ($filterDeptId) {
+                            foreach ($allDepts as $d) {
+                                if ((int) $d['id'] === $filterDeptId) {
+                                    $filterDeptName = $d['dept_name'];
+                                    break;
+                                }
+                            }
+                        }
+                        ?>
+                        <h4>All Tasks <?= $filterDeptName ? '— ' . htmlspecialchars($filterDeptName) : '' ?></h4>
                         <p><?= number_format($total) ?> tasks across all branches and departments</p>
                     </div>
                     <a href="assign.php" class="btn-gold btn">
@@ -175,7 +212,7 @@ include '../../includes/header.php';
 
             <!-- Status tabs -->
             <div class="d-flex gap-2 flex-wrap mb-3">
-                <a href="index.php?<?= http_build_query(['search' => $search, 'dept' => $filterDept, 'branch_id' => $filterBranch]) ?>"
+                <a href="index.php?<?= http_build_query(['search' => $search, 'dept_id' => $filterDeptId, 'branch_id' => $filterBranch]) ?>"
                     class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>">
                     All (<?= array_sum($tabCounts) ?>)
                 </a>
@@ -186,14 +223,14 @@ include '../../includes/header.php';
                     ?>
                     <a href="index.php?<?= http_build_query([
                         'status' => $k,
-                        'dept' => $filterDept,
+                        'dept_id' => $filterDeptId,
                         'branch_id' => $filterBranch,
                         'search' => $search
                     ]) ?>" class="btn btn-sm" style="
-        border:1px solid <?= $color ?>;
-        color:<?= $isActive ? '#fff' : $color ?>;
-        background:<?= $isActive ? $color : 'transparent' ?>;
-   ">
+                            border:1px solid <?= $color ?>;
+                            color:<?= $isActive ? '#fff' : $color ?>;
+                            background:<?= $isActive ? $color : 'transparent' ?>;
+                    ">
 
                         <i class="fas <?= $s['icon'] ?>"></i>
                         <?= htmlspecialchars($s['status_name']) ?>
@@ -253,11 +290,10 @@ include '../../includes/header.php';
                     </div>
                     <div class="col">
                         <label class="form-label-mis">Department</label>
-                        <select name="dept" class="form-select form-select-sm">
+                        <select name="dept_id" class="form-select form-select-sm">
                             <option value="">All Depts</option>
                             <?php foreach ($allDepts as $d): ?>
-                                <option value="<?= strtolower($d['dept_code']) ?>"
-                                    <?= $filterDept === strtolower($d['dept_code']) ? 'selected' : '' ?>>
+                                <option value="<?= $d['id'] ?>" <?= $filterDeptId == $d['id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($d['dept_name']) ?>
                                 </option>
                             <?php endforeach; ?>

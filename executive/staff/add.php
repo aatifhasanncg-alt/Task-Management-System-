@@ -97,7 +97,6 @@ function parseXlsxNative(string $filePath): array|false
 
     return array_values($rows);
 }
-requireExecutive();
 
 if (!isCoreAdmin()) {
     setFlash('error', 'Access denied. Only Core Admin executives can add staff.');
@@ -219,7 +218,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
 
         $newId = $db->lastInsertId();
-
+        // Save additional departments (UDA)
+        $extraDepts = $_POST['extra_departments'] ?? [];
+        foreach ($extraDepts as $extraDeptId) {
+            $extraDeptId = (int) $extraDeptId;
+            if ($extraDeptId && $extraDeptId !== $deptId) {
+                $db->prepare("
+                    INSERT IGNORE INTO user_department_assignments (user_id, department_id)
+                    VALUES (?, ?)
+                ")->execute([$newId, $extraDeptId]);
+            }
+        }
         // Send welcome email with credentials + secret
         try {
             require_once '../../config/mailer.php';
@@ -706,7 +715,34 @@ include '../../includes/header.php';
                                                 <?php endforeach; ?>
                                             </select>
                                         </div>
-
+                                        <div class="col-12">
+                                            <label class="form-label-mis">
+                                                Additional Departments
+                                                <span style="font-size:.68rem;color:#9ca3af;margin-left:.3rem;">
+                                                    (optional — beyond primary dept)
+                                                </span>
+                                            </label>
+                                            <div id="extra-dept-list"
+                                                style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem;">
+                                                <!-- JS populated -->
+                                            </div>
+                                            <div class="d-flex gap-2">
+                                                <select id="extra-dept-select" class="form-select form-select-sm"
+                                                    style="max-width:220px;">
+                                                    <option value="">-- Add Department --</option>
+                                                    <?php foreach ($allDepts as $d): ?>
+                                                        <option value="<?= $d['id'] ?>">
+                                                            <?= htmlspecialchars($d['dept_name']) ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm"
+                                                    onclick="addExtraDept()">
+                                                    <i class="fas fa-plus me-1"></i>Add
+                                                </button>
+                                            </div>
+                                            <div id="extra-dept-inputs"></div>
+                                        </div>
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Managed By</label>
                                             <select name="managed_by" class="form-select">
@@ -1033,5 +1069,48 @@ include '../../includes/header.php';
                     document.getElementById('upload-btn').disabled = true;
                     document.getElementById('upload-spinner').style.display = 'flex';
                 });
+                // ── Extra Departments ────────────────────────────────────────────────────────
+                const extraDeptMap = {};
+
+                function addExtraDept() {
+                    const sel = document.getElementById('extra-dept-select');
+                    const id = sel.value;
+                    const name = sel.options[sel.selectedIndex]?.text;
+                    if (!id || extraDeptMap[id]) return;
+
+                    extraDeptMap[id] = name;
+                    renderExtraDepts();
+                    sel.value = '';
+                }
+
+                function removeExtraDept(id) {
+                    delete extraDeptMap[id];
+                    renderExtraDepts();
+                }
+
+                function renderExtraDepts() {
+                    const list = document.getElementById('extra-dept-list');
+                    const inputs = document.getElementById('extra-dept-inputs');
+                    list.innerHTML = '';
+                    inputs.innerHTML = '';
+
+                    for (const [id, name] of Object.entries(extraDeptMap)) {
+                        list.insertAdjacentHTML('beforeend', `
+            <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
+                         border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
+                         font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
+                ${name}
+                <button type="button" onclick="removeExtraDept('${id}')"
+                        style="background:none;border:none;color:#3b82f6;
+                               cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </span>
+        `);
+                        inputs.insertAdjacentHTML('beforeend',
+                            `<input type="hidden" name="extra_departments[]" value="${id}">`
+                        );
+                    }
+                }
             </script>
             <?php include '../../includes/footer.php'; ?>

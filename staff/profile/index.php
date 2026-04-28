@@ -15,7 +15,28 @@ $pageTitle = 'My Profile';
 $profile = $db->prepare("SELECT u.*,b.branch_name,d.dept_name FROM users u LEFT JOIN branches b ON b.id=u.branch_id LEFT JOIN departments d ON d.id=u.department_id WHERE u.id=?");
 $profile->execute([$user['id']]);
 $profile = $profile->fetch();
+$udaDeptStmt = $db->prepare("
+    SELECT d.dept_name, d.id,
+           CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+    UNION
+    SELECT d.dept_name, d.id, 1 AS is_primary
+    FROM departments d
+    WHERE d.id = ?
+    ORDER BY is_primary DESC, dept_name ASC
+");
+$udaDeptStmt->execute([$profile['department_id'], $user['id'], $profile['department_id']]);
+$allDepts = $udaDeptStmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Remove duplicates
+$seen = [];
+$allDepts = array_filter($allDepts, function($d) use (&$seen) {
+    if (in_array($d['id'], $seen)) return false;
+    $seen[] = $d['id'];
+    return true;
+});
 $errors = [];
 
 // Handle password change
@@ -51,13 +72,26 @@ $taskStats = $db->prepare("
     SELECT
         COUNT(*) as total,
         SUM(status_id=8) as done,
-        SUM(status_id=2)       as wip,
-        SUM(status_id=3)   as pending,
+        SUM(status_id=2) as wip,
+        SUM(status_id=3) as pending,
         SUM(due_date < CURDATE() AND status_id=8) as overdue
     FROM tasks WHERE assigned_to=? AND is_active=1
 ");
 $taskStats->execute([$user['id']]);
 $stats = $taskStats->fetch();
+
+// Per-department task stats
+$deptTaskStats = [];
+foreach ($allDepts as $dept) {
+    $dts = $db->prepare("
+        SELECT COUNT(*) as total,
+               SUM(status_id=8) as done,
+               SUM(due_date < CURDATE() AND status_id!=8) as overdue
+        FROM tasks WHERE assigned_to=? AND department_id=? AND is_active=1
+    ");
+    $dts->execute([$user['id'], $dept['id']]);
+    $deptTaskStats[$dept['id']] = array_merge($dept, $dts->fetch(PDO::FETCH_ASSOC));
+}
 
 include '../../includes/header.php';
 ?>
@@ -98,7 +132,14 @@ include '../../includes/header.php';
                             <div class="d-flex justify-content-center gap-2 mt-2 flex-wrap">
                                 <span
                                     class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
-                                <span class="dept-chip"><?= htmlspecialchars($profile['dept_name'] ?? '—') ?></span>
+                                <?php foreach ($allDepts as $dept): ?>
+                                    <span class="dept-chip">
+                                        <?= htmlspecialchars($dept['dept_name']) ?>
+                                        <?php if ($dept['is_primary']): ?>
+                                            <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endforeach; ?>
                             </div>
                             <?php if ($profile['employee_id']): ?>
                                 <p style="font-size:.75rem;color:#9ca3af;margin-top:.75rem;"><i
@@ -136,6 +177,36 @@ include '../../includes/header.php';
                             <?php endforeach; ?>
                         </div>
                     </div>
+                    <?php if (count($allDepts) > 1): ?>
+                    <div class="card-mis mt-4">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-layer-group text-warning me-2"></i>Dept-wise Tasks</h5>
+                        </div>
+                        <div class="card-mis-body">
+                            <?php foreach ($deptTaskStats as $ds): ?>
+                                <div class="mb-3">
+                                    <div style="font-size:.75rem;font-weight:700;color:#374151;margin-bottom:.4rem;">
+                                        <?= htmlspecialchars($ds['dept_name']) ?>
+                                        <?php if ($ds['is_primary']): ?>
+                                            <span style="font-size:.6rem;color:#c9a84c;">★ Primary</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="d-flex justify-content-between" style="font-size:.78rem;">
+                                        <span style="color:#6b7280;">Total: <strong><?= (int)$ds['total'] ?></strong></span>
+                                        <span style="color:#10b981;">Done: <strong><?= (int)$ds['done'] ?></strong></span>
+                                        <span style="color:#ef4444;">Overdue: <strong><?= (int)$ds['overdue'] ?></strong></span>
+                                    </div>
+                                    <?php
+                                    $dpct = $ds['total'] > 0 ? round(($ds['done'] / $ds['total']) * 100) : 0;
+                                    ?>
+                                    <div style="height:4px;background:#f3f4f6;border-radius:50px;overflow:hidden;margin-top:.3rem;">
+                                        <div style="width:<?= $dpct ?>%;background:#10b981;height:4px;border-radius:50px;"></div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                 </div>
 
                 <!-- Info + Password -->
@@ -153,7 +224,7 @@ include '../../includes/header.php';
                                     ['Email', $profile['email'], 'fa-envelope'],
                                     ['Phone', $profile['phone'] ?? '—', 'fa-phone'],
                                     ['Employee ID', $profile['employee_id'] ?? '—', 'fa-id-badge'],
-                                    ['Department', $profile['dept_name'] ?? '—', 'fa-layer-group'],
+                                    ['Department', '__DEPTS__', 'fa-layer-group'],
                                     ['Branch', $profile['branch_name'] ?? '—', 'fa-map-marker-alt'],
                                     ['Joining Date', $profile['joining_date'] ? date('M j, Y', strtotime($profile['joining_date'])) : '—', 'fa-calendar'],
                                 ] as [$lbl, $val, $ic]): ?>
@@ -163,7 +234,20 @@ include '../../includes/header.php';
                                             <i class="fas <?= $ic ?> me-1 text-warning"></i><?= $lbl ?>
                                         </div>
                                         <div style="font-size:.9rem;color:#1f2937;font-weight:500;margin-top:.15rem;">
-                                            <?= htmlspecialchars($val ?? '—') ?>
+                                            <?php if ($val === '__DEPTS__'): ?>
+                                                <div class="d-flex flex-wrap gap-1 mt-1">
+                                                    <?php foreach ($allDepts as $dept): ?>
+                                                        <span style="background:#fef3c7;color:#92400e;font-size:.75rem;padding:.15rem .5rem;border-radius:99px;font-weight:600;">
+                                                            <?= htmlspecialchars($dept['dept_name']) ?>
+                                                            <?php if ($dept['is_primary']): ?>
+                                                                <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                            <?php endif; ?>
+                                                        </span>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else: ?>
+                                                <?= htmlspecialchars($val ?? '—') ?>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>

@@ -2,618 +2,704 @@
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
-requireAdmin();
+require_once '../../vendor/GoogleAuthenticator.php';
+
 
 $db = getDB();
-$user = currentUser();
-$id = (int) ($_GET['id'] ?? 0);
-if (!$id) {
+$currentUser = currentUser(); // ← renamed — never overwrite this
+$pageTitle = 'View Staff';
+
+$staffId = (int) ($_GET['id'] ?? 0);
+if (!$staffId) {
+    setFlash('error', 'Invalid staff ID.');
     header('Location: index.php');
     exit;
 }
 
-// Fetch staff profile
+// Fetch the STAFF being viewed — use $staffUser not $user
 $staffStmt = $db->prepare("
     SELECT u.*,
            r.role_name,
-           d.dept_name, d.color AS dept_color,
            b.branch_name,
-           m.full_name AS managed_by_name
+           d.dept_name
     FROM users u
     LEFT JOIN roles r       ON r.id = u.role_id
-    LEFT JOIN departments d ON d.id = u.department_id
     LEFT JOIN branches b    ON b.id = u.branch_id
-    LEFT JOIN users m       ON m.id = u.managed_by
-    WHERE u.id = ? AND u.is_active = 1
+    LEFT JOIN departments d ON d.id = u.department_id
+    WHERE u.id = ?
 ");
-$staffStmt->execute([$id]);
-$staff = $staffStmt->fetch();
-if (!$staff) {
+$staffStmt->execute([$staffId]);
+$staffUser = $staffStmt->fetch();
+
+if (!$staffUser) {
     setFlash('error', 'Staff not found.');
     header('Location: index.php');
     exit;
 }
-
-// Security: admin can only view staff from their branch & dept
-if (!isExecutive()) {
-    $adminStmt = $db->prepare("SELECT department_id FROM users WHERE id = ?");
-    $adminStmt->execute([$user['id']]);
-    $adminUser = $adminStmt->fetch();
-    if ($staff['department_id'] != $adminUser['department_id']) {
-        setFlash('error', 'Access denied.');
-        header('Location: index.php');
-        exit;
-    }
-}
-
-// All tasks assigned to this staff
-$taskStmt = $db->prepare("
-    SELECT t.*,
-           ts.status_name AS status,
-           d.dept_name, d.color,
-           c.company_name
-    FROM tasks t
-    LEFT JOIN task_status ts ON ts.id = t.status_id
-    LEFT JOIN departments d  ON d.id  = t.department_id
-    LEFT JOIN companies c    ON c.id  = t.company_id
-    WHERE t.assigned_to = ? AND t.is_active = 1
-    ORDER BY t.created_at DESC
+// Fetch all departments (primary + UDA assignments)
+$udaDeptStmt = $db->prepare("
+    SELECT d.id, d.dept_name,
+           CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+    UNION
+    SELECT d.id, d.dept_name, 1 AS is_primary
+    FROM departments d
+    WHERE d.id = ?
+    ORDER BY is_primary DESC, dept_name ASC
 ");
-$taskStmt->execute([$id]);
-$tasks = $taskStmt->fetchAll();
+$udaDeptStmt->execute([
+    $staffUser['department_id'],
+    $staffId,
+    $staffUser['department_id']
+]);
+$allStaffDepts = $udaDeptStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Task stats
-$totalTasks = count($tasks);
-$statusCounts = [];
-foreach ($tasks as $t) {
-    $statusCounts[$t['status']] = ($statusCounts[$t['status']] ?? 0) + 1;
-}
-$openTasks = $totalTasks - ($statusCounts['Done'] ?? 0) - ($statusCounts['Next Year'] ?? 0);
-$doneTasks = $statusCounts['Done'] ?? 0;
-$overdueTasks = 0;
-foreach ($tasks as $t) {
-    if ($t['due_date'] && strtotime($t['due_date']) < time() && $t['status'] !== 'Done') {
-        $overdueTasks++;
-    }
-}
+// Deduplicate
+$seen = [];
+$allStaffDepts = array_filter($allStaffDepts, function ($d) use (&$seen) {
+    if (in_array($d['id'], $seen))
+        return false;
+    $seen[] = $d['id'];
+    return true;
+});
+$allStaffDepts = array_values($allStaffDepts);
 
-// Monthly task completion (last 6 months)
-$monthlyStmt = $db->prepare("
-    SELECT 
-        DATE_FORMAT(t.created_at, '%b %Y') AS month_label,
-        DATE_FORMAT(t.created_at, '%Y-%m') AS month_key,
-        COUNT(*) AS total,
-        SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END) AS done
-    FROM tasks t
-    LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE t.assigned_to = ? 
-    AND t.is_active = 1
-    AND t.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
-    GROUP BY month_key, month_label
-    ORDER BY month_key ASC
+// Detect logged-in admin's dept — used to filter which depts to show
+$viewerDeptId = (int) ($currentUser['department_id'] ?? 0);
+$viewerDeptStmt = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+$viewerDeptStmt->execute([$viewerDeptId]);
+$viewerDeptCode = $viewerDeptStmt->fetchColumn() ?: '';
+$viewerIsCoreAdmin = ($viewerDeptCode === 'CORE');
+
+// Fetch viewer's UDA depts too
+$viewerUdaStmt = $db->prepare("
+    SELECT department_id FROM user_department_assignments WHERE user_id = ?
 ");
-$monthlyStmt->execute([$id]);
-$monthly = $monthlyStmt->fetchAll();
+$viewerUdaStmt->execute([(int) $currentUser['id']]);
+$viewerUdaDepts = array_column($viewerUdaStmt->fetchAll(), 'department_id');
+$viewerAllDeptIds = array_unique(array_merge([$viewerDeptId], $viewerUdaDepts));
 
-// Retail tasks finalised by this staff
-$finalisedStmt = $db->prepare("
-    SELECT tr.*, t.task_number, t.title, c.company_name,
-           ws.status_name AS work_status_name,
-           fs.status_name AS finalisation_status_name
-    FROM task_retail tr
-    JOIN tasks t             ON t.id   = tr.task_id
-    LEFT JOIN companies c    ON c.id   = t.company_id
-    LEFT JOIN task_status ws ON ws.id  = tr.work_status_id
-    LEFT JOIN task_status fs ON fs.id  = tr.finalisation_status_id
-    WHERE tr.finalised_by = ? AND t.is_active = 1
-    ORDER BY t.created_at DESC
-    LIMIT 10
-");
-$finalisedStmt->execute([$id]);
-$finalisedTasks = $finalisedStmt->fetchAll();
-
-$pageTitle = 'Staff: ' . $staff['full_name'];
-$statuses = $db->query("
-    SELECT id, status_name, color
+// Filter $allStaffDepts to only show depts the viewer has access to
+// (Core admin sees all, others see only their own depts that overlap)
+if (!$viewerIsCoreAdmin) {
+    $allStaffDepts = array_values(array_filter($allStaffDepts, function ($d) use ($viewerAllDeptIds) {
+        return in_array($d['id'], $viewerAllDeptIds);
+    }));
+}
+// Per-dept task stats (only for visible depts)
+$allStatuses = $db->query("
+    SELECT id, status_name, color, bg_color
     FROM task_status
-    ORDER BY id ASC
+    WHERE status_name != 'Corporate Team'
+    ORDER BY id
 ")->fetchAll();
 
-// ── Last seen — computed once, used in profile card + quick info ──
-$lastSeen = formatLastSeen(
-    $staff['active_at'] ?? null,
-    $staff['last_login'] ?? null
-);
+$deptTaskStats = [];
+if (!empty($allStaffDepts)) {
+    $visibleDeptIds = array_column($allStaffDepts, 'id');
+    $inList = implode(',', array_fill(0, count($visibleDeptIds), '?'));
+    $dtsStmt = $db->prepare("
+        SELECT
+            t.department_id,
+            d.dept_name,
+            d.color        AS dept_color,
+            ts.status_name,
+            ts.color       AS status_color,
+            ts.bg_color    AS status_bg,
+            COUNT(DISTINCT t.id) AS cnt
+        FROM tasks t
+        JOIN departments d  ON d.id  = t.department_id
+        JOIN task_status ts ON ts.id = t.status_id
+        WHERE t.assigned_to    = ?
+          AND t.is_active      = 1
+          AND t.department_id IN ({$inList})
+          AND ts.status_name  != 'Corporate Team'
+        GROUP BY t.department_id, d.dept_name, d.color,
+                 ts.status_name, ts.color, ts.bg_color
+        ORDER BY ts.id
+    ");
+    $dtsStmt->execute(array_merge([$staffId], $visibleDeptIds));
+    foreach ($dtsStmt->fetchAll() as $row) {
+        $did = $row['department_id'];
+        $deptTaskStats[$did]['dept_name'] = $row['dept_name'];
+        $deptTaskStats[$did]['dept_color'] = $row['dept_color'];
+        $deptTaskStats[$did]['statuses'][$row['status_name']] = [
+            'cnt' => (int) $row['cnt'],
+            'color' => $row['status_color'],
+            'bg' => $row['status_bg'],
+        ];
+    }
+}
 
+// Only generate QR if ga_secret exists
+$ga = new PHPGangsta_GoogleAuthenticator();
+
+// Only generate QR if ga_secret exists
+$ga = new PHPGangsta_GoogleAuthenticator();
+$qr = null;
+if (!empty($staffUser['ga_secret'])) {
+    $qr = $ga->getQRCodeGoogleUrl(
+        $staffUser['email'],
+        $staffUser['ga_secret'],
+        'ASK MIS'
+    );
+}
+
+// Task stats for this staff member
+$taskStmt = $db->prepare("
+    SELECT 
+        ts.status_name,
+        COUNT(t.id) as total
+    FROM tasks t
+    LEFT JOIN task_status ts ON ts.id = t.status_id
+    WHERE t.assigned_to = ? AND t.is_active = 1
+    GROUP BY ts.status_name
+");
+$taskStmt->execute([$staffId]);
+$statusData = $taskStmt->fetchAll(PDO::FETCH_KEY_PAIR); // ['Done'=>5,...]
+
+// Total tasks
+$totalTasks = array_sum($statusData);
+
+// Overdue count
+$overdueStmt = $db->prepare("
+    SELECT COUNT(*) 
+    FROM tasks t
+    LEFT JOIN task_status ts ON ts.id = t.status_id
+    WHERE t.assigned_to = ?
+      AND t.is_active = 1
+      AND t.due_date < CURDATE()
+      AND ts.status_name != 'Done'
+");
+$overdueStmt->execute([$staffId]);
+$overdueTasks = $overdueStmt->fetchColumn();
+$lastSeen = formatLastSeen(
+    $staffUser['active_at'] ?? null,
+    $staffUser['last_login'] ?? null
+);
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
-
         <div style="padding:1.5rem 0;">
+
             <?= flashHtml() ?>
 
-            <!-- Back -->
             <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
                 <a href="index.php" class="btn btn-outline-secondary btn-sm">
                     <i class="fas fa-arrow-left me-1"></i>Back
                 </a>
-                <a href="<?= APP_URL ?>/admin/tasks/assign.php?assigned_to=<?= $id ?>" class="btn btn-gold btn-sm">
-                    <i class="fas fa-plus me-1"></i>Assign Task
-                </a>
+                <div class="d-flex gap-2">
+                    <a href="reset_password.php?id=<?= $staffId ?>" class="btn btn-warning btn-sm">
+                        <i class="fas fa-key me-1"></i>Reset Password
+                    </a>
+
+
+                </div>
             </div>
 
             <div class="row g-4">
 
-                <!-- ── LEFT COLUMN ── -->
+                <!-- LEFT -->
                 <div class="col-lg-8">
 
-                    <!-- Profile Card -->
+                    <!-- Personal Info -->
                     <div class="card-mis mb-4">
                         <div class="card-mis-header">
-                            <div class="d-flex align-items-center gap-3">
-                                <div class="avatar-circle"
-                                    style="width:56px;height:56px;font-size:1.1rem;flex-shrink:0;">
-                                    <?php
-                                    $parts = explode(' ', $staff['full_name']);
-                                    $initials = strtoupper(substr($parts[0], 0, 1) . (isset($parts[1]) ? substr($parts[1], 0, 1) : ''));
-                                    echo $initials;
-                                    ?>
-                                </div>
-                                <div>
-                                    <h5 style="margin:0;font-size:1rem;"><?= htmlspecialchars($staff['full_name']) ?>
-                                    </h5>
-                                    <div style="font-size:.75rem;color:#9ca3af;">
-                                        <?= htmlspecialchars($staff['employee_id'] ?? '') ?>
-                                        · <?= htmlspecialchars($staff['role_name'] ?? '') ?>
-                                    </div>
-                                </div>
-                            </div>
-                            <span
-                                style="background:<?= htmlspecialchars($staff['dept_color'] ?? '#ccc') ?>22;color:<?= htmlspecialchars($staff['dept_color'] ?? '#666') ?>;font-size:.75rem;padding:.3rem .7rem;border-radius:99px;">
-                                <?= htmlspecialchars($staff['dept_name'] ?? '') ?>
-                            </span>
+                            <h5><i class="fas fa-user text-warning me-2"></i>Personal Information</h5>
                         </div>
                         <div class="card-mis-body">
                             <div class="row g-3">
                                 <?php
-                                $profileFields = [
-                                    'Full Name'         => $staff['full_name'],
-                                    'Employee ID'       => $staff['employee_id'] ?? '—',
-                                    'Email'             => $staff['email'],
-                                    'Phone'             => $staff['phone'] ?? '—',
-                                    'Department'        => $staff['dept_name'] ?? '—',
-                                    'Branch'            => $staff['branch_name'] ?? '—',
-                                    'Managed By'        => $staff['managed_by_name'] ?? '—',
-                                    'Joining Date'      => $staff['joining_date'] ? date('d M Y', strtotime($staff['joining_date'])) : '—',
-                                    'Address'           => $staff['address'] ?? '—',
-                                    'Emergency Contact' => $staff['emergency_contact'] ?? '—',
-                                    'Status'            => $staff['is_active'] ? 'Active' : 'Inactive',
+                                $personalFields = [
+                                    'Full Name' => $staffUser['full_name'],
+                                    'Employee ID' => $staffUser['employee_id'] ?? '—',
+                                    'Email' => $staffUser['email'],
+                                    'Phone' => $staffUser['phone'] ?? '—',
+                                    'Joining Date' => $staffUser['joining_date']
+                                        ? date('d M Y', strtotime($staffUser['joining_date'])) : '—',
+                                    'Address' => $staffUser['address'] ?? '—',
                                 ];
-                                foreach ($profileFields as $label => $val):
+                                foreach ($personalFields as $label => $val):
                                     ?>
                                     <div class="col-md-4">
                                         <div
                                             style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
                                             <?= $label ?>
                                         </div>
-                                        <div style="font-size:.87rem;margin-top:.2rem;color:#1f2937;">
+                                        <div style="font-size:.88rem;margin-top:.2rem;color:#1f2937;">
                                             <?= htmlspecialchars($val) ?>
                                         </div>
                                     </div>
-                                    <!-- Last Active field -->
-                               
                                 <?php endforeach; ?>
-                                 <div class="col-md-4">
-                                    <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Account Info -->
+                    <div class="card-mis mb-4">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-user-shield text-warning me-2"></i>Account Information</h5>
+                        </div>
+                        <div class="card-mis-body">
+                            <div class="row g-3">
+                                <?php
+
+                                $accountFields = [
+                                    'Username' => $staffUser['username'],
+                                    'Role' => ucfirst($staffUser['role_name'] ?? '—'),
+                                    'Branch' => $staffUser['branch_name'] ?? '—',
+                                    'Created' => date('d M Y', strtotime($staffUser['created_at'])),
+                                ]; ?>
+
+                                <?php foreach ($accountFields as $label => $val): ?>
+                                    <div class="col-md-4">
+                                        <div
+                                            style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                            <?= $label ?>
+                                        </div>
+                                        <div style="font-size:.88rem;margin-top:.2rem;color:#1f2937;">
+                                            <?= htmlspecialchars($val) ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+
+                                <!-- Departments — full width, table form -->
+                                <div class="col-12">
+                                    <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                letter-spacing:.05em;margin-bottom:.5rem;">
+                                        Departments
+                                    </div>
+                                    <?php if (empty($allStaffDepts)): ?>
+                                        <span style="font-size:.85rem;color:#9ca3af;">—</span>
+                                    <?php else: ?>
+                                        <table style="width:100%;border-collapse:collapse;font-size:.82rem;">
+                                            <thead>
+                                                <tr style="background:#f9fafb;">
+                                                    <th style="padding:.35rem .6rem;text-align:left;font-size:.68rem;
+                           color:#9ca3af;font-weight:700;text-transform:uppercase;
+                           border-bottom:1px solid #e5e7eb;">#</th>
+                                                    <th style="padding:.35rem .6rem;text-align:left;font-size:.68rem;
+                           color:#9ca3af;font-weight:700;text-transform:uppercase;
+                           border-bottom:1px solid #e5e7eb;">Department</th>
+                                                    <th style="padding:.35rem .6rem;text-align:left;font-size:.68rem;
+                           color:#9ca3af;font-weight:700;text-transform:uppercase;
+                           border-bottom:1px solid #e5e7eb;">Type</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($allStaffDepts as $i => $dept): ?>
+                                                    <tr style="border-bottom:1px solid #f3f4f6;">
+                                                        <td style="padding:.35rem .6rem;color:#9ca3af;"><?= $i + 1 ?></td>
+                                                        <td style="padding:.35rem .6rem;font-weight:600;color:#1f2937;">
+                                                            <?= htmlspecialchars($dept['dept_name']) ?>
+                                                        </td>
+                                                        <td style="padding:.35rem .6rem;">
+                                                            <?php if ($dept['is_primary']): ?>
+                                                                <span style="background:#fef3c7;color:#92400e;font-size:.68rem;
+                                     padding:.15rem .5rem;border-radius:99px;font-weight:700;">
+                                                                    ★ Primary
+                                                                </span>
+                                                            <?php else: ?>
+                                                                <span style="background:#eff6ff;color:#3b82f6;font-size:.68rem;
+                                     padding:.15rem .5rem;border-radius:99px;font-weight:600;">
+                                                                    Additional
+                                                                </span>
+                                                            <?php endif; ?>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    <?php endif; ?>
+                                </div>
+
+                                <!-- Last Active — rich UI -->
+                                <div class="col-md-4">
+                                    <div
+                                        style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
                                         Last Active
                                     </div>
                                     <div style="margin-top:.3rem;display:flex;align-items:center;gap:.5rem;">
-                                    <span style="width:8px;height:8px;border-radius:50%;
-                                                 background:<?= $lastSeen['dot'] ?>;flex-shrink:0;
-                                                 <?= $lastSeen['online'] ? 'box-shadow:0 0 0 3px rgba(16,185,129,.2);' : '' ?>
-                                                 display:inline-block;"></span>
-                                    <span title="<?= ($staff['active_at'] ?? $staff['last_login'] ?? null)
-                                                    ? date('d M Y, H:i:s', strtotime($staff['active_at'] ?? $staff['last_login']))
-                                                    : 'Never' ?>"
-                                          style="font-size:.85rem;font-weight:600;color:<?= $lastSeen['color'] ?>;cursor:default;">
-                                        <?= htmlspecialchars($lastSeen['label']) ?>
-                                    </span>
-                                </div>
-                                    <?php if (!$lastSeen['online'] && ($staff['active_at'] ?? $staff['last_login'] ?? null)): ?>
+                                        <span style="width:8px;height:8px;border-radius:50%;
+                                                         background:<?= $lastSeen['dot'] ?>;
+                                                         flex-shrink:0;
+                                                         <?= $lastSeen['online'] ? 'box-shadow:0 0 0 3px rgba(16,185,129,.2);' : '' ?>
+                                                         display:inline-block;"></span>
+                                        <span style="font-size:.85rem;font-weight:600;color:<?= $lastSeen['color'] ?>;">
+                                            <?= htmlspecialchars($lastSeen['label']) ?>
+                                        </span>
+                                    </div>
+                                    <?php if (!$lastSeen['online'] && ($staffUser['active_at'] ?? $staffUser['last_login'] ?? null)): ?>
                                         <div style="font-size:.7rem;color:#d1d5db;margin-top:.1rem;">
-                                            <?= date('d M Y, H:i', strtotime($staff['active_at'] ?? $staff['last_login'])) ?>
+                                            <?= date('d M Y, H:i', strtotime($staffUser['active_at'] ?? $staffUser['last_login'])) ?>
                                         </div>
                                     <?php endif; ?>
                                 </div>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Monthly Performance Chart -->
-                    <?php if (!empty($monthly)): ?>
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-chart-bar text-warning me-2"></i>Monthly Performance (Last 6 Months)
-                                </h5>
-                            </div>
-                            <div class="card-mis-body">
-                                <div style="height:220px;position:relative;">
-                                    <canvas id="monthlyChart"></canvas>
+                                <!-- Status -->
+                                <div class="col-md-4">
+                                    <div
+                                        style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                        Status</div>
+                                    <div style="margin-top:.2rem;">
+                                        <?php if ($staffUser['is_active']): ?>
+                                            <span
+                                                style="background:#ecfdf5;color:#10b981;padding:.2rem .65rem;border-radius:99px;font-size:.78rem;font-weight:600;">
+                                                <i class="fas fa-circle me-1" style="font-size:.5rem;"></i>Active
+                                            </span>
+                                        <?php else: ?>
+                                            <span
+                                                style="background:#fef2f2;color:#ef4444;padding:.2rem .65rem;border-radius:99px;font-size:.78rem;font-weight:600;">
+                                                <i class="fas fa-circle me-1" style="font-size:.5rem;"></i>Inactive
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+
+                                <!-- 2FA Status -->
+                                <div class="col-md-4">
+                                    <div
+                                        style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                        2FA Status</div>
+                                    <div style="margin-top:.2rem;">
+                                        <?php if ($staffUser['ga_enabled']): ?>
+                                            <span
+                                                style="background:#ecfdf5;color:#10b981;padding:.2rem .65rem;border-radius:99px;font-size:.78rem;font-weight:600;">
+                                                <i class="fas fa-shield-alt me-1"></i>Enabled
+                                            </span>
+                                        <?php else: ?>
+                                            <span
+                                                style="background:#fff7ed;color:#f59e0b;padding:.2rem .65rem;border-radius:99px;font-size:.78rem;font-weight:600;">
+                                                <i class="fas fa-shield me-1"></i>Not Activated
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    <?php endif; ?>
-
-                    <!-- Tasks Table -->
-                    <div class="card-mis mb-4">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-list-check text-warning me-2"></i>Assigned Tasks (<?= $totalTasks ?>)
-                            </h5>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="table-mis w-100">
-                                <thead>
-                                    <tr>
-                                        <th>Task #</th>
-                                        <th>Title</th>
-                                        <th>Company</th>
-                                        <th>Status</th>
-                                        <th>Priority</th>
-                                        <th>Due Date</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php if (empty($tasks)): ?>
-                                        <tr>
-                                            <td colspan="7" class="empty-state"><i class="fas fa-list-check"></i>No tasks
-                                                assigned</td>
-                                        </tr>
-                                    <?php endif; ?>
-                                    <?php foreach ($tasks as $t):
-                                        $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status']));
-                                        $overdue = $t['due_date'] && strtotime($t['due_date']) < time() && $t['status'] !== 'Done';
-                                        ?>
-                                        <tr <?= $overdue ? 'style="background:#fef2f2;"' : '' ?>>
-                                            <td>
-                                                <span class="task-number"><?= htmlspecialchars($t['task_number']) ?></span>
-                                                <?php if ($overdue): ?>
-                                                    <div style="font-size:.65rem;color:#ef4444;font-weight:600;">OVERDUE</div>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td
-                                                style="font-size:.87rem;font-weight:500;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                                <?= htmlspecialchars($t['title']) ?>
-                                            </td>
-                                            <td style="font-size:.8rem;color:#6b7280;">
-                                                <?= htmlspecialchars($t['company_name'] ?? '—') ?>
-                                            </td>
-                                            <td><span
-                                                    class="status-badge <?= $sClass ?>"><?= htmlspecialchars($t['status']) ?></span>
-                                            </td>
-                                            <td><span
-                                                    class="status-badge priority-<?= $t['priority'] ?>"><?= ucfirst($t['priority']) ?></span>
-                                            </td>
-                                            <td
-                                                style="font-size:.78rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#9ca3af;' ?>">
-                                                <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
-                                            </td>
-                                            <td>
-                                                <a href="<?= APP_URL ?>/admin/tasks/view.php?id=<?= $t['id'] ?>"
-                                                    class="btn btn-sm btn-outline-secondary">
-                                                    <i class="fas fa-eye"></i>
-                                                </a>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
                     </div>
 
-                    <!-- Finalised Retail Tasks -->
-                    <?php if (!empty($finalisedTasks)): ?>
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-check-double text-warning me-2"></i>Retail Tasks Finalised by This
-                                    Staff</h5>
-                            </div>
-                            <div class="table-responsive">
-                                <table class="table-mis w-100">
-                                    <thead>
-                                        <tr>
-                                            <th>Task #</th>
-                                            <th>Title</th>
-                                            <th>Company</th>
-                                            <th>Work Status</th>
-                                            <th>Finalisation</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <?php foreach ($finalisedTasks as $f): ?>
-                                            <tr>
-                                                <td><span class="task-number"><?= htmlspecialchars($f['task_number']) ?></span>
-                                                </td>
-                                                <td
-                                                    style="font-size:.87rem;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                                    <?= htmlspecialchars($f['title']) ?>
-                                                </td>
-                                                <td style="font-size:.8rem;color:#6b7280;">
-                                                    <?= htmlspecialchars($f['company_name'] ?? '—') ?>
-                                                </td>
-                                                <td>
-                                                    <span class="status-badge status-wip">
-                                                        <?= htmlspecialchars($f['work_status_name'] ?? '—') ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <span class="status-badge status-file-returned">
-                                                        <?= htmlspecialchars($f['finalisation_status_name'] ?? '—') ?>
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    <?php endif; ?>
-
-                </div><!-- end col-lg-8 -->
-
-                <!-- ── RIGHT COLUMN ── -->
-                <div class="col-lg-4">
-
-                    <!-- Performance Summary -->
-                    <div class="card-mis mb-3">
+                    <!-- Task Stats -->
+                    <div class="card-mis mb-4">
                         <div class="card-mis-header">
-                            <h5><i class="fas fa-chart-pie text-warning me-2"></i>Performance</h5>
+                            <h5><i class="fas fa-chart-bar text-warning me-2"></i>Task Statistics</h5>
                         </div>
                         <div class="card-mis-body">
+                            <div class="row g-3 text-center">
 
-                            <!-- KPI cards -->
-                            <div class="row g-2 mb-3">
-                                <?php foreach ([
-                                    ['Total', $totalTasks, '#3b82f6', '#eff6ff', 'fa-list-check'],
-                                    ['Open', $openTasks, '#f59e0b', '#fffbeb', 'fa-spinner'],
-                                    ['Done', $doneTasks, '#10b981', '#ecfdf5', 'fa-check-circle'],
-                                    ['Overdue', $overdueTasks, '#ef4444', '#fef2f2', 'fa-exclamation-circle'],
-                                ] as [$label, $val, $color, $bg, $icon]): ?>
-                                    <div class="col-6">
-                                        <div
-                                            style="background:<?= $bg ?>;border-radius:10px;padding:.75rem;text-align:center;">
-                                            <i class="fas <?= $icon ?>" style="color:<?= $color ?>;font-size:1.1rem;"></i>
-                                            <div
-                                                style="font-size:1.4rem;font-weight:700;color:<?= $color ?>;line-height:1.2;margin-top:.2rem;">
-                                                <?= $val ?>
+                                <!-- Total -->
+                                <div class="col">
+                                    <div style="background:#eff6ff;border-radius:10px;padding:.75rem .5rem;">
+                                        <i class="fas fa-list-check" style="color:#3b82f6;font-size:1.1rem;"></i>
+                                        <div style="font-size:1.4rem;font-weight:700;color:#3b82f6;">
+                                            <?= $totalTasks ?>
+                                        </div>
+                                        <div style="font-size:.7rem;color:#6b7280;">Total</div>
+                                    </div>
+                                </div>
+
+                                <!-- Dynamic Status -->
+                                <?php foreach ($statusData as $status => $count):
+                                    $percent = $totalTasks > 0 ? round(($count / $totalTasks) * 100) : 0;
+
+                                    // Color mapping (optional fallback)
+                                    $colorMap = [
+                                        'Done' => ['#10b981', '#ecfdf5', 'fa-check-circle'],
+                                        'WIP' => ['#f59e0b', '#fffbeb', 'fa-spinner'],
+                                        'Pending' => ['#ef4444', '#fef2f2', 'fa-clock'],
+                                    ];
+
+                                    [$color, $bg, $icon] = $colorMap[$status] ?? ['#6b7280', '#f3f4f6', 'fa-circle'];
+                                    ?>
+                                    <div class="col">
+                                        <div style="background:<?= $bg ?>;border-radius:10px;padding:.75rem .5rem;">
+                                            <i class="fas <?= $icon ?>" style="color:<?= $color ?>;"></i>
+
+                                            <div style="font-size:1.2rem;font-weight:700;color:<?= $color ?>;">
+                                                <?= $count ?>
                                             </div>
-                                            <div style="font-size:.7rem;color:#6b7280;"><?= $label ?></div>
+
+                                            <div style="font-size:.7rem;color:#6b7280;">
+                                                <?= htmlspecialchars($status) ?>
+                                            </div>
+
+                                            <!-- Percentage -->
+                                            <div style="font-size:.65rem;color:#9ca3af;">
+                                                <?= $percent ?>%
+                                            </div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
-                            </div>
 
-                            <!-- Status breakdown bars -->
-                            <?php if ($totalTasks > 0): ?>
-                                <div style="border-top:1px solid #f3f4f6;padding-top:1rem;">
-
-                                    <?php foreach ($statuses as $s):
-                                        $k = $s['status_name'];
-                                        $cnt = $statusCounts[$k] ?? 0;
-
-                                        if (!$cnt)
-                                            continue;
-
-                                        $pct = $totalTasks > 0 ? round(($cnt / $totalTasks) * 100) : 0;
-                                        $color = $s['color'] ?? '#9ca3af';
-                                        ?>
-
-                                        <div class="mb-2">
-                                            <div class="d-flex justify-content-between mb-1" style="font-size:.75rem;">
-                                                <span style="color:#1f2937;">
-                                                    <?= htmlspecialchars($s['status_name']) ?>
-                                                </span>
-                                                <span style="color:#9ca3af;">
-                                                    <?= $cnt ?> (<?= $pct ?>%)
-                                                </span>
-                                            </div>
-
-                                            <div style="background:#f3f4f6;border-radius:99px;height:5px;">
-                                                <div style="
-                                                width:<?= $pct ?>%;
-                                                background:<?= $color ?>;
-                                                height:100%;
-                                                border-radius:99px;
-                                            "></div>
-                                            </div>
+                                <!-- Overdue -->
+                                <div class="col">
+                                    <div style="background:#fef2f2;border-radius:10px;padding:.75rem .5rem;">
+                                        <i class="fas fa-exclamation-circle" style="color:#dc2626;"></i>
+                                        <div style="font-size:1.2rem;font-weight:700;color:#dc2626;">
+                                            <?= $overdueTasks ?>
                                         </div>
+                                        <div style="font-size:.7rem;color:#6b7280;">Overdue</div>
 
-                                    <?php endforeach; ?>
-
-                                </div>
-                            <?php endif; ?>
-
-                            <!-- Completion rate -->
-                            <?php if ($totalTasks > 0):
-                                $completionRate = round(($doneTasks / $totalTasks) * 100);
-                                ?>
-                                <div
-                                    style="border-top:1px solid #f3f4f6;padding-top:1rem;margin-top:.5rem;text-align:center;">
-                                    <div style="font-size:.75rem;color:#9ca3af;margin-bottom:.5rem;">Completion Rate</div>
-                                    <div style="position:relative;display:inline-block;">
-                                        <svg width="80" height="80" viewBox="0 0 80 80">
-                                            <circle cx="40" cy="40" r="32" fill="none" stroke="#f3f4f6" stroke-width="8" />
-                                            <circle cx="40" cy="40" r="32" fill="none" stroke="#10b981" stroke-width="8"
-                                                stroke-dasharray="<?= round(2 * 3.14159 * 32 * $completionRate / 100) ?> 201"
-                                                stroke-linecap="round" transform="rotate(-90 40 40)" />
-                                        </svg>
-                                        <div
-                                            style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:.85rem;font-weight:700;color:#10b981;">
-                                            <?= $completionRate ?>%
+                                        <?php
+                                        $overduePercent = $totalTasks > 0 ? round(($overdueTasks / $totalTasks) * 100) : 0;
+                                        ?>
+                                        <div style="font-size:.65rem;color:#9ca3af;">
+                                            <?= $overduePercent ?>%
                                         </div>
                                     </div>
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Per-Department Task Breakdown -->
+                    <?php if (!empty($allStaffDepts)): ?>
+                        <div class="card-mis mb-4">
+                            <div class="card-mis-header">
+                                <h5><i class="fas fa-layer-group text-warning me-2"></i>Tasks by Department</h5>
+                                <?php if (!$viewerIsCoreAdmin): ?>
+                                    <span style="font-size:.68rem;color:#9ca3af;background:#f9fafb;
+                     padding:.2rem .6rem;border-radius:99px;border:1px solid #e5e7eb;">
+                                        <i class="fas fa-eye me-1"></i>Your dept only
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="card-mis-body">
+                                <?php foreach ($allStaffDepts as $dept):
+                                    $did = $dept['id'];
+                                    $dColor = $dept['color'] ?? ($deptTaskStats[$did]['dept_color'] ?? '#9ca3af');
+                                    $statuses = $deptTaskStats[$did]['statuses'] ?? [];
+                                    $deptTotal = array_sum(array_column($statuses, 'cnt'));
+                                    $doneCnt = 0;
+                                    foreach ($statuses as $sn => $sv) {
+                                        if (strtolower($sn) === 'done')
+                                            $doneCnt = $sv['cnt'];
+                                    }
+                                    $donePct = $deptTotal > 0 ? round(($doneCnt / $deptTotal) * 100) : 0;
+                                    ?>
+                                    <div style="background:#f9fafb;border-radius:10px;padding:.85rem 1rem;
+                    margin-bottom:.75rem;border-left:4px solid <?= htmlspecialchars($dColor) ?>;">
+                                        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+                                            <div class="d-flex align-items-center gap-2">
+                                                <div style="width:8px;height:8px;border-radius:50%;
+                                background:<?= htmlspecialchars($dColor) ?>;flex-shrink:0;"></div>
+                                                <span style="font-size:.87rem;font-weight:700;color:#1f2937;">
+                                                    <?= htmlspecialchars($dept['dept_name']) ?>
+                                                </span>
+                                                <?php if ($dept['is_primary']): ?>
+                                                    <span style="background:#fef3c7;color:#92400e;font-size:.65rem;
+                                     padding:.1rem .4rem;border-radius:99px;font-weight:700;">★ Primary</span>
+                                                <?php else: ?>
+                                                    <span style="background:#eff6ff;color:#3b82f6;font-size:.65rem;
+                                     padding:.1rem .4rem;border-radius:99px;font-weight:600;">Additional</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <span
+                                                style="font-size:.82rem;font-weight:700;color:<?= htmlspecialchars($dColor) ?>;">
+                                                <?= $deptTotal ?> task
+                                                <?= $deptTotal !== 1 ? 's' : '' ?>
+                                            </span>
+                                        </div>
+
+                                        <?php if (empty($statuses)): ?>
+                                            <div style="font-size:.78rem;color:#9ca3af;text-align:center;padding:.5rem 0;">
+                                                No tasks in this department
+                                            </div>
+                                        <?php else: ?>
+                                            <div style="display:flex;flex-wrap:wrap;gap:.35rem;margin-bottom:.6rem;">
+                                                <?php foreach ($statuses as $sn => $sv): ?>
+                                                    <span style="background:<?= htmlspecialchars($sv['bg'] ?: '#f3f4f6') ?>;
+                                 color:<?= htmlspecialchars($sv['color'] ?: '#6b7280') ?>;
+                                 font-size:.72rem;font-weight:700;
+                                 padding:.2rem .55rem;border-radius:99px;
+                                 display:inline-flex;align-items:center;gap:.3rem;">
+                                                        <?= htmlspecialchars($sn) ?>
+                                                        <span style="background:rgba(0,0,0,.08);border-radius:99px;
+                                     padding:.05rem .3rem;font-size:.65rem;">
+                                                            <?= $sv['cnt'] ?>
+                                                        </span>
+                                                    </span>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <div style="background:#e5e7eb;border-radius:99px;height:6px;overflow:hidden;">
+                                                <div style="width:<?= $donePct ?>%;height:100%;border-radius:99px;
+                                background:<?= htmlspecialchars($dColor) ?>;"></div>
+                                            </div>
+                                            <div style="font-size:.68rem;color:#9ca3af;text-align:right;margin-top:.2rem;">
+                                                <?= $donePct ?>% done ·
+                                            <?= $doneCnt ?>/
+                                                <?= $deptTotal ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- RIGHT -->
+                <div class="col-lg-4">
+
+                    <!-- Google 2FA -->
+                    <div class="card-mis mb-4">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-shield-alt text-warning me-2"></i>Google 2FA</h5>
+                            <?php if ($staffUser['ga_enabled']): ?>
+                                <span
+                                    style="background:#ecfdf5;color:#10b981;padding:.2rem .55rem;border-radius:99px;font-size:.72rem;font-weight:600;">Active</span>
+                            <?php else: ?>
+                                <span
+                                    style="background:#fff7ed;color:#f59e0b;padding:.2rem .55rem;border-radius:99px;font-size:.72rem;font-weight:600;">Pending</span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="card-mis-body text-center">
+
+                            <?php if (!empty($staffUser['ga_secret'])): ?>
+                                <!-- QR Code -->
+                                <div
+                                    style="background:#fff;padding:12px;border-radius:10px;border:2px solid #e5e7eb;display:inline-block;margin-bottom:.75rem;">
+                                    <img src="<?= htmlspecialchars($qr) ?>" width="170" height="170" alt="2FA QR Code"
+                                        style="display:block;">
+                                </div>
+                                <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
+                                    Scan using <strong>Google Authenticator</strong>
+                                </p>
+                                <!-- Secret Key -->
+                                <div
+                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:.65rem;text-align:left;">
+                                    <div
+                                        style="font-size:.7rem;color:#9ca3af;margin-bottom:.3rem;text-transform:uppercase;font-weight:600;">
+                                        Secret Key</div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <code id="staffGaSecret"
+                                            style="font-size:.88rem;font-weight:700;letter-spacing:.1em;flex:1;color:#1f2937;word-break:break-all;">
+                                                <?= htmlspecialchars($staffUser['ga_secret']) ?>
+                                            </code>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                                            onclick="copyStaffSecret()">
+                                            <i class="fas fa-copy" id="copyStaffIcon"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <?php if (!$staffUser['ga_enabled']): ?>
+                                    <div
+                                        style="margin-top:.75rem;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:.6rem .75rem;font-size:.78rem;color:#92400e;text-align:left;">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>
+                                        Staff has not activated 2FA yet. Share the QR code or secret key with them.
+                                    </div>
+                                <?php endif; ?>
+
+                            <?php else: ?>
+                                <div class="text-center py-3" style="color:#9ca3af;">
+                                    <i class="fas fa-shield fa-2x mb-2 d-block"></i>
+                                    <p style="font-size:.85rem;">No 2FA secret set.</p>
+                                    <a href="regenerate_2fa.php?id=<?= $staffId ?>" class="btn btn-gold btn-sm">
+                                        <i class="fas fa-plus me-1"></i>Generate 2FA Secret
+                                    </a>
                                 </div>
                             <?php endif; ?>
                         </div>
                     </div>
 
-                    <!-- Staff Quick Info -->
-                    <div class="card-mis p-3" style="font-size:.82rem;color:#6b7280;">
-                    <div class="mb-2"><strong>Employee ID:</strong> <?= htmlspecialchars($staff['employee_id'] ?? '—') ?></div>
-                    <div class="mb-2"><strong>Department:</strong> <?= htmlspecialchars($staff['dept_name'] ?? '—') ?></div>
-                    <div class="mb-2"><strong>Branch:</strong> <?= htmlspecialchars($staff['branch_name'] ?? '—') ?></div>
-                    <div class="mb-2"><strong>Joined:</strong> <?= $staff['joining_date'] ? date('d M Y', strtotime($staff['joining_date'])) : '—' ?></div>
-                    <div class="mb-2"><strong>Managed By:</strong> <?= htmlspecialchars($staff['managed_by_name'] ?? '—') ?></div>
-                    <div>
-                        <strong>Last Active:</strong>
-                        <span style="color:<?= $lastSeen['color'] ?>;font-weight:600;">
-                            <?= htmlspecialchars($lastSeen['label']) ?>
-                        </span>
-                        <?php if (!$lastSeen['online'] && ($staff['active_at'] ?? $staff['last_login'] ?? null)): ?>
-                            <span style="color:#d1d5db;font-size:.75rem;margin-left:.3rem;">
-                                (<?= date('d M, H:i', strtotime($staff['active_at'] ?? $staff['last_login'])) ?>)
-                            </span>
-                        <?php endif; ?>
+                    <!-- Admin Actions -->
+                    <div class="card-mis">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-cog text-warning me-2"></i>Admin Actions</h5>
+                        </div>
+                        <div class="card-mis-body">
+                            <a href="reset_password.php?id=<?= $staffId ?>" class="btn btn-warning w-100 mb-2">
+                                <i class="fas fa-key me-1"></i>Reset Password
+                            </a>
+                            <a href="regenerate_2fa.php?id=<?= $staffId ?>"
+                                class="btn btn-outline-secondary w-100 mb-2">
+                                <i class="fas fa-sync me-1"></i>Regenerate 2FA Secret
+                            </a>
+
+                        </div>
                     </div>
+
                 </div>
-
-                </div><!-- end col-lg-4 -->
-
-            </div><!-- end row -->
-        </div>
-        <?php
-        require_once '../../config/role_manager.php';
-
-        // use $id which is defined at the top of this file
-        $history = getUserRoleHistory($id);
-        $retiredIds = getRetiredEmployeeIds($id);
-        ?>
-
-        <!-- Role Change History -->
-        <div class="card-mis mt-4">
-            <div class="card-mis-header">
-                <h5><i class="fas fa-history text-warning me-2"></i>Role Change History</h5>
             </div>
-            <div class="card-mis-body p-0">
-                <?php if (empty($history)): ?>
-                    <p class="text-muted p-3 mb-0">No role changes recorded.</p>
-                <?php else: ?>
-                    <table class="table table-sm mb-0">
-                        <thead style="background:#f9fafb;font-size:.78rem;">
-                            <tr>
-                                <th>Date</th>
-                                <th>From</th>
-                                <th>To</th>
-                                <th>Old ID</th>
-                                <th>New ID</th>
-                                <th>Branch</th>
-                                <th>Changed By</th>
-                                <th>Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody style="font-size:.82rem;">
-                            <?php foreach ($history as $h): ?>
+            <?php
+            // In any user detail/profile page
+            require_once '../../config/role_manager.php';
+
+            $history = getUserRoleHistory($staffId);
+            $retiredIds = getRetiredEmployeeIds($staffId);
+            ?>
+
+            <!-- Role Change History -->
+            <div class="card-mis mt-4">
+                <div class="card-mis-header">
+                    <h5><i class="fas fa-history text-warning me-2"></i>Role Change History</h5>
+                </div>
+                <div class="card-mis-body p-0">
+                    <?php if (empty($history)): ?>
+                        <p class="text-muted p-3 mb-0">No role changes recorded.</p>
+                    <?php else: ?>
+                        <table class="table table-sm mb-0">
+                            <thead style="background:#f9fafb;font-size:.78rem;">
                                 <tr>
-                                    <td><?= date('M d, Y', strtotime($h['changed_at'])) ?></td>
-                                    <td>
-                                        <span class="badge bg-secondary">
-                                            <?= htmlspecialchars($h['old_role_name']) ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-warning text-dark">
-                                            <?= htmlspecialchars($h['new_role_name']) ?>
-                                        </span>
-                                    </td>
-                                    <td><code><?= htmlspecialchars($h['old_employee_id']) ?></code></td>
-                                    <td><code><?= htmlspecialchars($h['new_employee_id']) ?></code></td>
-                                    <td>
-                                        <?php if ($h['old_branch_name'] !== $h['new_branch_name']): ?>
-                                            <?= htmlspecialchars($h['old_branch_name'] ?? '—') ?>
-                                            → <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
-                                        <?php else: ?>
-                                            <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= htmlspecialchars($h['changed_by_name']) ?></td>
-                                    <td class="text-muted"><?= htmlspecialchars($h['reason'] ?? '—') ?></td>
+                                    <th>Date</th>
+                                    <th>From</th>
+                                    <th>To</th>
+                                    <th>Old ID</th>
+                                    <th>New ID</th>
+                                    <th>Branch</th>
+                                    <th>Changed By</th>
+                                    <th>Reason</th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php endif; ?>
+                            </thead>
+                            <tbody style="font-size:.82rem;">
+                                <?php foreach ($history as $h): ?>
+                                    <tr>
+                                        <td><?= date('M d, Y', strtotime($h['changed_at'])) ?></td>
+                                        <td>
+                                            <span class="badge bg-secondary">
+                                                <?= htmlspecialchars($h['old_role_name']) ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-warning text-dark">
+                                                <?= htmlspecialchars($h['new_role_name']) ?>
+                                            </span>
+                                        </td>
+                                        <td><code><?= htmlspecialchars($h['old_employee_id']) ?></code></td>
+                                        <td><code><?= htmlspecialchars($h['new_employee_id']) ?></code></td>
+                                        <td>
+                                            <?php if ($h['old_branch_name'] !== $h['new_branch_name']): ?>
+                                                <?= htmlspecialchars($h['old_branch_name'] ?? '—') ?>
+                                                → <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
+                                            <?php else: ?>
+                                                <?= htmlspecialchars($h['new_branch_name'] ?? '—') ?>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?= htmlspecialchars($h['changed_by_name']) ?></td>
+                                        <td class="text-muted"><?= htmlspecialchars($h['reason'] ?? '—') ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
-        <?php if (!empty($monthly)): ?>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-            <script>
-                document.addEventListener('DOMContentLoaded', function () {
-                    const ctx = document.getElementById('monthlyChart');
-                    if (!ctx) return;
-
-                    const data = <?= json_encode($monthly) ?>;
-                    if (!data.length) return;
-
-                    new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: data.map(d => d.month_label),
-                            datasets: [
-                                {
-                                    label: 'Assigned',
-                                    data: data.map(d => parseInt(d.total)),
-                                    backgroundColor: '#3b82f6',
-                                    borderRadius: 5,
-                                    borderSkipped: false,
-                                },
-                                {
-                                    label: 'Done',
-                                    data: data.map(d => parseInt(d.done)),
-                                    backgroundColor: '#10b981',
-                                    borderRadius: 5,
-                                    borderSkipped: false,
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    display: true,
-                                    position: 'top',
-                                    labels: { font: { size: 11 }, usePointStyle: true }
-                                },
-                                tooltip: {
-                                    callbacks: {
-                                        afterBody: function (items) {
-                                            const idx = items[0].dataIndex;
-                                            const total = parseInt(data[idx].total);
-                                            const done = parseInt(data[idx].done);
-                                            const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-                                            return [`Completion: ${pct}%`];
-                                        }
-                                    }
-                                }
-                            },
-                            scales: {
-                                x: {
-                                    grid: { display: false },
-                                    ticks: { font: { size: 11 } }
-                                },
-                                y: {
-                                    beginAtZero: true,
-                                    grid: { color: '#f3f4f6' },
-                                    ticks: { stepSize: 1, font: { size: 11 } }
-                                }
-                            }
-                        }
-                    });
-                });
-            </script>
-        <?php endif; ?>
-
         <?php include '../../includes/footer.php'; ?>
+
+        <script>
+            function copyStaffSecret() {
+                const text = document.getElementById('staffGaSecret').textContent.trim();
+                navigator.clipboard.writeText(text).then(() => {
+                    const icon = document.getElementById('copyStaffIcon');
+                    icon.className = 'fas fa-check';
+                    icon.style.color = '#10b981';
+                    setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
+                });
+            }
+        </script>

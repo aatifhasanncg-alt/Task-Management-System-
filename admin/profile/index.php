@@ -22,6 +22,31 @@ $profileStmt = $db->prepare("
 ");
 $profileStmt->execute([$user['id']]);
 $profile = $profileStmt->fetch(PDO::FETCH_ASSOC);
+
+// Fetch all departments (primary + UDA)
+$udaStmt = $db->prepare("
+    SELECT d.dept_name, d.id,
+           CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+    UNION
+    SELECT d.dept_name, d.id, 1 AS is_primary
+    FROM departments d
+    WHERE d.id = ?
+    ORDER BY is_primary DESC, dept_name ASC
+");
+$udaStmt->execute([$profile['department_id'], $user['id'], $profile['department_id']]);
+$allDepts = $udaStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Remove duplicates (in case primary dept also appears in UDA)
+$seen = [];
+$allDepts = array_filter($allDepts, function ($d) use (&$seen) {
+    if (in_array($d['id'], $seen))
+        return false;
+    $seen[] = $d['id'];
+    return true;
+});
 if (!$profile) {
     echo "User profile not found!";
     exit;
@@ -100,22 +125,40 @@ include '../../includes/header.php';
                             <h5 style="font-size:1.1rem;font-weight:700;"><?= htmlspecialchars($profile['full_name']) ?>
                             </h5>
                             <p style="color:#9ca3af;font-size:.83rem;margin:.25rem 0;">
-                                <?= htmlspecialchars($profile['email']) ?></p>
+                                <?= htmlspecialchars($profile['email']) ?>
+                            </p>
                             <div class="d-flex justify-content-center gap-2 mt-2 flex-wrap">
                                 <span
                                     class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
-                                <span class="dept-chip"><?= htmlspecialchars($profile['dept_name'] ?? '—') ?></span>
+                                <?php foreach ($allDepts as $dept): ?>
+                                    <span class="dept-chip">
+                                        <?= htmlspecialchars($dept['dept_name']) ?>
+                                        <?php if ($dept['is_primary']): ?>
+                                            <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endforeach; ?>
                             </div>
                             <?php if ($profile['employee_id']): ?>
                                 <p style="font-size:.75rem;color:#9ca3af;margin-top:.75rem;">
                                     <i class="fas fa-id-badge me-1"></i><?= htmlspecialchars($profile['employee_id']) ?>
                                 </p>
                             <?php endif; ?>
+
                             <div class="mt-3">
+                                <?php
+                                // Display Branch Manager or Branch Admin only if the department is "Core Admin"
+                                if ($profile['dept_name'] === 'Core Admin') {
+                                    // You can define who is the branch manager or admin based on your logic, e.g., fetching branch manager details
+                                    $roleDisplay = 'Branch Manager';  // For simplicity, we display "Branch Manager" for Core Admin department
+                                } else {
+                                    // Default role for other departments
+                                    $roleDisplay = $profile['role_name'] ?? 'Admin';
+                                }
+                                ?>
                                 <span
                                     style="background:#fef3c7;color:#92400e;font-size:.72rem;padding:.25rem .75rem;border-radius:99px;font-weight:600;text-transform:uppercase;">
-                                    <i
-                                        class="fas fa-user-shield me-1"></i><?= htmlspecialchars($profile['role_name'] ?? 'Admin') ?>
+                                    <i class="fas fa-user-shield me-1"></i><?= htmlspecialchars($roleDisplay) ?>
                                 </span>
                             </div>
                         </div>
@@ -140,7 +183,7 @@ include '../../includes/header.php';
                                     ['Phone', $profile['phone'] ?? '—', 'fa-phone'],
                                     ['Employee ID', $profile['employee_id'] ?? '—', 'fa-id-badge'],
                                     ['Role', $profile['role_name'] ?? '—', 'fa-user-shield'],
-                                    ['Department', $profile['dept_name'] ?? '—', 'fa-layer-group'],
+                                    ['Department', '__DEPTS__', 'fa-layer-group'],
                                     ['Branch', $profile['branch_name'] ?? '—', 'fa-map-marker-alt'],
                                     ['Status', $profile['is_active'] ? 'Active' : 'Inactive', 'fa-circle-check'],
                                     ['Joining Date', $profile['joining_date'] ? date('M j, Y', strtotime($profile['joining_date'])) : '—', 'fa-calendar'],
@@ -153,7 +196,21 @@ include '../../includes/header.php';
                                             <i class="fas <?= $ic ?> me-1 text-warning"></i><?= $lbl ?>
                                         </div>
                                         <div style="font-size:.9rem;color:#1f2937;font-weight:500;margin-top:.15rem;">
-                                            <?= htmlspecialchars($val ?? '—') ?>
+                                            <?php if ($val === '__DEPTS__'): ?>
+                                                <div class="d-flex flex-wrap gap-1 mt-1">
+                                                    <?php foreach ($allDepts as $dept): ?>
+                                                        <span
+                                                            style="background:#fef3c7;color:#92400e;font-size:.75rem;padding:.15rem .5rem;border-radius:99px;font-weight:600;">
+                                                            <?= htmlspecialchars($dept['dept_name']) ?>
+                                                            <?php if ($dept['is_primary']): ?>
+                                                                <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                            <?php endif; ?>
+                                                        </span>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else: ?>
+                                                <?= htmlspecialchars($val ?? '—') ?>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>

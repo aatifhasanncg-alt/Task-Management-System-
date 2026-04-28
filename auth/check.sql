@@ -15,7 +15,7 @@ CREATE TABLE tax_office_types (id INT AUTO_INCREMENT PRIMARY KEY, office_name VA
 CREATE TABLE tax_type (id INT AUTO_INCREMENT PRIMARY KEY, tax_type_name VARCHAR(50) NOT NULL UNIQUE);
 CREATE TABLE bank_client_categories (id INT AUTO_INCREMENT PRIMARY KEY, category_name VARCHAR(100) NOT NULL UNIQUE);
 CREATE TABLE corporate_grades (id INT AUTO_INCREMENT PRIMARY KEY, grade_name VARCHAR(5) NOT NULL UNIQUE, min_profit DECIMAL(15,2) NOT NULL, max_profit DECIMAL(15,2), description VARCHAR(255), is_active TINYINT(1) DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-
+ALTER TABLE branches ADD COLUMN branch_code VARCHAR(10) UNIQUE;
 -- Fiscal years
 CREATE TABLE fiscal_years (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -520,18 +520,52 @@ END$$
 DELIMITER ;
 
 -- Auto-generate task number (ASK2026-TAX-00001, etc.)
+
 DELIMITER $$
-CREATE TRIGGER trg_task_number BEFORE INSERT ON tasks FOR EACH ROW
+
+CREATE TRIGGER trg_task_number 
+BEFORE INSERT ON tasks 
+FOR EACH ROW
 BEGIN
     DECLARE nxt INT;
-    DECLARE deptCode VARCHAR(20);
-    SELECT dept_code INTO deptCode FROM departments WHERE id = NEW.department_id;
-    SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(task_number,'-',-1) AS UNSIGNED)),0)+1
-    INTO nxt FROM tasks
-    WHERE task_number LIKE CONCAT('ASK',YEAR(NOW()),'-',deptCode,'-%');
-    SET NEW.task_number = CONCAT('ASK',YEAR(NOW()),'-',deptCode,'-',LPAD(nxt,5,'0'));
+    DECLARE deptCode VARCHAR(20) DEFAULT 'GEN';
+    DECLARE branchCode VARCHAR(20) DEFAULT 'GEN';
+
+    -- Get department code
+    IF NEW.department_id IS NOT NULL THEN
+        SELECT dept_code INTO deptCode 
+        FROM departments 
+        WHERE id = NEW.department_id;
+    END IF;
+
+    -- Get branch code
+    IF NEW.branch_id IS NOT NULL THEN
+        SELECT branch_code INTO branchCode 
+        FROM branches 
+        WHERE id = NEW.branch_id;
+    END IF;
+
+    -- Generate next number based on REAL DATA (not string)
+    SELECT COUNT(*) + 1
+    INTO nxt
+    FROM tasks
+    WHERE YEAR(created_at) = YEAR(NOW())
+      AND (branch_id <=> NEW.branch_id)
+      AND (department_id <=> NEW.department_id);
+
+    -- Create task number
+    SET NEW.task_number = CONCAT(
+        'ASK', YEAR(NOW()), '-', 
+        branchCode, '-', 
+        deptCode, '-', 
+        LPAD(nxt,5,'0')
+    );
+
+    -- Set current dept
     SET NEW.current_dept_id = NEW.department_id;
+
 END$$
+
 DELIMITER ;
 
 -- Auto-generate employee ID (EXE-001, ADM-001, STF-001...)
@@ -672,3 +706,177 @@ INSERT INTO tax_type (id, tax_type_name) VALUES
 INSERT INTO tax_office_types (id, office_name, address) VALUES
 (1,'IRD',''),(2,'NCG',''),(3,'OCR',''),(4,'Gharalu & Banijya',''),
 (5,'Nagarpalika',''),(6,'Other',''),(7,'PPMO','');
+
+
+
+
+-- Drop follow_up_date and notes from task_retail
+ALTER TABLE task_retail
+    DROP COLUMN IF EXISTS follow_up_date,
+    DROP COLUMN IF EXISTS follow_up_note;
+
+-- Drop follow_up_date and notes from task_tax  
+ALTER TABLE task_tax
+    DROP COLUMN IF EXISTS follow_up_date,
+    DROP COLUMN IF EXISTS follow_up_note;
+
+-- Drop follow_up_date and notes from task_corporate
+ALTER TABLE task_corporate
+    DROP COLUMN IF EXISTS follow_up_date,
+    DROP COLUMN IF EXISTS follow_up_note;
+
+
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- WORK PLANNING & PERFORMANCE MODULE — COMPLETE SCHEMA
+-- ASK Global Advisory Pvt. Ltd. — MISPro
+-- ═══════════════════════════════════════════════════════════════
+
+-- 1. Weekly plan headers
+CREATE TABLE IF NOT EXISTS `work_plans` (
+  `id`              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `user_id`         INT UNSIGNED NOT NULL COMMENT 'Who created this plan',
+  `supervisor_id`   INT UNSIGNED DEFAULT NULL,
+  `department_id`   INT UNSIGNED NOT NULL,
+  `branch_id`       INT UNSIGNED NOT NULL,
+  `plan_month`      DATE NOT NULL COMMENT 'First day of month e.g. 2025-05-01',
+  `week_number`     TINYINT UNSIGNED NOT NULL COMMENT '1-5 within month',
+  `week_start_date` DATE NOT NULL,
+  `week_end_date`   DATE NOT NULL,
+  `status`          ENUM('draft','submitted','approved','rejected') DEFAULT 'draft',
+  `approved_by`     INT UNSIGNED DEFAULT NULL,
+  `approved_at`     DATETIME DEFAULT NULL,
+  `remarks`         TEXT DEFAULT NULL,
+  `created_at`      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY `idx_user_month`  (`user_id`, `plan_month`),
+  KEY `idx_dept_branch` (`department_id`, `branch_id`),
+  KEY `idx_status`      (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 2. Per-client per-day plan entries
+CREATE TABLE IF NOT EXISTS `work_plan_entries` (
+  `id`               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `plan_id`          INT UNSIGNED NOT NULL,
+  `client_id`        INT UNSIGNED NOT NULL COMMENT 'FK → companies.id',
+  `client_code`      VARCHAR(30) DEFAULT NULL,
+  `assigned_to`      INT UNSIGNED NOT NULL COMMENT 'User doing the visit',
+  `plan_date`        DATE NOT NULL,
+  `day_of_week`      ENUM('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday') NOT NULL,
+  `planned_time_in`  TIME DEFAULT NULL,
+  `planned_time_out` TIME DEFAULT NULL,
+  `planned_hours`    DECIMAL(5,2) DEFAULT 0.00,
+  `notes`            VARCHAR(500) DEFAULT NULL,
+  `created_at`       DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_plan`    (`plan_id`),
+  KEY `idx_client`  (`client_id`),
+  KEY `idx_date`    (`plan_date`),
+  KEY `idx_assigned`(`assigned_to`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 3. Actual visit logs
+CREATE TABLE IF NOT EXISTS `work_logs` (
+  `id`               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `user_id`          INT UNSIGNED NOT NULL,
+  `client_id`        INT UNSIGNED NOT NULL,
+  `supervisor_id`    INT UNSIGNED DEFAULT NULL,
+  `plan_entry_id`    INT UNSIGNED DEFAULT NULL COMMENT 'Links to planned entry if any',
+  `department_id`    INT UNSIGNED NOT NULL,
+  `branch_id`        INT UNSIGNED NOT NULL,
+  `log_date`         DATE NOT NULL,
+  `day_of_week`      ENUM('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday') NOT NULL,
+  `week_number`      TINYINT UNSIGNED NOT NULL,
+  `month_year`       VARCHAR(7) NOT NULL COMMENT 'e.g. 2025-05',
+  `time_in`          TIME DEFAULT NULL,
+  `time_out`         TIME DEFAULT NULL,
+  `duration_hours`   DECIMAL(5,2) DEFAULT 0.00,
+  `work_description` TEXT DEFAULT NULL,
+  `visit_status`     ENUM('visited','missed','rescheduled') DEFAULT 'visited',
+  `created_at`       DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY `idx_user_date`   (`user_id`, `log_date`),
+  KEY `idx_client_date` (`client_id`, `log_date`),
+  KEY `idx_month`       (`month_year`),
+  KEY `idx_dept_branch` (`department_id`, `branch_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 4. Performance summaries (pre-aggregated)
+CREATE TABLE IF NOT EXISTS `performance_summaries` (
+  `id`             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `user_id`        INT UNSIGNED NOT NULL,
+  `client_id`      INT UNSIGNED NOT NULL,
+  `supervisor_id`  INT UNSIGNED DEFAULT NULL,
+  `department_id`  INT UNSIGNED NOT NULL,
+  `branch_id`      INT UNSIGNED NOT NULL,
+  `summary_type`   ENUM('daily','weekly','monthly') NOT NULL,
+  `summary_date`   DATE NOT NULL,
+  `week_number`    TINYINT UNSIGNED DEFAULT NULL,
+  `month_year`     VARCHAR(7) DEFAULT NULL,
+  `total_visits`   SMALLINT UNSIGNED DEFAULT 0,
+  `total_hours`    DECIMAL(7,2) DEFAULT 0.00,
+  `planned_hours`  DECIMAL(7,2) DEFAULT 0.00,
+  `efficiency_pct` DECIMAL(5,2) DEFAULT 0.00,
+  `updated_at`     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_summary`   (`user_id`,`client_id`,`summary_type`,`summary_date`),
+  KEY `idx_dept_branch`     (`department_id`,`branch_id`),
+  KEY `idx_month`           (`month_year`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 5. Reusable plan templates
+CREATE TABLE IF NOT EXISTS `work_plan_templates` (
+  `id`            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `template_name` VARCHAR(150) NOT NULL,
+  `department_id` INT UNSIGNED DEFAULT NULL,
+  `created_by`    INT UNSIGNED NOT NULL,
+  `is_active`     TINYINT(1) DEFAULT 1,
+  `created_at`    DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 6. Template entries
+CREATE TABLE IF NOT EXISTS `work_plan_template_entries` (
+  `id`               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `template_id`      INT UNSIGNED NOT NULL,
+  `client_id`        INT UNSIGNED NOT NULL,
+  `day_of_week`      ENUM('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday') NOT NULL,
+  `planned_time_in`  TIME DEFAULT NULL,
+  `planned_time_out` TIME DEFAULT NULL,
+  `planned_hours`    DECIMAL(5,2) DEFAULT 0.00,
+  `notes`            VARCHAR(500) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 7. Notifications for today/tomorrow plans
+CREATE TABLE IF NOT EXISTS `plan_notifications` (
+  `id`         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `user_id`    INT UNSIGNED NOT NULL,
+  `entry_id`   INT UNSIGNED NOT NULL COMMENT 'FK → work_plan_entries.id',
+  `notify_for` DATE NOT NULL COMMENT 'The plan date being notified',
+  `type`       ENUM('today','tomorrow') NOT NULL,
+  `is_read`    TINYINT(1) DEFAULT 0,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY `idx_user_date` (`user_id`, `notify_for`),
+  KEY `idx_unread`    (`user_id`, `is_read`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE work_plan_entries 
+ADD COLUMN is_notified TINYINT(1) DEFAULT 0;
+
+CREATE TABLE user_department_assignments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    department_id INT NOT NULL,
+    is_primary TINYINT DEFAULT 0,
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_uda_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+
+    CONSTRAINT fk_uda_department
+        FOREIGN KEY (department_id) REFERENCES departments(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+
+    UNIQUE KEY unique_user_dept (user_id, department_id)
+);

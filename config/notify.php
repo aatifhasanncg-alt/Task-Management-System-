@@ -1,13 +1,13 @@
 <?php
 // config/notify.php
 function notify(
-    int    $userId,
+    int $userId,
     string $title,
     string $message,
-    string $type      = 'task',
-    string $link      = '',
-    bool   $sendEmail = true,
-    array  $emailData = []
+    string $type = 'task',
+    string $link = '',
+    bool $sendEmail = true,
+    array $emailData = []
 ): void {
     error_log("notify() called — userId={$userId} title={$title} type={$type}");
 
@@ -28,7 +28,7 @@ function notify(
             INSERT INTO notifications (user_id, title, message, type, link)
             VALUES (?, ?, ?, ?, ?)
         ");
-        $result   = $stmt->execute([$userId, $title, $message, $type, $link]);
+        $result = $stmt->execute([$userId, $title, $message, $type, $link]);
         $insertId = $db->lastInsertId();
         error_log("notify() DB insert — result=" . ($result ? 'OK' : 'FAIL') . " insertId={$insertId}");
     } catch (Exception $e) {
@@ -64,7 +64,23 @@ function notify(
         require_once __DIR__ . '/mailer.php';
 
         $template = $emailData['template'] ?? 'generic';
-        $task     = $emailData['task']     ?? [];
+        $task = $emailData['task'] ?? [];
+
+        // ── Build role-aware task URL ─────────────────────────────────
+        if (!empty($task['id'])) {
+            $roleStmt = $db->prepare("
+        SELECT r.role_name FROM users u
+        LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.id = ?
+    ");
+            $roleStmt->execute([$userId]);
+            $recipientRole = $roleStmt->fetchColumn();
+
+            $task['url'] = in_array($recipientRole, ['admin', 'executive'])
+                ? APP_URL . '/admin/tasks/view.php?id=' . $task['id']
+                : APP_URL . '/staff/tasks/view.php?id=' . $task['id'];
+        }
+        // ─────────────────────────────────────────────────────────────
 
         error_log("notify() email template={$template}");
 

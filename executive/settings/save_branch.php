@@ -5,12 +5,13 @@ $db = getDB();
 
 $stmt = $db->prepare("
     INSERT INTO branches 
-    (branch_name, city, address, phone, email, is_head_office, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    (branch_name, branch_code, city, address, phone, email, is_head_office, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ");
 
 $stmt->execute([
     $_POST['branch_name'],
+    strtoupper($_POST['branch_code']),
     $_POST['city'] ?? null,
     $_POST['address'] ?? null,
     $_POST['phone'] ?? null,

@@ -27,6 +27,16 @@ foreach ($fys as $fy) {
 if (!$currentFy && !empty($fys)) $currentFy = $fys[0]['fy_code'];
 
 // ── Dropdowns ─────────────────────────────────────────────────────────────────
+// REPLACE the existing isExecutive() blocks for depts, branches, companies, staff
+
+// ── Detect branch manager ──────────────────────────────────────────────────
+$adminDeptCodeStmt = $db->prepare("SELECT d.dept_code FROM departments d WHERE d.id = ?");
+$adminDeptCodeStmt->execute([$adminUser['department_id']]);
+$adminDeptCodeCheck = $adminDeptCodeStmt->fetchColumn() ?: '';
+$isBranchManager = ($adminDeptCodeCheck === 'CORE');
+$crossDepts         = CROSS_DEPT_ASSIGN[$adminUser['id']] ?? [];
+$hasCrossDeptAccess = !empty($crossDepts) && !$isBranchManager && !isExecutive();
+// ── Dropdowns ─────────────────────────────────────────────────────────────
 if (isExecutive()) {
     $depts     = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
     $branches  = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
@@ -37,13 +47,14 @@ if (isExecutive()) {
         FROM companies WHERE is_active=1 AND branch_id = {$adminUser['branch_id']}
         ORDER BY company_name
     ")->fetchAll();
-} else {
-    $deptStmt = $db->prepare("SELECT * FROM departments WHERE id = ? AND is_active = 1");
-    $deptStmt->execute([$adminUser['department_id']]);
-    $depts = $deptStmt->fetchAll();
-
+} elseif ($isBranchManager) {
+    // Branch Manager: can pick ANY dept, but branch is locked to theirs
+    $depts = $db->query("
+        SELECT * FROM departments 
+        WHERE is_active=1 AND dept_name != 'Core Admin' 
+        ORDER BY dept_name
+    ")->fetchAll();
     $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
-
     $companiesStmt = $db->prepare("
         SELECT id, company_name, pan_number, company_code FROM companies
         WHERE is_active=1 AND branch_id = ?
@@ -51,31 +62,88 @@ if (isExecutive()) {
     ");
     $companiesStmt->execute([$adminUser['branch_id']]);
     $companies = $companiesStmt->fetchAll();
+} elseif ($hasCrossDeptAccess) {
+    // Own dept + permitted depts
+    $allowedCodes = array_merge([$adminDeptCodeCheck], $crossDepts);
+    $inList = implode(',', array_fill(0, count($allowedCodes), '?'));
+    $deptStmt = $db->prepare("
+        SELECT * FROM departments 
+        WHERE is_active = 1 AND dept_code IN ({$inList})
+        ORDER BY dept_name
+    ");
+    $deptStmt->execute($allowedCodes);
+    $depts = $deptStmt->fetchAll();
+
+    $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
+    $companiesStmt = $db->prepare("
+        SELECT id, company_name, pan_number, company_code FROM companies
+        WHERE is_active=1
+        ORDER BY company_name
+    ");
+    $companiesStmt->execute();
+    $companies = $companiesStmt->fetchAll();
+} else {
+    $deptStmt = $db->prepare("SELECT * FROM departments WHERE id = ? AND is_active = 1");
+    $deptStmt->execute([$adminUser['department_id']]);
+    $depts = $deptStmt->fetchAll();
+
+    $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
+    $companiesStmt = $db->prepare("
+        SELECT id, company_name, pan_number, company_code FROM companies
+        WHERE is_active=1
+        ORDER BY company_name
+    ");
+    $companiesStmt->execute();
+    $companies = $companiesStmt->fetchAll();
 }
 
-// ── Staff list ────────────────────────────────────────────────────────────────
-if (isExecutive()) {
-    $staffList = $db->query("
-        SELECT u.*, b.branch_name, d.dept_name FROM users u
-        LEFT JOIN branches b    ON b.id = u.branch_id
-        LEFT JOIN departments d ON d.id = u.department_id
-        LEFT JOIN roles r       ON r.id = u.role_id
-        WHERE r.role_name = 'staff' AND u.is_active = 1
-        ORDER BY u.full_name
-    ")->fetchAll();
-} else {
-    $st = $db->prepare("
-        SELECT u.*, b.branch_name, d.dept_name FROM users u
-        LEFT JOIN branches b    ON b.id = u.branch_id
-        LEFT JOIN departments d ON d.id = u.department_id
-        LEFT JOIN roles r       ON r.id = u.role_id
-        WHERE r.role_name     IN('staff','admin')
-          AND u.is_active     = 1
-          AND u.department_id = ?
-        ORDER BY b.branch_name, u.full_name
-    ");
-    $st->execute([$adminUser['department_id']]);
-    $staffList = $st->fetchAll();
+// ── Staff list ────────────────────────────────────────────────────────────
+// CORE admin and executive: use AJAX (dept-filtered). Only pre-populate on POST error.
+// Regular admin: always server-side (dept+branch fixed).
+$staffList = [];
+
+if (!isExecutive() && !$isBranchManager) {
+    if ($hasCrossDeptAccess) {
+        // AJAX will handle it — just pre-load own dept staff for initial render
+        $st = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
+    FROM users u
+    LEFT JOIN branches    b   ON b.id = u.branch_id
+    LEFT JOIN departments d   ON d.id = u.department_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    JOIN roles            r   ON r.id = u.role_id
+    WHERE r.role_name IN ('staff','admin')
+      AND u.is_active  = 1
+      AND u.branch_id  = ?
+      AND (
+          u.department_id = ?
+          OR uda.department_id = ?
+      )
+    ORDER BY u.full_name
+");
+$st->execute([$adminUser['branch_id'], $adminUser['department_id'], $adminUser['department_id']]);
+$staffList = $st->fetchAll();
+    } else {
+        // Regular admin — fixed dept+branch
+        $st = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
+    FROM users u
+    LEFT JOIN branches    b   ON b.id = u.branch_id
+    LEFT JOIN departments d   ON d.id = u.department_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    JOIN roles            r   ON r.id = u.role_id
+    WHERE r.role_name IN ('staff','admin')
+      AND u.is_active  = 1
+      AND u.branch_id  = ?
+      AND (
+          u.department_id = ?
+          OR uda.department_id = ?
+      )
+    ORDER BY u.full_name
+");
+$st->execute([$adminUser['branch_id'], $adminUser['department_id'], $adminUser['department_id']]);
+$staffList = $st->fetchAll();
+    }
 }
 
 $errors = [];
@@ -101,12 +169,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isExecutive()) {
         $deptId   = (int)($_POST['department_id'] ?? 0);
         $branchId = (int)($_POST['branch_id']     ?? 0);
+    } elseif ($isBranchManager) {
+        $deptId   = (int)($_POST['department_id'] ?? 0); // selectable
+        $branchId = (int)$adminUser['branch_id'];          // always locked
+    } elseif ($hasCrossDeptAccess) {
+        $deptId   = (int)($_POST['department_id'] ?? $adminUser['department_id']);
+        $branchId = (int)$adminUser['branch_id'];
     } else {
         $deptId   = (int)$adminUser['department_id'];
         $branchId = (int)$adminUser['branch_id'];
     }
-
-    $deptCode = '';
+        $deptCode = '';
     foreach ($depts as $d) {
         if ($d['id'] == $deptId) { $deptCode = $d['dept_code']; break; }
     }
@@ -120,20 +193,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $validFys = array_column($fys, 'fy_code');
     if ($fy && !in_array($fy, $validFys)) $errors[] = 'Selected fiscal year is invalid.';
 
-    if (!isExecutive()) {
-        if ($deptId !== (int)$adminUser['department_id'])
-            $errors[] = 'You can only assign tasks to your own department.';
-
-        if ($assignTo) {
-            $staffCheck = $db->prepare("
-                SELECT id FROM users
-                WHERE id = ? AND department_id = ? AND is_active = 1
-            ");
-            $staffCheck->execute([$assignTo, $adminUser['department_id']]);
-            if (!$staffCheck->fetch())
-                $errors[] = 'Selected staff does not belong to your department.';
+    if (!isExecutive() && !$isBranchManager) {
+        if ($hasCrossDeptAccess) {
+            $allowedCodes = array_merge([$adminDeptCodeCheck], $crossDepts);
+            if (!in_array($deptCode, $allowedCodes))
+                $errors[] = 'You are not permitted to assign tasks to that department.';
+        } else {
+            if ($deptId !== (int)$adminUser['department_id'])
+                $errors[] = 'You can only assign tasks to your own department.';
         }
     }
+
+        // CORE admin: assigned user must be in same branch (any dept)
+        if ($isBranchManager && $assignTo && $assignTo !== (int)$adminUser['id']) {
+            $staffCheck = $db->prepare("
+                SELECT u.id FROM users u
+                JOIN roles r ON r.id = u.role_id
+                WHERE u.id = ? AND u.branch_id = ? AND u.is_active = 1
+                AND r.role_name IN ('staff','admin')
+            ");
+            $staffCheck->execute([$assignTo, $adminUser['branch_id']]);
+            if (!$staffCheck->fetch())
+                $errors[] = 'Selected staff does not belong to your branch.';
+        }
 
     $validStatuses = array_column(
         $db->query("SELECT status_name FROM task_status")->fetchAll(),
@@ -301,15 +383,19 @@ include '../../includes/header.php';
                                value="<?= htmlspecialchars($_POST['title'] ?? '') ?>" required>
                     </div>
 
+                    <!-- Department field -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Department <span class="required-star">*</span></label>
-                        <?php if (isExecutive()): ?>
+                        <!-- // In the department select HTML, change the selected check: -->
+                        <?php if (isExecutive() || $isBranchManager || $hasCrossDeptAccess): ?>
                         <select name="department_id" class="form-select" required>
                             <option value="">-- Select --</option>
                             <?php foreach ($depts as $d): ?>
                             <option value="<?= $d['id'] ?>"
                                 data-code="<?= htmlspecialchars($d['dept_code']) ?>"
-                                <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
+                                <?= (
+                                    ($_POST['department_id'] ?? $adminUser['department_id']) == $d['id']  // ← default to own dept
+                                ) ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($d['dept_name']) ?>
                             </option>
                             <?php endforeach; ?>
@@ -317,11 +403,12 @@ include '../../includes/header.php';
                         <?php else: ?>
                         <input type="hidden" name="department_id" value="<?= $adminUser['department_id'] ?>">
                         <input type="text" class="form-control"
-                               value="<?= htmlspecialchars($depts[0]['dept_name'] ?? '') ?>"
-                               readonly style="background:#f9fafb;cursor:not-allowed;">
+                            value="<?= htmlspecialchars($depts[0]['dept_name'] ?? '') ?>"
+                            readonly style="background:#f9fafb;cursor:not-allowed;">
                         <?php endif; ?>
                     </div>
 
+                    <!-- Branch field -->
                     <div class="col-md-4">
                         <label class="form-label-mis">Branch <span class="required-star">*</span></label>
                         <?php if (isExecutive()): ?>
@@ -335,10 +422,17 @@ include '../../includes/header.php';
                             <?php endforeach; ?>
                         </select>
                         <?php else: ?>
+                        <!-- Branch Manager AND regular admin: branch is always locked -->
                         <input type="hidden" name="branch_id" value="<?= $adminUser['branch_id'] ?>">
+                        <?php
+                        $lockedBranchName = '';
+                        foreach ($branches as $b) {
+                            if ($b['id'] == $adminUser['branch_id']) { $lockedBranchName = $b['branch_name']; break; }
+                        }
+                        ?>
                         <input type="text" class="form-control"
-                               value="<?= htmlspecialchars($branches[array_search($adminUser['branch_id'], array_column($branches,'id'))]['branch_name'] ?? '') ?>"
-                               readonly style="background:#f9fafb;cursor:not-allowed;">
+                            value="<?= htmlspecialchars($lockedBranchName) ?>"
+                            readonly style="background:#f9fafb;cursor:not-allowed;">
                         <?php endif; ?>
                     </div>
 
@@ -348,7 +442,7 @@ include '../../includes/header.php';
                             <option value="">-- None --</option>
                             <?php foreach ($companies as $c): ?>
                            <option value="<?= $c['id'] ?>"
-                                <?= ($_POST['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
+                                <?= ($_POST['company_id'] ?? '') == $c['id'] ? 'selected' : '' ?> >
 
                                 <?= htmlspecialchars($c['company_name']) ?>
                                 <?php if (!empty($c['pan_number']) || !empty($c['company_code'])): ?>
@@ -419,24 +513,34 @@ include '../../includes/header.php';
                     </div>
 
                     <div class="col-md-8">
-                        <label class="form-label-mis">Assign To</label>
+                        <label class="form-label-mis">
+                            Assign To
+                            <?php if ($isBranchManager || $hasCrossDeptAccess): ?>
+                            <span style="font-size:.65rem;color:#8b5cf6;margin-left:.3rem;">
+                                <i class="fas fa-filter me-1"></i>filtered by selected department
+                            </span>
+                            <?php endif; ?>
+                        </label>
                         <select name="assigned_to" id="assigned_to_select" class="form-select">
-                            <option value="">-- Unassigned --</option> 
-                                <option value="<?= $adminUser['id'] ?>"
+                            <option value="">-- Unassigned --</option>
+                            <!-- Self always shown regardless of dept filter -->
+                            <option value="<?= $adminUser['id'] ?>"
                                 <?= ($_POST['assigned_to'] ?? '') == $adminUser['id'] ? 'selected' : '' ?>
                                 style="font-weight:700;color:#16a34a;">
                                 ★ Assign to myself (<?= htmlspecialchars($adminUser['full_name']) ?>)
                             </option>
-
+                            <?php if (!empty($staffList)): ?>
                             <?php
-                            $byBranch = [];
+                            $byGroup = [];
                             foreach ($staffList as $s) {
-                                $byBranch[$s['branch_name']][] = $s;
+                                if ((int)$s['id'] === (int)$adminUser['id']) continue; // skip self
+                                $gk = $s['dept_name'] ?? 'No Department';
+                                $byGroup[$gk][] = $s;
                             }
-                            foreach ($byBranch as $brName => $staffInBranch):
+                            foreach ($byGroup as $grpLabel => $grpStaff):
                             ?>
-                            <optgroup label="<?= htmlspecialchars($brName) ?>">
-                                <?php foreach ($staffInBranch as $s): ?>
+                            <optgroup label="<?= htmlspecialchars($grpLabel) ?>">
+                                <?php foreach ($grpStaff as $s): ?>
                                 <option value="<?= $s['id'] ?>"
                                     <?= ($_POST['assigned_to'] ?? '') == $s['id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($s['full_name']) ?>
@@ -445,7 +549,17 @@ include '../../includes/header.php';
                                 <?php endforeach; ?>
                             </optgroup>
                             <?php endforeach; ?>
+                            <?php endif; ?>
                         </select>
+                        <div id="staff-loading" style="display:none;font-size:.72rem;color:#6b7280;margin-top:.3rem;">
+                            <i class="fas fa-spinner fa-spin me-1"></i>Loading staff…
+                        </div>
+                        <div id="staff-hint" style="font-size:.68rem;color:#9ca3af;margin-top:.25rem;">
+                            <?php if ($isBranchManager || $hasCrossDeptAccess): ?>
+                            <i class="fas fa-info-circle me-1"></i>
+                            <?= $hasCrossDeptAccess ? 'Showing staff of selected department' : 'Select a department above to see filtered staff' ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div id="audit-fields-wrapper" style="display:contents;">
                     <!-- Audit Nature — values lowercase to match ENUM -->
@@ -585,77 +699,210 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-// ── Tom Select for searchable dropdowns ───────────────────────────────────────
+const IS_BRANCH_MANAGER = <?= $isBranchManager ? 'true' : 'false' ?>;
+const IS_EXECUTIVE      = <?= isExecutive()     ? 'true' : 'false' ?>;
+const USE_AJAX_STAFF = <?= ($isBranchManager || isExecutive() || $hasCrossDeptAccess) ? 'true' : 'false' ?>;
+const ADMIN_BRANCH_ID   = <?= (int)$adminUser['branch_id'] ?>;
+const ADMIN_USER_ID     = <?= (int)$adminUser['id'] ?>;
+const ADMIN_USER_NAME   = <?= json_encode($adminUser['full_name']) ?>;
+const AJAX_URL          = '<?= APP_URL ?>/ajax/get_staff_by_admin.php';
+const PREV_ASSIGNED     = '<?= (int)($_POST['assigned_to'] ?? 0) ?>';
+
+let assignedToTS = null;
+
 document.addEventListener('DOMContentLoaded', function () {
 
-    new TomSelect('#assigned_to_select', {
+    // Company TomSelect
+    new TomSelect('#company_select', {
+        placeholder: 'Search by name, PAN or code...',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        render: {
+            option: function(data, escape) {
+                const parts = data.text.split('—');
+                return `<div style="padding:6px 0;">
+                    <div style="margin-left:10px;font-weight:600;">${escape(parts[0]?.trim() ?? '')}</div>
+                    ${parts[1] ? `<div style="margin-left:10px;font-size:12px;color:#6b7280;">${escape(parts[1].trim())}</div>` : ''}
+                </div>`;
+            },
+            item: function(data, escape) { return `<div>${escape(data.text)}</div>`; }
+        }
+    });
+
+    // Assigned To TomSelect (initial — will be re-init after AJAX rebuild)
+    assignedToTS = buildAssignedToTS();
+
+    // Department change handler
+    // ✅ CORRECT — simple and reliable
+    const deptSel = document.querySelector('select[name="department_id"]');
+
+    if (USE_AJAX_STAFF && deptSel) {
+        deptSel.addEventListener('change', function () {
+            const deptId   = this.value;
+            const deptCode = this.options[this.selectedIndex]?.dataset?.code ?? '';
+            toggleAuditFields(deptCode);
+            if (deptId) {
+                loadStaff(deptId);
+            } else {
+                // No dept selected — reset to just self
+                rebuildSelect([]);
+                updateHint(0);
+            }
+        });
+
+        // On load: if dept pre-selected (after POST error), trigger AJAX
+        if (deptSel.value) {
+            const code = deptSel.options[deptSel.selectedIndex]?.dataset?.code ?? '';
+            toggleAuditFields(code);
+            loadStaff(deptSel.value);  // fires on load — loads own dept staff initially
+        }
+    } else if (!USE_AJAX_STAFF) {
+        // Regular admin: staff already in DOM, just init TomSelect — nothing else needed
+        const deptInput = document.querySelector('[name="department_id"]');
+        if (deptInput && deptInput.tagName !== 'SELECT') {
+            // dept is readonly hidden input — check if we need to hide audit for FIN
+            // dept code is baked into PHP, audit wrapper already conditionally rendered
+        }
+    }
+
+    // Auditor
+    const auditorEl = document.getElementById('auditor_id');
+    if (auditorEl) auditorEl.addEventListener('change', updateCapacityBar);
+
+    // Also watch dept select for audit toggle (non-AJAX path)
+    const anyDeptSel = document.querySelector('select[name="department_id"]');
+    if (anyDeptSel) {
+        anyDeptSel.addEventListener('change', function() {
+            toggleAuditFields(this.options[this.selectedIndex]?.dataset?.code ?? '');
+        });
+        toggleAuditFields(anyDeptSel.options[anyDeptSel.selectedIndex]?.dataset?.code ?? '');
+    }
+});
+
+// ── Build TomSelect on the assigned_to select ─────────────────────────────────
+function buildAssignedToTS() {
+    if (assignedToTS) { try { assignedToTS.destroy(); } catch(e) {} }
+    return new TomSelect('#assigned_to_select', {
         placeholder: 'Search by name or employee ID...',
         allowEmptyOption: true,
         maxOptions: 500,
-        searchField: ['text']
-    });
-
-    new TomSelect('#company_select', {
-    placeholder: 'Search by name, PAN or code...',
-    allowEmptyOption: true,
-    maxOptions: 500,
-    searchField: ['text'],
-    render: {
-        option: function(data, escape) {
-            return `
-                <div style="padding:6px 0;">
-                    <div style="margin-left:10px; font-weight:600;">
-                        ${escape(data.text.split('—')[0])}
-                    </div>
-                    <div style="margin-left:10px; font-size:12px;color:#6b7280;">
-                        ${escape(data.text.includes('—') ? data.text.split('—')[1] : '')}
-                    </div>
-                </div>
-            `;
-        },
-        item: function(data, escape) {
-            return `<div>${escape(data.text)}</div>`;
+        searchField: ['text'],
+        render: {
+            option: function(data, escape) {
+                const isSelf = String(data.value) === String(ADMIN_USER_ID);
+                return `<div style="padding:4px 0;${isSelf ? 'color:#16a34a;font-weight:700;' : ''}">
+                    <div style="margin-left:10px;">${isSelf ? '★ ' : ''}${escape(data.text)}</div>
+                </div>`;
+            }
         }
-    }
-});
-
-});
-// Toggle audit fields based on department
-function toggleAuditFields(deptCode) {
-    const auditSection = document.getElementById('audit-fields-wrapper');
-    if (auditSection) {
-        auditSection.style.display = deptCode === 'FIN' ? 'none' : '';
-    }
-}
-
-const deptSelect = document.querySelector('[name="department_id"]');
-if (deptSelect && deptSelect.tagName === 'SELECT') {
-    deptSelect.addEventListener('change', function() {
-        const code = this.options[this.selectedIndex]?.dataset?.code ?? '';
-        toggleAuditFields(code);
     });
-    // trigger on load
-    toggleAuditFields(deptSelect.options[deptSelect.selectedIndex]?.dataset?.code ?? '');
 }
+
+// ── Load staff via AJAX ───────────────────────────────────────────────────────
+function loadStaff(deptId) {
+    document.getElementById('staff-loading').style.display = 'block';
+    const hint = document.getElementById('staff-hint');
+    if (hint) hint.style.display = 'none';
+
+    fetch(`${AJAX_URL}?branch_id=${ADMIN_BRANCH_ID}&dept_id=${encodeURIComponent(deptId)}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('staff-loading').style.display = 'none';
+            rebuildSelect(data);
+            updateHint(data.filter(s => !s.is_self).length);
+        })
+        .catch(() => {
+            document.getElementById('staff-loading').style.display = 'none';
+            const hint = document.getElementById('staff-hint');
+            if (hint) hint.innerHTML = '<i class="fas fa-exclamation-triangle text-danger me-1"></i>Failed to load staff';
+        });
+}
+
+// ── Rebuild native <select> then re-init TomSelect ───────────────────────────
+function rebuildSelect(staffList) {
+    const sel = document.getElementById('assigned_to_select');
+
+    // destroy TomSelect safely
+    if (assignedToTS) {
+        assignedToTS.destroy();
+        assignedToTS = null;
+    }
+
+    sel.innerHTML = '';
+
+    // default
+    sel.insertAdjacentHTML('beforeend', `<option value="">-- Unassigned --</option>`);
+
+    // self
+    sel.insertAdjacentHTML('beforeend', `
+        <option value="${ADMIN_USER_ID}" style="font-weight:700;color:#16a34a;">
+            ★ Assign to myself (${ADMIN_USER_NAME})
+        </option>
+    `);
+
+    // group
+    const byDept = {};
+
+    (staffList || []).forEach(s => {
+        if (s.is_self) return;
+
+        const dept = s.dept_name || 'No Department';
+        if (!byDept[dept]) byDept[dept] = [];
+
+        byDept[dept].push(s);
+    });
+
+    for (const dept in byDept) {
+        let optgroup = document.createElement('optgroup');
+        optgroup.label = dept;
+
+        byDept[dept].forEach(s => {
+            let opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = `${s.full_name} ${s.employee_id ? '(' + s.employee_id + ')' : ''}`;
+            optgroup.appendChild(opt);
+        });
+
+        sel.appendChild(optgroup);
+    }
+
+    // IMPORTANT: re-init AFTER DOM update
+    setTimeout(() => {
+        assignedToTS = new TomSelect('#assigned_to_select', {
+            allowEmptyOption: true,
+            maxOptions: 500,
+            searchField: ['text']
+        });
+    }, 50);
+}
+
+function updateHint(count) {
+    const hint = document.getElementById('staff-hint');
+    if (!hint) return;
+    hint.style.display = 'block';
+    hint.innerHTML = count > 0
+        ? `<i class="fas fa-users me-1"></i>${count} staff found in this department`
+        : '<i class="fas fa-info-circle me-1"></i>No staff found — you can still assign to yourself';
+}
+
+// ── Toggle audit fields ───────────────────────────────────────────────────────
+function toggleAuditFields(deptCode) {
+    const wrapper = document.getElementById('audit-fields-wrapper');
+    if (wrapper) wrapper.style.display = deptCode === 'FIN' ? 'none' : 'contents';
+}
+
 // ── Auditor loader ────────────────────────────────────────────────────────────
 function loadAuditors() {
-    const nature = document.getElementById('audit_nature').value;
+    const nature = document.getElementById('audit_nature')?.value;
     const select = document.getElementById('auditor_id');
     const capDiv = document.getElementById('auditor-capacity');
     if (!nature || nature === 'N/A') {
-        wrap.style.display = 'none';
-        select.innerHTML = '<option value="">-- Select Auditor --</option>';
+        if (select) select.innerHTML = '<option value="">-- Select Auditor --</option>';
         if (capDiv) capDiv.style.display = 'none';
         return;
     }
-    if (!nature) {
-        select.innerHTML = '<option value="">-- Select Auditor --</option>';
-        capDiv.style.display = 'none';
-        return;
-    }
-
     select.innerHTML = '<option value="">Loading…</option>';
-
     fetch('<?= APP_URL ?>/ajax/get_auditors.php?nature=' + encodeURIComponent(nature))
         .then(r => r.json())
         .then(data => {
@@ -665,11 +912,8 @@ function loadAuditors() {
                 const label   = nature === 'countable'
                     ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
                     : `${a.auditor_name} (${a.uncountable_count} tasks)`;
-
-                const opt       = document.createElement('option');
-                opt.value       = a.id;
-                opt.text        = label;
-                opt.disabled    = atLimit;
+                const opt = document.createElement('option');
+                opt.value = a.id; opt.text = label; opt.disabled = atLimit;
                 opt.dataset.countable   = a.countable_count;
                 opt.dataset.uncountable = a.uncountable_count;
                 opt.dataset.limit       = a.max_limit;
@@ -677,48 +921,30 @@ function loadAuditors() {
             });
             updateCapacityBar();
         })
-        .catch(() => {
-            select.innerHTML = '<option value="">Error loading auditors</option>';
-        });
+        .catch(() => { select.innerHTML = '<option value="">Error loading</option>'; });
 }
 
 function updateCapacityBar() {
-    const nature  = document.getElementById('audit_nature').value;
-    const select  = document.getElementById('auditor_id');
-    const capDiv  = document.getElementById('auditor-capacity');
-    const opt     = select.options[select.selectedIndex];
-
-    if (!opt || !opt.value || !nature) {
-        capDiv.style.display = 'none';
-        return;
-    }
-
+    const nature = document.getElementById('audit_nature')?.value;
+    const select = document.getElementById('auditor_id');
+    const capDiv = document.getElementById('auditor-capacity');
+    const opt    = select?.options[select.selectedIndex];
+    if (!opt || !opt.value || !nature) { if (capDiv) capDiv.style.display = 'none'; return; }
     if (nature === 'uncountable') {
         document.getElementById('capacity-label').textContent = 'Uncountable tasks';
         document.getElementById('capacity-text').textContent  = opt.dataset.uncountable;
         document.getElementById('capacity-bar').style.width   = '0%';
-        capDiv.style.display = 'block';
-        return;
+        capDiv.style.display = 'block'; return;
     }
-
-    const used  = parseInt(opt.dataset.countable  || 0);
-    const limit = parseInt(opt.dataset.limit || 0);
-    const pct   = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const used  = parseInt(opt.dataset.countable || 0);
+    const limit = parseInt(opt.dataset.limit     || 0);
+    const pct   = limit > 0 ? Math.min(100, Math.round(used / limit * 100)) : 0;
     const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
-
     document.getElementById('capacity-label').textContent    = 'Countable capacity used';
     document.getElementById('capacity-text').textContent     = `${used} / ${limit} (${pct}%)`;
     document.getElementById('capacity-bar').style.width      = pct + '%';
     document.getElementById('capacity-bar').style.background = color;
     capDiv.style.display = 'block';
 }
-// Hide audit fields for Finance dept
-document.querySelector('[name="department_id"]')?.addEventListener('change', function() {
-    const sel = this;
-    const code = sel.options[sel.selectedIndex]?.dataset?.code ?? '';
-    const auditWrap = document.querySelector('.col-md-6:has(#audit_nature)');
-    // handled via PHP for non-executive; for executive use data attribute
-});
-document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
 </script>
 <?php include '../../includes/footer.php'; ?>

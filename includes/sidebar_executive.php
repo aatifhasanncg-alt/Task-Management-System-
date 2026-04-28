@@ -107,7 +107,36 @@ if (!function_exists('isActiveExec')) {
         <a href="<?= APP_URL ?>/executive/staff/index.php" class="nav-item <?= isActiveExec('/executive/staff') ?>">
             <i class="fas fa-users"></i><span>All Staff</span>
         </a>
+        <!-- ── Consulting ── -->
+        <div class="nav-section-label">Consulting</div>
 
+        <a href="<?= APP_URL ?>/executive/consulting/dashboard.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/dashboard') ?>">
+            <i class="fas fa-briefcase"></i><span>Consulting Dashboard</span>
+        </a>
+
+        <a href="<?= APP_URL ?>/executive/consulting/plans.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/plans') ?>">
+            <i class="fas fa-tasks"></i><span>Work Plans</span>
+        </a>
+        <a href="<?= APP_URL ?>/executive/consulting/create_plan.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/create_plan') ?>">
+            <i class="fas fa-pencil-alt"></i><span>Create Plan</span>
+        </a>
+
+        <a href="<?= APP_URL ?>/executive/consulting/log_list.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/log_list') ?>">
+            <i class="fas fa-check-circle"></i><span>Log List</span>
+        </a>
+
+        <a href="<?= APP_URL ?>/executive/consulting/client_report.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/client_report') ?>">
+            <i class="fas fa-chart-line"></i><span>Client Reports</span>
+        </a>
+        <a href="<?= APP_URL ?>/executive/consulting/staff_report.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/staff_report') ?>">
+            <i class="fas fa-chart-bar"></i><span>Staff Reports</span>
+        </a>
         <!-- ── Reports ── -->
         <div class="nav-section-label">Reports</div>
 

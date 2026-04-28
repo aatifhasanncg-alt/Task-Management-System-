@@ -66,14 +66,28 @@ function updateActiveAt(PDO $db, int $userId): void {
 // ── CURRENT USER ─────────────────────────────────────────────
 
 function currentUser(): array {
-    $user = $_SESSION['user'] ?? [];
-    return [
-        'id'        => $user['id']        ?? 0,
-        'username'  => $user['username']  ?? 'admin',
-        'full_name' => $user['full_name'] ?? 'Admin User',
-        'role'      => $user['role']      ?? 'admin',
-        'role_id'   => $user['role_id']   ?? 1,
-    ];
+    $sessionUser = $_SESSION['user'] ?? [];
+    $uid = $sessionUser['id'] ?? 0;
+
+    if (!$uid) return [];
+
+    try {
+        $db = getDB();
+        $st = $db->prepare("
+            SELECT u.id, u.username, u.full_name,
+                   u.role_id, r.role_name,
+                   u.branch_id, u.department_id
+            FROM users u
+            LEFT JOIN roles r ON r.id = u.role_id
+            WHERE u.id = ?
+        ");
+        $st->execute([$uid]);
+        $user = $st->fetch(PDO::FETCH_ASSOC);
+
+        return $user ?: [];
+    } catch (Exception $e) {
+        return [];
+    }
 }
 
 function isExecutive(): bool { return ($_SESSION['role'] ?? '') === 'executive'; }
@@ -143,7 +157,46 @@ function shouldPromptPasswordChange(): bool {
 }
 
 // ── ADMIN SCOPE CHECKS ────────────────────────────────────────
-
+function requireExecutiveOrBM(): void
+{
+    // Allow if user is executive role
+    if (isExecutive()) return;
+ 
+    // Allow if user is admin AND belongs to CORE dept (Branch Manager)
+    if (function_exists('isAdmin') && isAdmin()) {
+        $db   = getDB();
+        $user = currentUser();
+        $stmt = $db->prepare("
+            SELECT d.dept_code
+            FROM users u
+            LEFT JOIN departments d ON d.id = u.department_id
+            WHERE u.id = ?
+        ");
+        $stmt->execute([$user['id'] ?? 0]);
+        $deptCode = $stmt->fetchColumn() ?: '';
+        if ($deptCode === 'CORE') return;
+    }
+ 
+    // Not authorized
+    http_response_code(403);
+    // Try to show a nice error page if header.php exists
+    if (file_exists(__DIR__ . '/../includes/header.php')) {
+        $pageTitle = 'Access Denied';
+        include __DIR__ . '/../includes/header.php';
+        echo '<div class="app-wrapper"><div class="main-content" style="display:flex;align-items:center;justify-content:center;height:100vh;">
+            <div style="text-align:center;color:#9ca3af;">
+                <i class="fas fa-lock fa-3x mb-3 d-block" style="color:#ef4444;"></i>
+                <h4 style="color:#1f2937;">Access Denied</h4>
+                <p>You do not have permission to view this page.</p>
+                <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">Go Back</a>
+            </div>
+        </div></div>';
+        include __DIR__ . '/../includes/footer.php';
+    } else {
+        echo '<h1>403 Access Denied</h1><p>You do not have permission to view this page.</p>';
+    }
+    exit;
+}
 function adminCanAccessDept(int $deptId): bool {
     if (isExecutive()) return true;
     return in_array($deptId, $_SESSION['allowed_depts'] ?? [], true);

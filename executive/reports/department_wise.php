@@ -34,7 +34,7 @@ $deptStmt = $db->prepare("
         AND t.is_active = 1
         AND t.created_at BETWEEN ? AND ?
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE d.is_active = 1 AND d.dept_name != 'Core Admin'
+    WHERE d.is_active = 1 AND d.dept_name != 'Core Admin' AND LOWER(d.dept_name) NOT LIKE '%consult%'
     GROUP BY d.id, d.dept_name, d.color, d.icon
     ORDER BY total DESC
 ");
@@ -219,7 +219,7 @@ a.status-tile:hover {
                                 // Link → executive tasks list filtered by dept + status
                                 $tileLink = APP_URL . '/executive/tasks/index.php?'
                                     . http_build_query([
-                                        'dept'      => strtolower($d['dept_code']),
+                                        'dept_id' => (int)$d['dept_id'],
                                         'status'    => $sr['status_name'],
                                         'date_from' => $fromDate,
                                         'date_to'   => $toDate,

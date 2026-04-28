@@ -44,10 +44,10 @@ $companiesStmt = $db->prepare("
            COALESCE(pan_number,'')   AS pan_number,
            COALESCE(company_code,'') AS company_code
     FROM companies
-    WHERE is_active=1 AND branch_id = ?
+    WHERE is_active=1 
     ORDER BY company_name
 ");
-$companiesStmt->execute([$adminUser['branch_id']]);
+$companiesStmt->execute();
 $companies = $companiesStmt->fetchAll();
 
 
@@ -55,29 +55,41 @@ $allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 AND dept_nam
 
 // Transfer staff — admins only (exclude CORE), filtered by dept in JS
 $transferStaff = $db->query("
-    SELECT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name, d.dept_code
+    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name, d.dept_code
     FROM users u
     LEFT JOIN branches b    ON b.id = u.branch_id
     LEFT JOIN departments d ON d.id = u.department_id
     LEFT JOIN roles r       ON r.id = u.role_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
     WHERE r.role_name = 'admin'
       AND u.is_active = 1
-      AND d.dept_code != 'CORE'
+      AND (
+          d.dept_code != 'CORE'
+          OR EXISTS (
+              SELECT 1 FROM user_department_assignments uda2
+              JOIN departments d2 ON d2.id = uda2.department_id
+              WHERE uda2.user_id = u.id AND d2.dept_code != 'CORE'
+          )
+      )
     ORDER BY u.full_name
 ")->fetchAll();
 
 // All STAFF in this task's department (any branch) for assignment
 $deptStaff = $db->prepare("
-    SELECT u.id, u.full_name, u.employee_id, b.branch_name
+    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name
     FROM users u
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
     WHERE r.role_name IN('staff','admin')
-      AND u.is_active  = 1
-      AND u.department_id = ?
+      AND u.is_active = 1
+      AND (
+          u.department_id = ?
+          OR uda.department_id = ?
+      )
     ORDER BY u.full_name
 ");
-$deptStaff->execute([$task['department_id']]);
+$deptStaff->execute([$task['department_id'], $task['department_id']]);
 $deptStaff = $deptStaff->fetchAll();
 
 // Fiscal years
@@ -262,7 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ")->execute([
             $task['title'],
-            $task['description'],
+            $transferNote ?: $task['description'],   // transfer note becomes new task description
             $newDeptId,
             $newDeptId,
             $task['branch_id'],
@@ -273,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
             $task['priority'],
             $task['due_date'],
             $task['fiscal_year'],
-            $transferNote ?: $task['remarks'],
+            $task['remarks'],
             null,   // audit_nature reset for new dept
             null,   // auditor_id reset
             $id,    // parent_task_id — links back to original
@@ -282,7 +294,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
         $newTaskNumber = $db->query("SELECT task_number FROM tasks WHERE id = {$newTaskId}")->fetchColumn();
 
         // ── 2. Mark original task as Completed (dept finished their work) ─────────
-        $completedStatusId = $db->query("SELECT id FROM task_status WHERE status_name='Completed' LIMIT 1")->fetchColumn();
+        $completedStatusId = $db->query("SELECT id FROM task_status WHERE status_name='Done' LIMIT 1")->fetchColumn();
         $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")
            ->execute([$completedStatusId, $id]);
 
@@ -350,6 +362,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
                         'fiscal_year' => $task['fiscal_year'] ?? '',
                         'company'     => $task['company_name'] ?? '',
                         'priority'    => $task['priority'] ?? '',
+                        'url'         => $taskUrl,     
                     ],
                     'remarks' => $transferNote,
                 ]
@@ -357,7 +370,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
         }
 
         logActivity("Task {$task['task_number']} transferred → new task {$newTaskNumber} in {$newDept['dept_name']}", 'tasks');
-       setFlash('success', "New task <strong>{$newTaskNumber}</strong> created in {$newDept['dept_name']}. Original task marked as Completed.");
+       setFlash('success', "New task {$newTaskNumber} created in {$newDept['dept_name']}. Original task marked as Completed.");
         header("Location: view.php?id={$id}"); exit;
     }
 }

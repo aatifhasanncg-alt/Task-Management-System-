@@ -51,6 +51,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         unset($_SESSION['2fa_pending_user'], $_SESSION['2fa_pending_role']);
 
+        // Check if consulting department for redirect
+        $isConsulting = false;
+        if (!empty($user['department_id'])) {
+            $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+            $deptChk->execute([$user['department_id']]);
+            $deptRow = $deptChk->fetch();
+            $isConsulting = ($deptRow && $deptRow['dept_code'] === 'CON');
+        }
+
         if ($_SESSION['role'] === 'admin') {
             $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id=?");
             $dSt->execute([$user['id']]);
@@ -65,9 +74,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         logActivity('2FA Login', 'auth');
         $_SESSION['role'] = $user['role_name'];
         $role = strtolower($user['role_name']);
-                setRememberToken($user['id'], true);
+        setRememberToken($user['id'], true);
         session_regenerate_id(true);
-        header('Location: ../' . $role . '/dashboard/');
+        if ($isConsulting && $role === 'admin') {
+            header('Location: ../admin/planning/index.php');
+        } elseif ($isConsulting && $role === 'staff') {
+            header('Location: ../staff/planning/index.php');
+        } else {
+            header('Location: ../' . $role . '/dashboard/');
+        }
         exit;
     } else {
         $errors[] = 'Invalid authentication code. Please try again.';

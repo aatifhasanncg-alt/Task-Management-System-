@@ -27,7 +27,11 @@ if ($filterB) {
     $params[] = $filterB;
 }
 if ($filterD) {
-    $where[] = 'u.department_id = ?';
+    $where[] = '(u.department_id = ? OR EXISTS (
+        SELECT 1 FROM user_department_assignments uda
+        WHERE uda.user_id = u.id AND uda.department_id = ?
+    ))';
+    $params[] = $filterD;
     $params[] = $filterD;
 }
 if ($filterR) {
@@ -74,6 +78,70 @@ $userStmt = $db->prepare("
 $userStmt->execute($params);
 $staffList = $userStmt->fetchAll();
 
+// Fetch all statuses for per-dept task breakdown
+$allStatuses = $db->query("
+    SELECT id, status_name, color, bg_color
+    FROM task_status
+    WHERE status_name != 'Corporate Team'
+    ORDER BY id
+")->fetchAll();
+
+// Fetch UDA dept names + per-dept task stats per user
+$staffIds = array_column($staffList, 'id');
+$udaByUser = [];  // user_id => [['dept_name'=>..., 'dept_id'=>...], ...]
+$deptStatsByUser = []; // user_id => [dept_id => [status_name => count]]
+
+if (!empty($staffIds)) {
+    $inList = implode(',', array_fill(0, count($staffIds), '?'));
+
+    // UDA dept names
+    $udaStmt = $db->prepare("
+        SELECT uda.user_id, d.id AS dept_id, d.dept_name, d.color
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id IN ({$inList})
+        ORDER BY d.dept_name
+    ");
+    $udaStmt->execute($staffIds);
+    foreach ($udaStmt->fetchAll() as $row) {
+        $udaByUser[$row['user_id']][] = $row;
+    }
+
+    // Per-dept task stats for each user (primary dept + UDA depts)
+    $taskStatStmt = $db->prepare("
+        SELECT
+            t.assigned_to AS user_id,
+            t.department_id,
+            d.dept_name,
+            d.color AS dept_color,
+            ts.status_name,
+            ts.color AS status_color,
+            ts.bg_color AS status_bg,
+            COUNT(DISTINCT t.id) AS cnt
+        FROM tasks t
+        JOIN departments d  ON d.id  = t.department_id
+        JOIN task_status ts ON ts.id = t.status_id
+        WHERE t.is_active = 1
+          AND t.assigned_to IN ({$inList})
+          AND ts.status_name != 'Corporate Team'
+        GROUP BY t.assigned_to, t.department_id, d.dept_name, d.color,
+                 ts.status_name, ts.color, ts.bg_color
+        ORDER BY d.dept_name, ts.id
+    ");
+    $taskStatStmt->execute($staffIds);
+    foreach ($taskStatStmt->fetchAll() as $row) {
+        $uid = $row['user_id'];
+        $did = $row['department_id'];
+        $deptStatsByUser[$uid][$did]['dept_name'] = $row['dept_name'];
+        $deptStatsByUser[$uid][$did]['dept_color'] = $row['dept_color'];
+        $deptStatsByUser[$uid][$did]['statuses'][$row['status_name']] = [
+            'cnt' => (int) $row['cnt'],
+            'color' => $row['status_color'],
+            'bg' => $row['status_bg'],
+        ];
+    }
+}
+
 $allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 $allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 AND dept_name!='CORE ADMIN' ORDER BY dept_name")->fetchAll();
 
@@ -82,7 +150,7 @@ include '../../includes/header.php';
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
-        <?php include '../../includes/topbar.php'; ?>
+        <?php require_once '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
 
             <div class="page-hero">
@@ -166,8 +234,9 @@ include '../../includes/header.php';
                                 <th>Staff Member</th>
                                 <th>Role</th>
                                 <th>Branch</th>
-                                <th>Department</th>
+                                <th>Departments</th>
                                 <th>Tasks</th>
+                                <th style="min-width:220px;">Per-Dept Task Breakdown</th>
                                 <th>Completion</th>
                                 <th>Status</th>
                                 <th></th>
@@ -219,10 +288,73 @@ include '../../includes/header.php';
                                         </span>
                                     </td>
                                     <td style="font-size:.83rem;"><?= htmlspecialchars($u['branch_name'] ?? '—') ?></td>
-                                    <td style="font-size:.83rem;"><?= htmlspecialchars($u['dept_name'] ?? '—') ?></td>
+                                    <td style="font-size:.82rem;">
+                                        <!-- Primary dept -->
+                                        <span style="background:#fef3c7;color:#92400e;padding:.15rem .5rem;
+                 border-radius:99px;font-size:.7rem;font-weight:700;
+                 display:inline-block;margin-bottom:.2rem;">
+                                            ★ <?= htmlspecialchars($u['dept_name'] ?? '—') ?>
+                                        </span>
+                                        <!-- UDA depts -->
+                                        <?php foreach ($udaByUser[$u['id']] ?? [] as $uda): ?>
+                                            <?php if ($uda['dept_id'] != $u['department_id']): ?>
+                                                <span style="background:#eff6ff;color:#3b82f6;padding:.15rem .5rem;
+                     border-radius:99px;font-size:.68rem;font-weight:600;
+                     display:inline-block;margin-bottom:.2rem;">
+                                                    <?= htmlspecialchars($uda['dept_name']) ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </td>
                                     <td>
                                         <span class="status-badge status-wip"><?= $u['task_total'] ?> total</span>
                                         <span class="status-badge status-done ms-1"><?= $u['task_done'] ?> done</span>
+                                    </td>
+                                    <!-- Per-dept breakdown -->
+                                    <td style="min-width:220px;padding:.5rem .75rem;">
+                                        <?php
+                                        $userDeptStats = $deptStatsByUser[$u['id']] ?? [];
+                                        if (empty($userDeptStats)):
+                                            ?>
+                                            <span style="font-size:.72rem;color:#d1d5db;">No tasks</span>
+                                        <?php else: ?>
+                                            <?php foreach ($userDeptStats as $did => $deptData):
+                                                $deptTotal = array_sum(array_column($deptData['statuses'], 'cnt'));
+                                                $doneCnt = 0;
+                                                foreach ($deptData['statuses'] as $sn => $sv) {
+                                                    if (strtolower($sn) === 'done')
+                                                        $doneCnt = $sv['cnt'];
+                                                }
+                                                $donePct = $deptTotal > 0 ? round(($doneCnt / $deptTotal) * 100) : 0;
+                                                $dColor = $deptData['dept_color'] ?: '#9ca3af';
+                                                ?>
+                                                <div style="margin-bottom:.6rem;background:#f9fafb;border-radius:8px;
+                    padding:.45rem .6rem;border-left:3px solid <?= htmlspecialchars($dColor) ?>;">
+                                                    <div style="font-size:.7rem;font-weight:700;color:#374151;margin-bottom:.3rem;">
+                                                        <?= htmlspecialchars($deptData['dept_name']) ?>
+                                                        <span
+                                                            style="font-weight:400;color:#9ca3af;margin-left:.3rem;">(<?= $deptTotal ?>)</span>
+                                                    </div>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.2rem;margin-bottom:.3rem;">
+                                                        <?php foreach ($deptData['statuses'] as $sn => $sv): ?>
+                                                            <span style="background:<?= htmlspecialchars($sv['bg'] ?: '#f3f4f6') ?>;
+                             color:<?= htmlspecialchars($sv['color'] ?: '#6b7280') ?>;
+                             font-size:.65rem;font-weight:700;
+                             padding:.1rem .4rem;border-radius:99px;">
+                                                                <?= htmlspecialchars($sn) ?>: <?= $sv['cnt'] ?>
+                                                            </span>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                    <div style="background:#e5e7eb;border-radius:99px;height:4px;overflow:hidden;">
+                                                        <div style="width:<?= $donePct ?>%;height:100%;border-radius:99px;
+                             background:<?= htmlspecialchars($dColor) ?>;"></div>
+                                                    </div>
+                                                    <div style="font-size:.62rem;color:#9ca3af;text-align:right;margin-top:.1rem;">
+                                                        <?= $donePct ?>% done
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
                                     </td>
                                     <td style="min-width:120px;">
                                         <div class="d-flex align-items-center gap-2">
@@ -246,19 +378,19 @@ include '../../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                         
+
                                         <div class="d-flex gap-1">
-                                            <a href="<?= APP_URL ?>/executive/staff/view.php?id=<?= $u['id'] ?>" class="btn btn-sm btn-outline-secondary"
-                                                title="View">
+                                            <a href="<?= APP_URL ?>/executive/staff/view.php?id=<?= $u['id'] ?>"
+                                                class="btn btn-sm btn-outline-secondary" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
                                             <?php if (isCoreAdmin()): ?>
-                                            <a href="<?= APP_URL ?>/executive/staff/edit.php?id=<?= $u['id'] ?>"
-                                                class="btn btn-sm btn-outline-warning" title="Edit">
-                                                <i class="fas fa-pen"></i>
-                                            </a>
-                                        </div>
-                                        <?php endif;?>
+                                                <a href="<?= APP_URL ?>/executive/staff/edit.php?id=<?= $u['id'] ?>"
+                                                    class="btn btn-sm btn-outline-warning" title="Edit">
+                                                    <i class="fas fa-pen"></i>
+                                                </a>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

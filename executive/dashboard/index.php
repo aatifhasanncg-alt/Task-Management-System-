@@ -56,7 +56,7 @@ $deptTasks = $db->query("
     FROM departments d
     LEFT JOIN tasks t        ON t.department_id = d.id AND t.is_active = 1
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE d.is_active = 1 AND d.dept_name != 'Core Admin'
+    WHERE d.is_active = 1 AND d.dept_name NOT IN ('Core Admin', 'Consulting')
     GROUP BY d.id, d.dept_name, d.color, d.icon
     ORDER BY total DESC
 ")->fetchAll();

@@ -47,10 +47,15 @@ $__typeMap = [
     'system' => ['fa-gear', '#6b7280', '#f3f4f6'],
     'reminder' => ['fa-bell', '#ef4444', '#fee2e2'],
 ];
+
 $reminders = $db->prepare("
-    SELECT n.*, t.task_number
+    SELECT n.*, 
+           t.task_number,
+           t.id AS task_id
     FROM notifications n
-    LEFT JOIN tasks t ON t.id = REPLACE(n.link, '" . APP_URL . "/admin/tasks/view.php?id=', '')
+    LEFT JOIN tasks t ON t.id = CAST(
+        SUBSTRING_INDEX(n.link, '?id=', -1) AS UNSIGNED
+    )
     WHERE n.user_id = ?
       AND n.type = 'reminder'
       AND n.is_read = 0
@@ -58,16 +63,37 @@ $reminders = $db->prepare("
 ");
 $reminders->execute([$user['id']]);
 $reminders = $reminders->fetchAll(PDO::FETCH_ASSOC);
-$__viewerRole = $__u['role'] ?? 'staff';
-function __rewriteLink(string $link, string $role): string
-{
-    if (empty($link))
-        return $link;
-    return preg_replace(
-        '#/(staff|admin|executive)/tasks/(view|index)\.php#',
-        '/' . $role . '/tasks/$2.php',
-        $link
-    ) ?: $link;
+$__viewerRole = $__u['role_name'] ?? 'staff';
+$planReminders = [];
+if (($__viewerRole === 'staff') || ($__viewerRole === 'admin') || ($__viewerRole === 'executive')) {
+    // NEW — correct table name
+    $planStmt = $db->prepare("
+        SELECT n.*, 
+            wp.id AS plan_id
+        FROM notifications n
+        LEFT JOIN work_plans wp ON wp.id = CAST(
+            SUBSTRING_INDEX(n.link, '?id=', -1) AS UNSIGNED
+        )
+        WHERE n.user_id = ?
+        AND n.type = 'plan'
+        AND n.is_read = 0
+        ORDER BY n.created_at DESC
+    ");
+    $planStmt->execute([$user['id']]);
+    $planReminders = $planStmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+if (!function_exists('__rewriteLink')) {
+    function __rewriteLink(string $link, string $role): string
+    {
+        if (empty($link)) return $link;
+
+        return preg_replace(
+            '#/(staff|admin|executive)/tasks/(view|index)\.php#',
+            '/' . $role . '/tasks/$2.php',
+            $link
+        ) ?: $link;
+    }
 }
 ?>
 
@@ -91,7 +117,7 @@ function __rewriteLink(string $link, string $role): string
             <div class="d-flex gap-2 justify-content-center">
                 <?php
                 $baseUrl = rtrim(APP_URL, '/');
-                $rolePath = $__u['role'] === 'admin' ? 'admin' : ($__u['role'] === 'staff' ? 'staff' : ($__u['role'] ?? 'staff'));
+                $rolePath = $__u['role_name'] === 'admin' ? 'admin' : ($__u['role_name'] === 'staff' ? 'staff' : ($__u['role_name'] ?? 'staff'));
                 ?>
                 <a href="<?= $baseUrl ?>/<?= $rolePath ?>/profile/index.php" style="background:#c9a84c;color:#fff;border:none;border-radius:8px;
                       padding:.55rem 1.25rem;font-size:.85rem;font-weight:600;
@@ -211,7 +237,101 @@ function __rewriteLink(string $link, string $role): string
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
+                    
                 </div>
+                <?php if (!empty($planReminders)): ?>
+                        <div id="plan-reminder-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);
+         z-index:999998;display:flex;align-items:center;justify-content:center;padding:1rem;">
+
+                            <div style="width:100%;max-width:460px;background:#fff;border-radius:16px;
+                box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
+
+                                <!-- Header -->
+                                <div style="background:#eff6ff;border-bottom:1px solid #bfdbfe;
+                    padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
+                                    <div style="display:flex;align-items:center;gap:.6rem;">
+                                        <div style="width:36px;height:36px;background:#3b82f6;border-radius:50%;
+                            display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-calendar-check" style="color:#fff;font-size:.9rem;"></i>
+                                        </div>
+                                        <div>
+                                            <div style="font-size:.9rem;font-weight:700;color:#1e40af;">Plan Reminders</div>
+                                            <div style="font-size:.72rem;color:#1d4ed8;">
+                                                <?= count($planReminders) ?> plan
+                                                <?= count($planReminders) > 1 ? 's' : '' ?>
+                                                need
+                                                <?= count($planReminders) === 1 ? 's' : '' ?> attention
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button onclick="closePlanModal()" style="background:none;border:none;cursor:pointer;color:#1e40af;
+                           font-size:1.1rem;padding:.25rem;line-height:1;opacity:.7;" title="Close">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+
+                                <!-- Body -->
+                                <div style="max-height:380px;overflow-y:auto;padding:1rem;">
+                                    <?php foreach ($planReminders as $pr):
+                                        $planLink = __rewriteLink($pr['link'] ?? '', $__viewerRole);
+                                        ?>
+                                        <div style="padding:.85rem;border:1px solid #bfdbfe;border-radius:10px;
+                            margin-bottom:.75rem;background:#eff6ff;
+                            border-left:4px solid #3b82f6;">
+
+                                            <div style="font-size:.85rem;font-weight:700;color:#111827;margin-bottom:.2rem;">
+                                                <?= htmlspecialchars($pr['title']) ?>
+                                            </div>
+
+                                            <?php if (!empty($pr['plan_id'])): ?>
+                                                <div style="font-size:.7rem;background:#dbeafe;color:#1e40af;
+                                    display:inline-block;padding:.1rem .45rem;
+                                    border-radius:99px;margin-bottom:.35rem;font-weight:600;">
+                                                    <i class="fas fa-hashtag" style="font-size:.6rem;"></i>
+                                                    Plan #
+                                                    <?= htmlspecialchars($pr['plan_id']) ?>
+                                                </div>
+                                            <?php endif; ?>
+
+                                            <div style="font-size:.8rem;color:#6b7280;margin-bottom:.65rem;line-height:1.5;">
+                                                <?= htmlspecialchars($pr['message']) ?>
+                                            </div>
+
+                                            <div style="display:flex;gap:.5rem;">
+                                                <?php if (!empty($planLink)): ?>
+                                                    <a href="<?= htmlspecialchars($planLink) ?>" style="background:#3b82f6;color:#fff;padding:.35rem .85rem;
+                                          border-radius:6px;text-decoration:none;font-size:.8rem;font-weight:600;">
+                                                        <i class="fas fa-arrow-right me-1"></i>Open Plan
+                                                    </a>
+                                                <?php endif; ?>
+
+                                                <button onclick="markPlanRead(<?= $pr['id'] ?>, this)" style="background:#f3f4f6;border:none;color:#6b7280;
+                                           padding:.35rem .85rem;border-radius:6px;
+                                           cursor:pointer;font-size:.8rem;font-weight:600;">
+                                                    <i class="fas fa-check me-1"></i>Mark Read
+                                                </button>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+
+                                <!-- Footer -->
+                                <div style="padding:.75rem 1.25rem;border-top:1px solid #f3f4f6;
+                    display:flex;justify-content:flex-end;gap:.5rem;background:#fafafa;">
+                                    <button onclick="markAllPlanRemindersRead()" style="background:#3b82f6;color:#fff;border:none;
+                               padding:.4rem 1rem;border-radius:7px;
+                               cursor:pointer;font-size:.8rem;font-weight:600;">
+                                        <i class="fas fa-check-double me-1"></i>Mark All Read
+                                    </button>
+                                    <button onclick="closePlanModal()" style="background:#f3f4f6;color:#6b7280;border:none;
+                               padding:.4rem 1rem;border-radius:7px;
+                               cursor:pointer;font-size:.8rem;font-weight:600;">
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
 
                 <!-- Footer -->
                 <div style="padding:.6rem 1rem;border-top:1px solid #f3f4f6;text-align:center;">
@@ -240,7 +360,7 @@ function __rewriteLink(string $link, string $role): string
                         <?= htmlspecialchars($firstName) ?>
                     </div>
                     <div style="font-size:.7rem;color:#9ca3af;text-transform:capitalize;">
-                        <?= htmlspecialchars($__u['role'] ?? 'user') ?>
+                        <?= htmlspecialchars($__u['role_name'] ?? 'user') ?>
                     </div>
                 </div>
                 <i class="fas fa-chevron-down ms-1" style="font-size:.65rem;color:#9ca3af;"></i>
@@ -250,21 +370,39 @@ function __rewriteLink(string $link, string $role): string
                     <h6 class="dropdown-header"><?= htmlspecialchars($name) ?></h6>
                 </li>
                 <?php
-                $baseUrl = rtrim(APP_URL, '/');
-                $rolePath = $__u['role'] === 'admin' ? 'admin'
-                    : ($__u['role'] === 'staff' ? 'staff' : ($__u['role'] ?? 'staff'));
+                $role = $__u['role_name'] ?? 'staff';
+
+                // safe folder mapping
+                $rolePath = match ($role) {
+                    'admin' => 'admin',
+                    'executive' => 'executive',
+                    default => 'staff'
+                };
+
+                $profileUrl = APP_URL . "/{$rolePath}/profile/index.php";
                 ?>
                 <li>
-                    <a class="dropdown-item" href="<?= $baseUrl ?>/<?= $rolePath ?>/profile/index.php">
+                    <a class="dropdown-item" href="<?= $profileUrl ?>">
                         <i class="fas fa-user me-2 text-warning"></i>My Profile
                     </a>
                 </li>
-                <?php if ($__u['role'] === 'staff'): ?>
+                <?php if ($__u['role_name'] === 'staff'): ?>
+
+                    <?php if (!empty($__u['dept_id']) && (int) $__u['dept_id'] === 9): ?>
+                        <li>
+                            <a class="dropdown-item" href="<?= APP_URL ?>/staff/planning/today_tomorrow.php">
+                                <i class="fas fa-calendar-day me-2 text-warning"></i>Today's Plan
+                            </a>
+                        </li>
+                    <?php endif; ?>
+                <?php else: ?>
+
                     <li>
-                        <a class="dropdown-item" href="<?= $baseUrl ?>/staff/tasks/today.php">
+                        <a class="dropdown-item" href="<?= APP_URL ?>/staff/tasks/today.php">
                             <i class="fas fa-list-check me-2 text-warning"></i>Today's Tasks
                         </a>
                     </li>
+
                 <?php endif; ?>
                 <li>
                     <hr class="dropdown-divider">
@@ -280,47 +418,95 @@ function __rewriteLink(string $link, string $role): string
     </div><!-- topbar-right -->
 </div><!-- topbar -->
 <?php if (!empty($reminders)): ?>
-<div id="followup-modal"
-     style="position:fixed;inset:0;background:rgba(0,0,0,.6);
-     z-index:999999;display:flex;align-items:center;justify-content:center;">
+    <div id="followup-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);
+     z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem;">
 
-    <div style="width:420px;background:#fff;border-radius:14px;padding:1.5rem;">
+        <div style="width:100%;max-width:460px;background:#fff;border-radius:16px;
+                box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
 
-        <h4 style="margin-bottom:1rem;">📌 Follow-up Reminder</h4>
-
-        <?php foreach ($reminders as $r): ?>
-
-            <?php $taskLink = $r['link']; ?>
-
-            <div style="padding:.8rem;border:1px solid #eee;border-radius:10px;margin-bottom:10px;">
-
-                <b><?= htmlspecialchars($r['title']) ?></b>
-
-                <div style="font-size:.8rem;color:#555;margin-top:5px;">
-                    <?= htmlspecialchars($r['message']) ?>
+            <!-- Header -->
+            <div style="background:#fffbeb;border-bottom:1px solid #fde68a;
+                    padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:.6rem;">
+                    <div style="width:36px;height:36px;background:#f59e0b;border-radius:50%;
+                            display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                        <i class="fas fa-bell" style="color:#fff;font-size:.9rem;"></i>
+                    </div>
+                    <div>
+                        <div style="font-size:.9rem;font-weight:700;color:#92400e;">Follow-up Reminders</div>
+                        <div style="font-size:.72rem;color:#b45309;">
+                            <?= count($reminders) ?> task<?= count($reminders) > 1 ? 's' : '' ?>
+                            need<?= count($reminders) === 1 ? 's' : '' ?> attention
+                        </div>
+                    </div>
                 </div>
-
-                <div style="margin-top:10px;display:flex;gap:8px;">
-
-                    <a href="<?= $taskLink ?>"
-                       style="background:#c9a84c;color:#fff;
-                       padding:6px 10px;border-radius:6px;text-decoration:none;">
-                        Open Task
-                    </a>
-
-                    <button onclick="markReminderRead(<?= $r['id'] ?>)"
-                            style="background:#f3f4f6;border:none;
-                            padding:6px 10px;border-radius:6px;cursor:pointer;">
-                        Mark as Read
-                    </button>
-
-                </div>
+                <button onclick="closeFollowupModal()" style="background:none;border:none;cursor:pointer;color:#92400e;
+                           font-size:1.1rem;padding:.25rem;line-height:1;opacity:.7;" title="Close">
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
 
-        <?php endforeach; ?>
+            <!-- Body -->
+            <div style="max-height:380px;overflow-y:auto;padding:1rem;">
+                <?php foreach ($reminders as $r):
+                    $taskLink = __rewriteLink($r['link'] ?? '', $__viewerRole);
+                    ?>
+                    <div style="padding:.85rem;border:1px solid #fde68a;border-radius:10px;
+                            margin-bottom:.75rem;background:#fffdf5;
+                            border-left:4px solid #f59e0b;">
 
+                        <div style="font-size:.85rem;font-weight:700;color:#111827;margin-bottom:.2rem;">
+                            <?= htmlspecialchars($r['title']) ?>
+                        </div>
+
+                        <?php if (!empty($r['task_number'])): ?>
+                            <div style="font-size:.7rem;background:#fef3c7;color:#92400e;
+                                    display:inline-block;padding:.1rem .45rem;
+                                    border-radius:99px;margin-bottom:.35rem;font-weight:600;">
+                                <i class="fas fa-hashtag" style="font-size:.6rem;"></i>
+                                <?= htmlspecialchars($r['task_number']) ?>
+                            </div>
+                        <?php endif; ?>
+
+                        <div style="font-size:.8rem;color:#6b7280;margin-bottom:.65rem;line-height:1.5;">
+                            <?= htmlspecialchars($r['message']) ?>
+                        </div>
+
+                        <div style="display:flex;gap:.5rem;">
+                            <?php if (!empty($taskLink)): ?>
+                                <a href="<?= htmlspecialchars($taskLink) ?>" style="background:#c9a84c;color:#fff;padding:.35rem .85rem;
+                                      border-radius:6px;text-decoration:none;font-size:.8rem;
+                                      font-weight:600;">
+                                    <i class="fas fa-arrow-right me-1"></i>Open Task
+                                </a>
+                            <?php endif; ?>
+
+                            <button onclick="markReminderRead(<?= $r['id'] ?>, this)" style="background:#f3f4f6;border:none;color:#6b7280;
+                                       padding:.35rem .85rem;border-radius:6px;
+                                       cursor:pointer;font-size:.8rem;font-weight:600;">
+                                <i class="fas fa-check me-1"></i>Mark Read
+                            </button>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- Footer -->
+            <div style="padding:.75rem 1.25rem;border-top:1px solid #f3f4f6;
+                    display:flex;justify-content:flex-end;gap:.5rem;background:#fafafa;">
+                <button onclick="markAllRemindersRead()" style="background:#f59e0b;color:#fff;border:none;
+                           padding:.4rem 1rem;border-radius:7px;
+                           cursor:pointer;font-size:.8rem;font-weight:600;">
+                    <i class="fas fa-check-double me-1"></i>Mark All Read
+                </button>
+                <button onclick="closeFollowupModal()" style="background:#f3f4f6;color:#6b7280;border:none;
+                           padding:.4rem 1rem;border-radius:7px;
+                           cursor:pointer;font-size:.8rem;font-weight:600;">
+                    Dismiss
+                </button>
+            </div>
+        </div>
     </div>
-</div>
 <?php endif; ?>
 <script>
     // ── Topbar date ───────────────────────────────────────────────
@@ -340,17 +526,67 @@ function __rewriteLink(string $link, string $role): string
             method: "POST",
             credentials: "same-origin"
         })
-        .then(res => res.json())
-        .then(data => console.log(data))
-        .catch(err => console.error(err));
+            .then(res => res.json())
+            .then(data => console.log(data))
+            .catch(err => console.error(err));
     }
-    function markReminderRead(id) {
+    function closeFollowupModal() {
+        const m = document.getElementById('followup-modal');
+        if (m) m.style.display = 'none';
+    }
+    function closePlanModal() {
+        const m = document.getElementById('plan-reminder-modal');
+        if (m) m.style.display = 'none';
+    }
+
+    function markPlanRead(id, btn) {
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
         fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
             method: "POST",
-            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: "id=" + id
         }).then(() => {
-            location.reload(); // modal updates automatically
+            const card = btn ? btn.closest('div[style*="border-left:4px"]') : null;
+            if (card) card.remove();
+            const remaining = document.querySelectorAll('#plan-reminder-modal div[style*="border-left:4px"]');
+            if (remaining.length === 0) closePlanModal();
+            setBadge(Math.max(0, (parseInt(document.getElementById('notif-count')?.textContent) || 1) - 1));
+        });
+    }
+
+    function markAllPlanRemindersRead() {
+        fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
+            method: "POST"
+        }).then(() => {
+            closePlanModal();
+            setBadge(0);
+        });
+    }
+   
+    function markReminderRead(id, btn) {
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+        fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "id=" + id
+        }).then(() => {
+            // Remove just this reminder card
+            const card = btn ? btn.closest('div[style*="border-left:4px"]') : null;
+            if (card) card.remove();
+            // If no more cards, close the modal
+            const remaining = document.querySelectorAll('#followup-modal div[style*="border-left:4px"]');
+            if (remaining.length === 0) closeFollowupModal();
+            // Sync badge
+            setBadge(Math.max(0, (parseInt(document.getElementById('notif-count')?.textContent) || 1) - 1));
+        });
+    }
+
+    function markAllRemindersRead() {
+        fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
+            method: "POST"
+        }).then(() => {
+            closeFollowupModal();
+            setBadge(0);
         });
     }
     // ── Badge helper — single source of truth ────────────────────
@@ -420,43 +656,7 @@ function __rewriteLink(string $link, string $role): string
         }, 5000);
     }
 
-    // ── Mark all read ─────────────────────────────────────────────
-    function markAllReadDropdown(btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>';
 
-        fetch('<?= APP_URL ?>/ajax/mark_notification_read.php', { method: 'POST' })
-            .then(r => {
-                // Guard against non-JSON response (redirect/HTML error page)
-                const ct = r.headers.get('content-type') || '';
-                if (!ct.includes('application/json')) {
-                    throw new Error('Non-JSON response: ' + r.status);
-                }
-                return r.json();
-            })
-            .then(data => {
-                if (!data.ok) {
-                    console.error('mark-all-read error:', data.msg);
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-check-double me-1"></i>Mark all read';
-                    return;
-                }
-                // Reset dropdown row styles
-                document.querySelectorAll('.notif-drop-item').forEach(el => {
-                    el.style.background = '#fff';
-                    el.style.borderLeftColor = 'transparent';
-                });
-                document.querySelectorAll('.ndrop-dot').forEach(el => el.remove());
-                // Zero badge everywhere
-                setBadge(0);
-                btn.innerHTML = '<i class="fas fa-check me-1"></i>All read';
-            })
-            .catch(err => {
-                console.error('mark-all-read fetch failed:', err);
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-check-double me-1"></i>Mark all read';
-            });
-    }
 
     // ── Poll for new notifications ────────────────────────────────
     async function fetchNotifications() {
@@ -516,4 +716,14 @@ function __rewriteLink(string $link, string $role): string
 
     fetchNotifications();
     setInterval(fetchNotifications, 15000);
+    // Check and generate follow-up reminders silently
+    fetch('<?= APP_URL ?>/ajax/check_followup_reminders.php', {
+        method: 'GET',
+        credentials: 'same-origin'
+    }).catch(() => { });
+
+    fetch('<?= APP_URL ?>/ajax/check_plan_reminders.php', {
+        method: 'GET',
+        credentials: 'same-origin'
+    }).catch(() => { });
 </script>

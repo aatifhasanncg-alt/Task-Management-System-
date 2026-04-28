@@ -6,6 +6,7 @@ $db = getDB();
 $stmt = $db->prepare("
     UPDATE branches SET
         branch_name=?,
+        branch_code=?,
         city=?,
         address=?,
         phone=?,
@@ -17,6 +18,7 @@ $stmt = $db->prepare("
 
 $stmt->execute([
     $_POST['branch_name'],
+    strtoupper($_POST['branch_code']),
     $_POST['city'] ?? null,
     $_POST['address'] ?? null,
     $_POST['phone'] ?? null,

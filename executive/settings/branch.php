@@ -33,36 +33,36 @@ include '../../includes/header.php';
 
             <div class="row g-3">
                 <?php foreach ($branches as $b):
-                    $isHead    = (bool)$b['is_head_office'];
-                    $isActive  = (bool)$b['is_active'];
+                    $isHead = (bool) $b['is_head_office'];
+                    $isActive = (bool) $b['is_active'];
 
                     // Icon & colours differ between head office and regular branches
                     if ($isHead) {
-                        $icon       = 'fas fa-building-columns'; // crown-like HQ icon
-                        $iconBg     = $isActive ? '#fef9ec' : '#f9fafb';
-                        $iconColor  = $isActive ? '#c9a84c'  : '#9ca3af';
-                        $badgeBg    = $isActive ? '#fef9ec'  : '#f9fafb';
-                        $badgeColor = $isActive ? '#92710a'  : '#9ca3af';
+                        $icon = 'fas fa-building-columns'; // crown-like HQ icon
+                        $iconBg = $isActive ? '#fef9ec' : '#f9fafb';
+                        $iconColor = $isActive ? '#c9a84c' : '#9ca3af';
+                        $badgeBg = $isActive ? '#fef9ec' : '#f9fafb';
+                        $badgeColor = $isActive ? '#92710a' : '#9ca3af';
                         $cardBorder = $isActive ? '#f0d98833' : '#f3f4f6';
-                        $cardBg     = $isActive ? '#fffdf5'  : '#fff';
+                        $cardBg = $isActive ? '#fffdf5' : '#fff';
                     } else {
-                        $icon       = 'fas fa-map-marker-alt'; // location pin for branches
-                        $iconBg     = $isActive ? '#eff6ff'  : '#f9fafb';
-                        $iconColor  = $isActive ? '#3b82f6'  : '#9ca3af';
-                        $badgeBg    = $isActive ? '#eff6ff'  : '#f9fafb';
-                        $badgeColor = $isActive ? '#1d4ed8'  : '#9ca3af';
+                        $icon = 'fas fa-map-marker-alt'; // location pin for branches
+                        $iconBg = $isActive ? '#eff6ff' : '#f9fafb';
+                        $iconColor = $isActive ? '#3b82f6' : '#9ca3af';
+                        $badgeBg = $isActive ? '#eff6ff' : '#f9fafb';
+                        $badgeColor = $isActive ? '#1d4ed8' : '#9ca3af';
                         $cardBorder = '#f3f4f6';
-                        $cardBg     = '#fff';
+                        $cardBg = '#fff';
                     }
-                ?>
+                    ?>
                     <div class="col-md-6 col-lg-4">
                         <div style="background:<?= $cardBg ?>;border-radius:12px;
                                     border:1px solid <?= $cardBorder ?>;
                                     padding:1rem 1.1rem;display:flex;align-items:center;
                                     justify-content:space-between;gap:.75rem;
                                     transition:box-shadow .15s;"
-                             onmouseenter="this.style.boxShadow='0 2px 12px rgba(0,0,0,.07)'"
-                             onmouseleave="this.style.boxShadow='none'">
+                            onmouseenter="this.style.boxShadow='0 2px 12px rgba(0,0,0,.07)'"
+                            onmouseleave="this.style.boxShadow='none'">
 
                             <div style="display:flex;align-items:center;gap:.75rem;">
 
@@ -111,17 +111,15 @@ include '../../includes/header.php';
                             </div>
 
                             <!-- Edit button -->
-                            <button class="editBranchBtn"
-                                data-id="<?= $b['id'] ?>"
+                            <button class="editBranchBtn" data-id="<?= $b['id'] ?>"
                                 data-name="<?= htmlspecialchars($b['branch_name']) ?>"
+                                data-code="<?= htmlspecialchars($b['branch_code'] ?? '', ENT_QUOTES) ?>"
                                 data-city="<?= htmlspecialchars($b['city'] ?? '') ?>"
                                 data-address="<?= htmlspecialchars($b['address'] ?? '') ?>"
                                 data-phone="<?= htmlspecialchars($b['phone'] ?? '') ?>"
                                 data-email="<?= htmlspecialchars($b['email'] ?? '') ?>"
-                                data-head="<?= (int)$b['is_head_office'] ?>"
-                                data-status="<?= (int)$b['is_active'] ?>"
-                                data-bs-toggle="modal" data-bs-target="#editBranchModal"
-                                style="background:<?= $isHead ? '#fef9ec' : '#eff6ff' ?>;
+                                data-head="<?= (int) $b['is_head_office'] ?>" data-status="<?= (int) $b['is_active'] ?>"
+                                data-bs-toggle="modal" data-bs-target="#editBranchModal" style="background:<?= $isHead ? '#fef9ec' : '#eff6ff' ?>;
                                        color:<?= $isHead ? '#c9a84c' : '#3b82f6' ?>;
                                        border:none;border-radius:6px;
                                        padding:.3rem .6rem;font-size:.75rem;
@@ -136,7 +134,34 @@ include '../../includes/header.php';
         </div>
     </div>
 </div>
+<script>
+document.querySelector('#addBranchModal form').addEventListener('submit', function (e) {
 
+    let name = this.branch_name.value.trim();
+    let code = this.branch_code.value.trim();
+
+    if (name === '') {
+        alert("⚠️ Branch Name is required!");
+        e.preventDefault();
+        return;
+    }
+
+    if (code === '') {
+        alert("⚠️ Branch Code is required!");
+        e.preventDefault();
+        return;
+    }
+
+    // FIXED: allow 1+ letters, no strict 2-10 limit
+    if (!/^[A-Za-z]+$/.test(code)) {
+        alert("⚠️ Branch Code must contain only letters (e.g. KTM, K, PKR)");
+        e.preventDefault();
+        return;
+    }
+
+    this.branch_code.value = code.toUpperCase();
+});
+</script>
 <!-- ADD BRANCH MODAL -->
 <div class="modal fade" id="addBranchModal" tabindex="-1">
     <div class="modal-dialog">
@@ -149,6 +174,11 @@ include '../../includes/header.php';
                 <div class="mb-2">
                     <label class="form-label-mis">Branch Name <span style="color:#ef4444;">*</span></label>
                     <input type="text" name="branch_name" class="form-control form-control-sm" required>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label-mis">Branch Code <span style="color:#ef4444;">*</span></label>
+                    <input type="text" name="branch_code" class="form-control form-control-sm" required
+                        placeholder="e.g. KTM, PKR">
                 </div>
                 <div class="mb-2">
                     <label class="form-label-mis">City</label>
@@ -192,7 +222,41 @@ include '../../includes/header.php';
         </form>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
 
+    const editForm = document.querySelector('#editBranchModal form');
+
+    if (!editForm) return;
+
+    editForm.addEventListener('submit', function (e) {
+
+        let name = this.branch_name.value.trim();
+        let code = this.branch_code.value.trim();
+
+        if (name === '') {
+            alert("⚠️ Branch Name is required!");
+            e.preventDefault();
+            return;
+        }
+
+        if (code === '') {
+            alert("⚠️ Branch Code is required!");
+            e.preventDefault();
+            return;
+        }
+
+        if (!/^[A-Za-z]+$/.test(code)) {
+            alert("⚠️ Branch Code must contain only letters!");
+            e.preventDefault();
+            return;
+        }
+
+        this.branch_code.value = code.toUpperCase();
+    });
+
+});
+</script>
 <!-- EDIT BRANCH MODAL -->
 <div class="modal fade" id="editBranchModal" tabindex="-1">
     <div class="modal-dialog">
@@ -205,7 +269,13 @@ include '../../includes/header.php';
                 <input type="hidden" name="id" id="edit_branch_id">
                 <div class="mb-2">
                     <label class="form-label-mis">Branch Name <span style="color:#ef4444;">*</span></label>
-                    <input type="text" name="branch_name" id="edit_branch_name" class="form-control form-control-sm" required>
+                    <input type="text" name="branch_name" id="edit_branch_name" class="form-control form-control-sm"
+                        required>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label-mis">Branch Code <span style="color:#ef4444;">*</span></label>
+                    <input type="text" name="branch_code" id="edit_branch_code" class="form-control form-control-sm"
+                        required>
                 </div>
                 <div class="mb-2">
                     <label class="form-label-mis">City</label>
@@ -253,13 +323,14 @@ include '../../includes/header.php';
 <script>
     document.querySelectorAll('.editBranchBtn').forEach(btn => {
         btn.addEventListener('click', function () {
-            document.getElementById('edit_branch_id').value    = this.dataset.id;
-            document.getElementById('edit_branch_name').value  = this.dataset.name;
-            document.getElementById('edit_city').value         = this.dataset.city    || '';
-            document.getElementById('edit_address').value      = this.dataset.address || '';
-            document.getElementById('edit_phone').value        = this.dataset.phone   || '';
-            document.getElementById('edit_email').value        = this.dataset.email   || '';
-            document.getElementById('edit_head_office').value  = this.dataset.head;
+            document.getElementById('edit_branch_id').value = this.dataset.id;
+            document.getElementById('edit_branch_name').value = this.dataset.name;
+            document.getElementById('edit_branch_code').value = this.dataset.code || '';
+            document.getElementById('edit_city').value = this.dataset.city || '';
+            document.getElementById('edit_address').value = this.dataset.address || '';
+            document.getElementById('edit_phone').value = this.dataset.phone || '';
+            document.getElementById('edit_email').value = this.dataset.email || '';
+            document.getElementById('edit_head_office').value = this.dataset.head;
             document.getElementById('edit_branch_status').value = this.dataset.status;
         });
     });

@@ -8,51 +8,40 @@ $db   = getDB();
 $user = currentUser();
 $pageTitle = 'Companies';
 
-$search      = trim($_GET['search']    ?? '');
-$filterB     = (int)($_GET['branch_id'] ?? 0);
-$filterT     = (int)($_GET['type_id']   ?? 0);
-$filterInd   = (int)($_GET['industry_id'] ?? 0);
-$page        = max(1, (int)($_GET['page'] ?? 1));
-$perPage     = 20;
-$offset      = ($page - 1) * $perPage;
+$search    = trim($_GET['search']      ?? '');
+$filterB   = (int)($_GET['branch_id'] ?? 0);
+$filterT   = (int)($_GET['type_id']   ?? 0);
+$filterInd = (int)($_GET['industry_id'] ?? 0);
+$page      = max(1, (int)($_GET['page'] ?? 1));
+$perPage   = 20;
+$offset    = ($page - 1) * $perPage;
 
 $where  = ['c.is_active = 1'];
 $params = [];
 
-// Admin scope: only their branch
-if (!isExecutive()) {
-    $adminStmt = $db->prepare("SELECT branch_id FROM users WHERE id = ?");
-    $adminStmt->execute([$user['id']]);
-    $adminBranchId = (int)$adminStmt->fetchColumn();
-    if ($adminBranchId) {
-        $where[]  = 'c.branch_id = ?';
-        $params[] = $adminBranchId;
-    }
-}
 
 if ($search) {
     $where[]  = '(c.company_name LIKE ? OR c.pan_number LIKE ? OR c.contact_person LIKE ? OR c.company_code LIKE ?)';
     $params   = array_merge($params, ["%$search%", "%$search%", "%$search%", "%$search%"]);
 }
-if ($filterB)   { $where[] = 'c.branch_id = ?';        $params[] = $filterB; }
-if ($filterT)   { $where[] = 'c.company_type_id = ?';  $params[] = $filterT; }
-if ($filterInd) { $where[] = 'c.industry_id = ?';      $params[] = $filterInd; }
+if ($filterB)   { $where[] = 'c.branch_id = ?';       $params[] = $filterB; }
+if ($filterT)   { $where[] = 'c.company_type_id = ?'; $params[] = $filterT; }
+if ($filterInd) { $where[] = 'c.industry_id = ?';     $params[] = $filterInd; }
 
 $ws = implode(' AND ', $where);
 
-// Total count
 $countSt = $db->prepare("SELECT COUNT(*) FROM companies c WHERE {$ws}");
 $countSt->execute($params);
 $total = (int)$countSt->fetchColumn();
 $pages = (int)ceil($total / $perPage);
 
-// Company list
 $list = $db->prepare("
     SELECT c.*,
            ct.type_name    AS company_type_name,
            b.branch_name,
            i.industry_name,
-           (SELECT COUNT(*) FROM tasks t WHERE t.company_id = c.id AND t.is_active = 1) AS task_count,
+           (SELECT COUNT(*) FROM tasks t
+            WHERE t.company_id = c.id AND t.is_active = 1) AS task_count,
            (SELECT COUNT(*) FROM tasks t
             JOIN task_status ts ON ts.id = t.status_id
             WHERE t.company_id = c.id AND ts.status_name = 'Done') AS done_count
@@ -67,7 +56,6 @@ $list = $db->prepare("
 $list->execute($params);
 $companies = $list->fetchAll();
 
-// Dropdowns
 $allTypes      = $db->query("SELECT id, type_name FROM company_types ORDER BY type_name")->fetchAll();
 $allIndustries = $db->query("SELECT id, industry_name FROM industries WHERE is_active=1 ORDER BY industry_name")->fetchAll();
 
@@ -86,9 +74,7 @@ include '../../includes/header.php';
             <h4>Company Directory</h4>
             <p><?= number_format($total) ?> companies found</p>
         </div>
-        <div class="d-flex gap-2">
-            <a href="add.php" class="btn-gold btn"><i class="fas fa-plus me-1"></i>Add Company</a>
-        </div>
+        <a href="add.php" class="btn-gold btn"><i class="fas fa-plus me-1"></i>Add Company</a>
     </div>
 </div>
 
@@ -108,7 +94,7 @@ include '../../includes/header.php';
             <select name="type_id" class="form-select form-select-sm">
                 <option value="">All Types</option>
                 <?php foreach ($allTypes as $t): ?>
-                    <option value="<?= $t['id'] ?>" <?= $filterT == $t['id'] ? 'selected' : '' ?>>
+                    <option value="<?= $t['id'] ?>" <?= $filterT==$t['id']?'selected':'' ?>>
                         <?= htmlspecialchars($t['type_name']) ?>
                     </option>
                 <?php endforeach; ?>
@@ -119,15 +105,19 @@ include '../../includes/header.php';
             <select name="industry_id" class="form-select form-select-sm">
                 <option value="">All Industries</option>
                 <?php foreach ($allIndustries as $ind): ?>
-                    <option value="<?= $ind['id'] ?>" <?= $filterInd == $ind['id'] ? 'selected' : '' ?>>
+                    <option value="<?= $ind['id'] ?>" <?= $filterInd==$ind['id']?'selected':'' ?>>
                         <?= htmlspecialchars($ind['industry_name']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>
         </div>
         <div class="col-md-2 d-flex gap-1">
-            <button type="submit" class="btn btn-gold btn-sm w-100"><i class="fas fa-filter"></i> Filter</button>
-            <a href="index.php" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times"></i></a>
+            <button type="submit" class="btn btn-gold btn-sm w-100">
+                <i class="fas fa-filter"></i> Filter
+            </button>
+            <a href="index.php" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-times"></i>
+            </a>
         </div>
     </form>
 </div>
@@ -154,14 +144,20 @@ include '../../includes/header.php';
             </thead>
             <tbody>
             <?php if (empty($companies)): ?>
-                <tr><td colspan="8" class="empty-state"><i class="fas fa-building"></i>No companies found</td></tr>
+                <tr>
+                    <td colspan="8" class="empty-state">
+                        <i class="fas fa-building"></i> No companies found
+                    </td>
+                </tr>
             <?php endif; ?>
             <?php foreach ($companies as $i => $co): ?>
                 <tr>
                     <td class="text-muted" style="font-size:.78rem;"><?= $offset + $i + 1 ?></td>
                     <td>
                         <div class="d-flex align-items-center gap-2">
-                            <div style="width:36px;height:36px;border-radius:8px;background:#0a0f1e;color:#c9a84c;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.78rem;flex-shrink:0;">
+                            <div style="width:36px;height:36px;border-radius:8px;background:#0a0f1e;
+                                        color:#c9a84c;display:flex;align-items:center;justify-content:center;
+                                        font-weight:700;font-size:.78rem;flex-shrink:0;">
                                 <?= strtoupper(substr($co['company_name'], 0, 2)) ?>
                             </div>
                             <div>
@@ -177,17 +173,23 @@ include '../../includes/header.php';
                             </div>
                         </div>
                     </td>
-                    <td style="font-size:.83rem;"><?= htmlspecialchars($co['branch_name'] ?? '—') ?></td>
-                    <td style="font-size:.83rem;"><?= htmlspecialchars($co['industry_name'] ?? '—') ?></td>
+                    <td style="font-size:.83rem;"><?= htmlspecialchars($co['branch_name']    ?? '—') ?></td>
+                    <td style="font-size:.83rem;"><?= htmlspecialchars($co['industry_name']  ?? '—') ?></td>
                     <td>
-                        <div style="font-size:.82rem;"><?= htmlspecialchars($co['contact_person'] ?? '—') ?></div>
+                        <div style="font-size:.82rem;">
+                            <?= htmlspecialchars($co['contact_person'] ?? '—') ?>
+                        </div>
                         <?php if ($co['contact_phone']): ?>
-                            <div style="font-size:.73rem;color:#9ca3af;"><?= htmlspecialchars($co['contact_phone']) ?></div>
+                            <div style="font-size:.73rem;color:#9ca3af;">
+                                <?= htmlspecialchars($co['contact_phone']) ?>
+                            </div>
                         <?php endif; ?>
                     </td>
                     <td>
                         <span class="status-badge status-wip"><?= $co['task_count'] ?> total</span>
-                        <span class="status-badge status-file-returned ms-1"><?= $co['done_count'] ?> done</span>
+                        <span class="status-badge status-file-returned ms-1">
+                            <?= $co['done_count'] ?> done
+                        </span>
                     </td>
                     <td>
                         <span class="badge bg-secondary" style="font-size:.72rem;">
@@ -195,15 +197,24 @@ include '../../includes/header.php';
                         </span>
                     </td>
                     <td>
-                        <div class="d-flex gap-1">
+                        <div class="d-flex gap-1 flex-wrap">
+                            <!-- View Tasks -->
                             <a href="<?= APP_URL ?>/admin/tasks/index.php?company_id=<?= $co['id'] ?>"
                                class="btn btn-sm btn-outline-secondary" title="View Tasks">
                                 <i class="fas fa-tasks"></i>
                             </a>
+                            <!-- View Company -->
                             <a href="view.php?id=<?= $co['id'] ?>"
                                class="btn btn-sm btn-outline-info" title="View Company">
                                 <i class="fas fa-eye"></i>
                             </a>
+                            <?php if (isCoreAdmin()):?>
+                            <!-- Workflow -->
+                            <a href="../reports/company_workflow.php?company_id=<?= $co['id'] ?>"
+                               class="btn btn-sm btn-outline-warning" title="View Workflow">
+                                <i class="fas fa-code-branch"></i>
+                            </a>
+                            <?php endif?>
                         </div>
                     </td>
                 </tr>
@@ -221,7 +232,8 @@ include '../../includes/header.php';
             <ul class="pagination pagination-sm mb-0">
                 <?php for ($p = 1; $p <= $pages; $p++): ?>
                     <li class="page-item <?= $p == $page ? 'active' : '' ?>">
-                        <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>">
+                        <a class="page-link"
+                           href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>">
                             <?= $p ?>
                         </a>
                     </li>
@@ -234,3 +246,5 @@ include '../../includes/header.php';
 
 </div>
 <?php include '../../includes/footer.php'; ?>
+</div>
+</div>

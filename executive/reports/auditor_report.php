@@ -7,7 +7,7 @@ requireAnyRole();
 $db = getDB();
 $user = currentUser();
 $pageTitle = 'Auditor Summary';
-$userRole = $user['role'] ?? 'staff';
+$userRole = $user['role_name'] ?? 'staff';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_auditor'])) {
     verifyCsrf();

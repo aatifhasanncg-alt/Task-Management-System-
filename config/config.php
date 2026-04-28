@@ -43,7 +43,47 @@ define('MAIL_FROM',      'askglobaladvisory@gmail.com');
 define('MAIL_FROM_NAME', 'ASK Global Advisory MIS');
 define('SMTP_HOST',      'smtp.gmail.com');
 define('SMTP_PORT',      587);
-define('SMTP_USER',      'askglobaladvisory@gmail.com');
-define('SMTP_PASS',      '');  // 16-char app password
+define('SMTP_USER',      'smtpdjango134@gmail.com');
+define('SMTP_PASS',      'znqc rnrj rmod yqrv');  // 16-char app password
 define('SMTP_SECURE',    'tls');
+// Cross-department assignment permissions
+// 'from_dept_code' => ['allowed_to_assign_dept_codes']
+// config.php
+// user_id => ['dept_codes they can assign to']
+define('CROSS_DEPT_ASSIGN', [
+    2 => ['TAX'],   // Samikshya Aryal — RETAIL admin
+]);
 
+function getDepartmentStaff(PDO $db, int $branchId, int $deptId): array
+{
+    $stmt = $db->prepare("
+        SELECT DISTINCT 
+            u.id,
+            u.full_name,
+            u.employee_id,
+
+            GROUP_CONCAT(DISTINCT d.dept_name SEPARATOR ', ') AS dept_label
+
+        FROM users u
+
+        LEFT JOIN user_department_assignments uda 
+            ON uda.user_id = u.id
+
+        LEFT JOIN departments d 
+            ON d.id = uda.department_id
+
+        WHERE u.is_active = 1
+          AND u.branch_id = ?
+          AND (
+                u.department_id = ?
+                OR uda.department_id = ?
+          )
+
+        GROUP BY u.id, u.full_name, u.employee_id
+
+        ORDER BY u.full_name
+    ");
+
+    $stmt->execute([$branchId, $deptId, $deptId]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}

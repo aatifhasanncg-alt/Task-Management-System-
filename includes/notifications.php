@@ -104,7 +104,7 @@ $unreadCount = count(array_filter($notifications, fn($n) => !$n['is_read']));
 
 // Rewrite link based on viewer's role so admin stays in /admin/tasks/view.php
 // and staff stays in /staff/tasks/view.php
-$viewerRole = $__u['role'] ?? 'staff';
+$viewerRole = $__u['role_name'] ?? 'staff';
 function rewriteNotifLink(string $link, string $role): string
 {
     if (empty($link))
@@ -120,7 +120,7 @@ function rewriteNotifLink(string $link, string $role): string
 
 include __DIR__ . '/header.php';
 
-$role = $__u['role'] ?? 'staff';
+$role = $__u['role_name'] ?? 'staff';
 switch ($role) {
     case 'admin':
         include __DIR__ . '/sidebar_admin.php';

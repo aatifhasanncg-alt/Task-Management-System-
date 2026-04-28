@@ -184,16 +184,41 @@ $xferSt->execute([]);
 $transferredCount = (int) $xferSt->fetchColumn();
 
 // ── Departments for filter dropdown ──────────────────────────────────────────
-$depts = $db->prepare("
-    SELECT DISTINCT d.id, d.dept_name
+// Primary dept from users table
+$primaryDeptStmt = $db->prepare("
+    SELECT d.id, d.dept_name,
+           1 AS is_user_primary,
+           0 AS is_uda_primary
     FROM departments d
+    JOIN users u ON u.department_id = d.id
     JOIN tasks t ON t.department_id = d.id
-    WHERE t.is_active = 1
+    WHERE u.id = ?
+      AND t.is_active = 1
       AND t.id IN ({$scopeSub})
-    ORDER BY d.dept_name
+    LIMIT 1
 ");
-$depts->execute([]);
-$depts = $depts->fetchAll();
+$primaryDeptStmt->execute([$user['id']]);
+$primaryDept = $primaryDeptStmt->fetchAll();
+
+// Extra depts from user_department_assignments (excluding primary)
+$extraDeptsStmt = $db->prepare("
+    SELECT DISTINCT d.id, d.dept_name,
+           0 AS is_user_primary,
+           uda.is_primary AS is_uda_primary
+    FROM departments d
+    JOIN user_department_assignments uda ON uda.department_id = d.id
+    JOIN tasks t ON t.department_id = d.id
+    WHERE uda.user_id = ?
+      AND d.id != ?
+      AND t.is_active = 1
+      AND t.id IN ({$scopeSub})
+    ORDER BY uda.is_primary DESC, d.dept_name ASC
+");
+$extraDeptsStmt->execute([$user['id'], (int) ($user['department_id'] ?? 0)]);
+$extraDepts = $extraDeptsStmt->fetchAll();
+
+// Merge: primary first, then extras
+$depts = array_merge($primaryDept, $extraDepts);
 
 $pColors = [
     'urgent' => '#ef4444',
@@ -232,7 +257,7 @@ include '../../includes/header.php';
                 <!-- ALL -->
                 <?php $allActive = !$filterStatus; ?>
                 <a href="?<?= http_build_query(array_diff_key($_GET, ['status' => '', 'page' => ''])) ?>"
-                   class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>">
+                    class="btn btn-sm <?= !$filterStatus ? 'btn-navy' : 'btn-outline-secondary' ?>">
                     <i class="fas fa-list"></i>
                     All
                     (<?= $total ?>)
@@ -246,8 +271,8 @@ include '../../includes/header.php';
                     $icon = $st['icon'] ?? 'fa-circle-dot';
                     $active = $filterStatus === $k;
                     ?>
-                    <a href="?<?= http_build_query(array_merge($_GET, ['status' => $k, 'page' => 1])) ?>"
-                        class="btn btn-sm" style="
+                    <a href="?<?= http_build_query(array_merge($_GET, ['status' => $k, 'page' => 1])) ?>" class="btn btn-sm"
+                        style="
                border-color: <?= $col ?>;
                background: <?= $active ? $col : $bg ?>;
                color: <?= $active ? '#fff' : $col ?>;
@@ -298,6 +323,13 @@ include '../../includes/header.php';
                                 <?php foreach ($depts as $d): ?>
                                     <option value="<?= $d['id'] ?>" <?= $filterDept == $d['id'] ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($d['dept_name']) ?>
+                                        <?php if ($d['is_user_primary']): ?>
+                                            ★ Primary
+                                        <?php elseif ($d['is_uda_primary']): ?>
+                                            ◆ Main
+                                        <?php else: ?>
+                                            · Extra
+                                        <?php endif; ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
