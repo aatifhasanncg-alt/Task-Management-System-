@@ -222,7 +222,7 @@ $f = $_SERVER['REQUEST_METHOD'] === 'POST'
     ? array_merge($task, $_POST)
     : $task;
 
-$sidebarRole = $user['role'] === 'executive' ? 'executive' : 'admin';
+$sidebarRole = $user['role_name'] === 'executive' ? 'executive' : 'admin';
 
 include '../../includes/header.php';
 ?>

@@ -172,6 +172,14 @@ function vstBadge(string $s): string {
                         <a href="index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-home me-1"></i> Dashboard
                         </a>
+                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>&visit_status=<?= urlencode($statusFilter) ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                                <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                            </a>
+                            <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>&visit_status=<?= urlencode($statusFilter) ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                                <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                            </a>
                     </div>
                 </div>
             </div>

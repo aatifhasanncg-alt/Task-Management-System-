@@ -32,7 +32,7 @@ $__deptMetaStmt->execute([$user['department_id']]);
 $__deptMeta = $__deptMetaStmt->fetch(PDO::FETCH_ASSOC);
 $__primaryDeptCode = $__deptMeta['dept_code'] ?? '';
 $__isBranchManager = ($__primaryDeptCode === 'CORE');
-$__isConsultingPrimary = ($__primaryDeptCode === 'CON' 
+$__isConsultingPrimary = ($__primaryDeptCode === 'CON'
     || stripos($__deptMeta['dept_name'] ?? '', 'consult') !== false);
 
 // Check UDA for consulting dept
@@ -80,7 +80,10 @@ $deptName = $deptRow->fetchColumn() ?: 'Consulting';
 // ── Unread notifications ──────────────────────────────────────
 $notifCount = (int) $db->query("
     SELECT COUNT(*) FROM plan_notifications
-    WHERE user_id={$uid} AND is_read=0
+    WHERE user_id = {$uid}
+      AND is_read = 0
+      AND created_at >= CURDATE()
+      AND created_at < DATE_ADD(CURDATE(), INTERVAL 2 DAY)
 ")->fetchColumn();
 
 // ── Scope staff (same dept + no-dept in branch) ───────────────
@@ -123,9 +126,10 @@ if ($__isBranchManager) {
     $scopeStmt->execute([$branchId, $uid, $deptId, $deptId]);
 }
 $scopeStaff = $scopeStmt->fetchAll(PDO::FETCH_ASSOC);
-$scopeIds   = array_unique(array_map('intval', array_column($scopeStaff, 'id')));
-if (!in_array($uid, $scopeIds)) $scopeIds[] = $uid;
-$inList     = implode(',', $scopeIds) ?: '0';
+$scopeIds = array_unique(array_map('intval', array_column($scopeStaff, 'id')));
+if (!in_array($uid, $scopeIds))
+    $scopeIds[] = $uid;
+$inList = implode(',', $scopeIds) ?: '0';
 
 // Build active in-list (filter by staff if selected)
 $activeInList = $inList;
@@ -386,6 +390,15 @@ include '../../includes/header.php';
                         <a href="../../index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-th-large me-1"></i>Dashboard
                         </a>
+                        <!-- Hero exports: full client list -->
+                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=client&month=<?= urlencode($month) ?>&staff_id=<?= $filterStaffId ?>&client_id=<?= $filterClientId ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                        </a>
+                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=client&month=<?= urlencode($month) ?>&staff_id=<?= $filterStaffId ?>&client_id=<?= $filterClientId ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                        </a>
                     </div>
                 </div>
             </div>
@@ -506,9 +519,24 @@ include '../../includes/header.php';
                         <div class="card-mis-header">
                             <h5><i class="fas fa-search text-warning me-2"></i>
                                 Client Detail — <?= htmlspecialchars($selClient['company_name']) ?>
+                                <span style="font-size:.72rem;color:#9ca3af;font-weight:400;margin-left:.4rem;">
+                                    <?= htmlspecialchars($selClient['company_code'] ?? '') ?>
+                                </span>
                             </h5>
-                            <span
-                                style="font-size:.75rem;color:#9ca3af;"><?= htmlspecialchars($selClient['company_code'] ?? '') ?></span>
+                            <div style="display:flex;align-items:center;gap:.5rem;">
+                                <a href="client_report.php?month=<?= urlencode($month) ?>" style="font-size:.72rem;color:#9ca3af;text-decoration:none;border:1px solid #e5e7eb;
+                  border-radius:6px;padding:.15rem .5rem;">
+                                    <i class="fas fa-times"></i> Clear
+                                </a>
+                                <a href="<?= APP_URL ?>/export/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>&from=<?= urlencode($filterFrom) ?>&to=<?= urlencode($filterTo) ?>"
+                                    class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
+                                    <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                                </a>
+                                <a href="<?= APP_URL ?>/export/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>"
+                                    class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
+                                    <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                                </a>
+                            </div>
                         </div>
                         <div class="card-mis-body">
                             <div class="row g-3 mb-3">
@@ -787,8 +815,9 @@ include '../../includes/header.php';
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <a href="?month=<?= $month ?>&client_id=<?= $cp['client_id'] ?>"
-                                                style="font-size:.72rem;color:#3b82f6;text-decoration:none;">
+                                            <a href="?month=<?= urlencode($month) ?>&client_id=<?= $cp['client_id'] ?><?= $filterStaffId ? '&staff_id=' . $filterStaffId : '' ?><?= $filterStatus ? '&visit_status=' . urlencode($filterStatus) : '' ?>"
+                                                style="font-size:.72rem;color:#3b82f6;text-decoration:none;"
+                                                title="Drill into <?= htmlspecialchars($cp['company_name'] ?? '') ?>">
                                                 <i class="fas fa-search-plus"></i> Drill
                                             </a>
                                         </td>
@@ -864,46 +893,46 @@ include '../../includes/header.php';
             }
         });
     <?php endif; ?>
-// TomSelect on client filter
+    // TomSelect on client filter
     let clientTs = null;
     <?php if (!$__isBranchManager): ?>
-    clientTs = new TomSelect('#filterClient', {
-        placeholder: 'Search by name, code or PAN…',
-        allowEmptyOption: true,
-        maxOptions: 500,
-        searchField: ['text'],
-        score: function (search) {
-            const s = search.toLowerCase();
-            return function (item) {
-                const text = (item.text || '').toLowerCase();
-                const code = (item.$option?.dataset?.code || '').toLowerCase();
-                const pan = (item.$option?.dataset?.pan || '').toLowerCase();
-                return (text.includes(s) || code.includes(s) || pan.includes(s)) ? 1 : 0;
-            };
-        },
-        render: {
-            option: function (data, escape) {
-                const code = data.$option?.dataset?.code || '';
-                const pan = data.$option?.dataset?.pan || '';
-                const name = escape(data.text.split(' — ')[0]);
-                return `<div style="padding:3px 2px;">
+        clientTs = new TomSelect('#filterClient', {
+            placeholder: 'Search by name, code or PAN…',
+            allowEmptyOption: true,
+            maxOptions: 500,
+            searchField: ['text'],
+            score: function (search) {
+                const s = search.toLowerCase();
+                return function (item) {
+                    const text = (item.text || '').toLowerCase();
+                    const code = (item.$option?.dataset?.code || '').toLowerCase();
+                    const pan = (item.$option?.dataset?.pan || '').toLowerCase();
+                    return (text.includes(s) || code.includes(s) || pan.includes(s)) ? 1 : 0;
+                };
+            },
+            render: {
+                option: function (data, escape) {
+                    const code = data.$option?.dataset?.code || '';
+                    const pan = data.$option?.dataset?.pan || '';
+                    const name = escape(data.text.split(' — ')[0]);
+                    return `<div style="padding:3px 2px;">
                 <div style="font-weight:600;font-size:.83rem;">${name}</div>
                 <div style="font-size:.7rem;color:#9ca3af;display:flex;gap:8px;margin-top:1px;">
                     ${code ? `<span><i class="fas fa-tag" style="font-size:.6rem;"></i> ${escape(code)}</span>` : ''}
                     ${pan ? `<span><i class="fas fa-id-card" style="font-size:.6rem;"></i> PAN: ${escape(pan)}</span>` : ''}
                 </div>
             </div>`;
+                },
+                item: function (data, escape) {
+                    const pan = data.$option?.dataset?.pan || '';
+                    const name = escape(data.text.split(' — ')[0]);
+                    return pan
+                        ? `<div>${name} <span style="font-size:.7rem;color:#9ca3af;">(PAN: ${escape(pan)})</span></div>`
+                        : `<div>${name}</div>`;
+                }
             },
-            item: function (data, escape) {
-                const pan = data.$option?.dataset?.pan || '';
-                const name = escape(data.text.split(' — ')[0]);
-                return pan
-                    ? `<div>${name} <span style="font-size:.7rem;color:#9ca3af;">(PAN: ${escape(pan)})</span></div>`
-                    : `<div>${name}</div>`;
-            }
-        },
-        onChange: function () { applyFilters(); }
-    });
+            onChange: function () { applyFilters(); }
+        });
     <?php endif; ?>
 
     function applyFilters() {

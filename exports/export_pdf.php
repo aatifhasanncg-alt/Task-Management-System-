@@ -1388,7 +1388,277 @@ elseif ($module === 'tax_htd') {
     $safeStatus = $filterStatus ? '_' . preg_replace('/[^a-z0-9]/i', '', $filterStatus) : '';
     $filename = 'Tax_HTD' . $safeStatus . '_' . date('Ymd_His') . '.pdf';
 }
+// ══════════════════════════════════════════════════════════════
+// MODULE: consulting_performance
+// URL: export_pdf.php?module=consulting_performance
+//      &month=YYYY-MM&view=monthly|daily|client|who
+//      [&staff_id=N]
+// ══════════════════════════════════════════════════════════════
+elseif ($module === 'consulting_performance') {
 
+    $month   = $_GET['month'] ?? date('Y-m');
+    $view    = $_GET['view']  ?? 'monthly';
+    $staffId = (int)($_GET['staff_id'] ?? 0) ?: null;
+
+    $uid    = (int)$user['id'];
+    $role   = $user['role_name'] ?? '';
+
+    $monthDate  = DateTime::createFromFormat('Y-m', $month) ?: new DateTime();
+    $monthLabel = $monthDate->format('F Y');
+
+    $scopeWhere = " AND wl.user_id IN (
+        SELECT u2.id FROM users u2
+        JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
+        WHERE u2.is_active = 1
+        UNION
+        SELECT uda.user_id FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+        UNION SELECT {$uid}
+    )";
+    if ($staffId) $scopeWhere .= " AND wl.user_id = {$staffId}";
+
+    $viewLabel = match($view) {
+        'daily'  => 'Daily Activity',
+        'client' => 'Client-wise Summary',
+        'who'    => 'Who Visited',
+        default  => 'Monthly Staff Summary',
+    };
+
+    $pdf = new MISPdf("Consulting Performance — {$viewLabel}");
+    $pdf->AddPage();
+
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->SetTextColor(107, 114, 128);
+    $pdf->Cell(0, 6, 'Period: ' . $monthLabel . '  ·  Generated: ' . date('d M Y H:i'), 0, 1, 'L');
+    $pdf->Ln(3);
+
+    // ── MONTHLY ──────────────────────────────────────────────
+    if ($view === 'monthly') {
+        $st = $db->prepare("
+            SELECT wl.user_id, u.full_name, u.employee_id,
+                   COUNT(wl.id)                         AS total_visits,
+                   COUNT(DISTINCT wl.client_id)         AS unique_clients,
+                   COALESCE(SUM(wl.duration_hours), 0)  AS total_hours,
+                   SUM(wl.visit_status='visited')       AS visited_count,
+                   SUM(wl.visit_status='missed')        AS missed_count,
+                   COUNT(DISTINCT wl.log_date)          AS active_days
+            FROM work_logs wl
+            LEFT JOIN users u ON u.id = wl.user_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.user_id, u.full_name, u.employee_id
+            ORDER BY total_hours DESC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        // KPI tiles
+        $grandHours   = array_sum(array_column($data, 'total_hours'));
+        $grandVisits  = array_sum(array_column($data, 'total_visits'));
+        $visitedTotal = array_sum(array_column($data, 'visited_count'));
+        $missedTotal  = array_sum(array_column($data, 'missed_count'));
+        kpiTiles($pdf, [
+            ['Total Hours',   number_format($grandHours,1).'h', '#3b82f6'],
+            ['Total Visits',  $grandVisits,                     '#8b5cf6'],
+            ['Staff Active',  count($data),                     '#c9a84c'],
+            ['Visited',       $visitedTotal,                    '#10b981'],
+            ['Missed',        $missedTotal,                     '#ef4444'],
+        ]);
+
+        $cols   = ['#', 'Staff Member', 'Emp ID', 'Total Hrs', 'Visits', 'Clients', 'Active Days', 'Visited', 'Missed', 'Eff%'];
+        $widths = [8, 52, 24, 24, 18, 18, 24, 18, 18, 18];
+        $aligns = ['C','L','C','C','C','C','C','C','C','C'];
+        tableHeader($pdf, $cols, $widths);
+
+        $maxHrs = max(array_column($data,'total_hours') ?: [1]);
+        $odd = true;
+        $i = 1;
+        foreach ($data as $r) {
+            checkPageBreak($pdf, $cols, $widths);
+            $pct = $maxHrs > 0 ? round(($r['total_hours']/$maxHrs)*100) : 0;
+            tableRow($pdf, [
+                $i++,
+                mb_strimwidth($r['full_name'] ?? '—', 0, 28, '…'),
+                $r['employee_id'] ?? '—',
+                number_format((float)$r['total_hours'],1).'h',
+                $r['total_visits'],
+                $r['unique_clients'],
+                $r['active_days'],
+                $r['visited_count'],
+                $r['missed_count'],
+                $pct.'%',
+            ], $widths, $odd, $aligns, [
+                7 => '#10b981',
+                8 => (int)$r['missed_count'] > 0 ? '#ef4444' : '#9ca3af',
+            ]);
+            $odd = !$odd;
+        }
+
+        // Grand total row
+        grandTotalRow($pdf, [
+            'TOTAL', '', '',
+            number_format($grandHours,1).'h',
+            $grandVisits, '', '',
+            $visitedTotal, $missedTotal, '',
+        ], $widths, $aligns);
+    }
+
+    // ── DAILY ────────────────────────────────────────────────
+    elseif ($view === 'daily') {
+        $st = $db->prepare("
+            SELECT wl.log_date, wl.day_of_week,
+                   COUNT(wl.id)                        AS visits,
+                   COALESCE(SUM(wl.duration_hours), 0) AS total_hours,
+                   COUNT(DISTINCT wl.client_id)        AS clients,
+                   COUNT(DISTINCT wl.user_id)          AS staff_count
+            FROM work_logs wl
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.log_date, wl.day_of_week
+            ORDER BY wl.log_date ASC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        kpiTiles($pdf, [
+            ['Active Days',   count($data),                                              '#3b82f6'],
+            ['Total Visits',  array_sum(array_column($data,'visits')),                   '#8b5cf6'],
+            ['Total Hours',   number_format(array_sum(array_column($data,'total_hours')),1).'h', '#c9a84c'],
+        ]);
+
+        $cols   = ['Date', 'Day', 'Visits', 'Total Hours', 'Clients', 'Staff'];
+        $widths = [40, 28, 22, 28, 22, 22];
+        $aligns = ['L','C','C','C','C','C'];
+        tableHeader($pdf, $cols, $widths);
+
+        $maxH = max(array_column($data,'total_hours') ?: [1]);
+        $odd = true;
+        foreach ($data as $r) {
+            checkPageBreak($pdf, $cols, $widths);
+            $pct = $maxH > 0 ? round(($r['total_hours']/$maxH)*100) : 0;
+            tableRow($pdf, [
+                date('d M Y', strtotime($r['log_date'])),
+                $r['day_of_week'] ?? '',
+                $r['visits'],
+                number_format((float)$r['total_hours'],2).'h',
+                $r['clients'],
+                $r['staff_count'],
+            ], $widths, $odd, $aligns);
+            $odd = !$odd;
+        }
+
+        grandTotalRow($pdf, [
+            'TOTAL', '',
+            array_sum(array_column($data,'visits')),
+            number_format(array_sum(array_column($data,'total_hours')),1).'h',
+            '', '',
+        ], $widths, $aligns);
+    }
+
+    // ── CLIENT ───────────────────────────────────────────────
+    elseif ($view === 'client') {
+        $st = $db->prepare("
+            SELECT wl.client_id, c.company_name, c.company_code,
+                   COUNT(wl.id)                        AS total_visits,
+                   COALESCE(SUM(wl.duration_hours), 0) AS total_hours,
+                   COUNT(DISTINCT wl.user_id)          AS staff_count,
+                   SUM(wl.visit_status='visited')      AS visited,
+                   SUM(wl.visit_status='missed')       AS missed,
+                   MAX(wl.log_date)                    AS last_visit
+            FROM work_logs wl
+            LEFT JOIN companies c ON c.id = wl.client_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.client_id, c.company_name, c.company_code
+            ORDER BY total_hours DESC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        kpiTiles($pdf, [
+            ['Clients Served', count($data),                                                          '#8b5cf6'],
+            ['Total Hours',    number_format(array_sum(array_column($data,'total_hours')),1).'h',     '#3b82f6'],
+            ['Total Visits',   array_sum(array_column($data,'total_visits')),                         '#c9a84c'],
+            ['Visited',        array_sum(array_column($data,'visited')),                              '#10b981'],
+            ['Missed',         array_sum(array_column($data,'missed')),                               '#ef4444'],
+        ]);
+
+        $cols   = ['#', 'Code', 'Client', 'Total Hrs', 'Visits', 'Staff', 'Visited', 'Missed', 'Last Visit'];
+        $widths = [8, 18, 58, 24, 18, 16, 18, 16, 26];
+        $aligns = ['C','C','L','C','C','C','C','C','C'];
+        tableHeader($pdf, $cols, $widths);
+
+        $maxH = max(array_column($data,'total_hours') ?: [1]);
+        $odd = true;
+        $i = 1;
+        foreach ($data as $r) {
+            checkPageBreak($pdf, $cols, $widths);
+            tableRow($pdf, [
+                $i++,
+                $r['company_code'] ?? '—',
+                mb_strimwidth($r['company_name'] ?? '—', 0, 36, '…'),
+                number_format((float)$r['total_hours'],2).'h',
+                $r['total_visits'],
+                $r['staff_count'],
+                $r['visited'],
+                $r['missed'],
+                $r['last_visit'] ? date('d M Y', strtotime($r['last_visit'])) : '—',
+            ], $widths, $odd, $aligns, [
+                6 => '#10b981',
+                7 => (int)$r['missed'] > 0 ? '#ef4444' : '#9ca3af',
+            ]);
+            $odd = !$odd;
+        }
+    }
+
+    // ── WHO VISITED ──────────────────────────────────────────
+    elseif ($view === 'who') {
+        $st = $db->prepare("
+            SELECT wl.client_id, c.company_name, u.full_name AS staff_name,
+                   u.employee_id, wl.log_date, wl.duration_hours,
+                   wl.time_in, wl.time_out, wl.visit_status
+            FROM work_logs wl
+            LEFT JOIN companies c ON c.id = wl.client_id
+            LEFT JOIN users u     ON u.id = wl.user_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            ORDER BY c.company_name ASC, wl.log_date ASC
+            LIMIT 500
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->SetTextColor(107, 114, 128);
+        $pdf->Cell(0, 6, count($data) . ' visit records', 0, 1, 'L');
+        $pdf->Ln(2);
+
+        $cols   = ['Client', 'Staff', 'Emp ID', 'Date', 'Time In', 'Time Out', 'Hours', 'Status'];
+        $widths = [52, 36, 20, 28, 22, 22, 18, 28];
+        $aligns = ['L','L','C','C','C','C','C','C'];
+        tableHeader($pdf, $cols, $widths);
+
+        $vstColors = [
+            'visited'     => '#10b981',
+            'missed'      => '#ef4444',
+            'rescheduled' => '#f59e0b',
+        ];
+        $odd = true;
+        foreach ($data as $r) {
+            checkPageBreak($pdf, $cols, $widths);
+            $vstCol = $vstColors[$r['visit_status']] ?? '#9ca3af';
+            tableRow($pdf, [
+                mb_strimwidth($r['company_name'] ?? '—', 0, 32, '…'),
+                mb_strimwidth($r['staff_name'] ?? '—', 0, 22, '…'),
+                $r['employee_id'] ?? '—',
+                date('d M Y', strtotime($r['log_date'])),
+                $r['time_in']  ? date('g:i A', strtotime($r['time_in']))  : '—',
+                $r['time_out'] ? date('g:i A', strtotime($r['time_out'])) : '—',
+                number_format((float)$r['duration_hours'],2).'h',
+                ucfirst($r['visit_status'] ?? ''),
+            ], $widths, $odd, $aligns, [7 => $vstCol]);
+            $odd = !$odd;
+        }
+    }
+
+    $filename = 'Consulting_' . ucfirst($view) . '_' . $month . '_' . date('His') . '.pdf';
+}
 // ══════════════════════════════════════════════════════════════
 // FALLBACK
 // ══════════════════════════════════════════════════════════════

@@ -1534,6 +1534,285 @@ elseif ($module === 'report') {
     echo "</Workbook>\n";
     exit;
 }
+// ══════════════════════════════════════════════════════════════
+// MODULE: consulting_performance
+// URL: export_excel.php?module=consulting_performance
+//      &month=YYYY-MM&view=monthly|daily|client|who
+//      [&staff_id=N]
+// ══════════════════════════════════════════════════════════════
+elseif ($module === 'consulting_performance') {
+
+    $month      = $_GET['month'] ?? date('Y-m');
+    $view       = $_GET['view']  ?? 'monthly';
+    $staffId    = (int)($_GET['staff_id'] ?? 0) ?: null;
+
+    $uid        = (int)$user['id'];
+    $role       = $user['role_name'] ?? '';
+    $isExec     = in_array($role, ['executive','admin']);
+
+    $monthDate  = DateTime::createFromFormat('Y-m', $month) ?: new DateTime();
+    $monthLabel = $monthDate->format('F Y');
+
+    // Scope: CON dept staff
+    $scopeWhere = " AND wl.user_id IN (
+        SELECT u2.id FROM users u2
+        JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
+        WHERE u2.is_active = 1
+        UNION
+        SELECT uda.user_id FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+        UNION SELECT {$uid}
+    )";
+    if ($staffId) $scopeWhere .= " AND wl.user_id = {$staffId}";
+
+    excelHeader('Consulting_' . ucfirst($view));
+    $sheetName = ucfirst($view) . ' Report';
+
+    // ── MONTHLY ──────────────────────────────────────────────
+    if ($view === 'monthly') {
+        $st = $db->prepare("
+            SELECT wl.user_id, u.full_name, u.employee_id,
+                   COUNT(wl.id)                         AS total_visits,
+                   COUNT(DISTINCT wl.client_id)         AS unique_clients,
+                   COALESCE(SUM(wl.duration_hours), 0)  AS total_hours,
+                   SUM(wl.visit_status='visited')       AS visited_count,
+                   SUM(wl.visit_status='missed')        AS missed_count,
+                   COUNT(DISTINCT wl.log_date)          AS active_days
+            FROM work_logs wl
+            LEFT JOIN users u ON u.id = wl.user_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.user_id, u.full_name, u.employee_id
+            ORDER BY total_hours DESC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        echo startSheet($sheetName);
+
+        // Title
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"9\" ss:StyleID=\"title_row\">
+                <Data ss:Type=\"String\">Consulting — Monthly Staff Summary | {$monthLabel}</Data>
+              </Cell>\n";
+        echo endRow();
+
+        // Header
+        echo startRow();
+        foreach (['#','Staff','Emp ID','Total Hours','Visits','Unique Clients','Active Days','Visited','Missed','Efficiency %'] as $h) {
+            echo headerCell($h);
+        }
+        echo endRow();
+
+        $maxHrs = max(array_column($data,'total_hours') ?: [1]);
+        $i = 1;
+        foreach ($data as $r) {
+            $pct = $maxHrs > 0 ? round(($r['total_hours']/$maxHrs)*100) : 0;
+            $style = $pct >= 75 ? 'done' : ($pct >= 40 ? 'wip' : 'pending');
+            echo startRow();
+            echo cell((string)$i++,                    $style);
+            echo cell($r['full_name'] ?? '—',          $style);
+            echo cell($r['employee_id'] ?? '—',        $style);
+            echo numberCell((float)$r['total_hours'],  $style);
+            echo numberCell((int)$r['total_visits'],   $style);
+            echo numberCell((int)$r['unique_clients'], $style);
+            echo numberCell((int)$r['active_days'],    $style);
+            echo numberCell((int)$r['visited_count'],  'done');
+            echo numberCell((int)$r['missed_count'],   'pending');
+            echo numberCell($pct,                      $style);
+            echo endRow();
+        }
+
+        // Totals footer
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"2\" ss:StyleID=\"gold_header\"><Data ss:Type=\"String\">TOTAL</Data></Cell>\n";
+        echo numberCell(array_sum(array_column($data,'total_hours')));
+        echo numberCell(array_sum(array_column($data,'total_visits')));
+        echo numberCell(count(array_unique(array_column($data,'unique_clients'))));
+        echo cell('', 'odd');
+        echo numberCell(array_sum(array_column($data,'visited_count')), 'done');
+        echo numberCell(array_sum(array_column($data,'missed_count')), 'pending');
+        echo cell('', 'odd');
+        echo endRow();
+
+        echo endSheet();
+    }
+
+    // ── DAILY ────────────────────────────────────────────────
+    elseif ($view === 'daily') {
+        $st = $db->prepare("
+            SELECT wl.log_date, wl.day_of_week,
+                   COUNT(wl.id)                        AS visits,
+                   COALESCE(SUM(wl.duration_hours), 0) AS total_hours,
+                   COUNT(DISTINCT wl.client_id)        AS clients,
+                   COUNT(DISTINCT wl.user_id)          AS staff_count
+            FROM work_logs wl
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.log_date, wl.day_of_week
+            ORDER BY wl.log_date ASC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        echo startSheet($sheetName);
+
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"5\" ss:StyleID=\"title_row\">
+                <Data ss:Type=\"String\">Consulting — Daily Activity | {$monthLabel}</Data>
+              </Cell>\n";
+        echo endRow();
+
+        echo startRow();
+        foreach (['Date','Day','Visits','Total Hours','Clients','Staff Count'] as $h) {
+            echo headerCell($h);
+        }
+        echo endRow();
+
+        $maxH = max(array_column($data,'total_hours') ?: [1]);
+        foreach ($data as $r) {
+            $pct = $maxH > 0 ? round(($r['total_hours']/$maxH)*100) : 0;
+            $style = $pct >= 75 ? 'done' : ($pct >= 40 ? 'wip' : 'odd');
+            echo startRow();
+            echo cell(date('d M Y', strtotime($r['log_date'])), $style);
+            echo cell($r['day_of_week'] ?? '',                  $style);
+            echo numberCell((int)$r['visits']);
+            echo numberCell((float)$r['total_hours']);
+            echo numberCell((int)$r['clients']);
+            echo numberCell((int)$r['staff_count']);
+            echo endRow();
+        }
+
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"1\" ss:StyleID=\"gold_header\"><Data ss:Type=\"String\">TOTAL</Data></Cell>\n";
+        echo numberCell(array_sum(array_column($data,'visits')));
+        echo numberCell(array_sum(array_column($data,'total_hours')));
+        echo cell('', 'odd');
+        echo cell('', 'odd');
+        echo endRow();
+
+        echo endSheet();
+    }
+
+    // ── CLIENT ───────────────────────────────────────────────
+    elseif ($view === 'client') {
+        $st = $db->prepare("
+            SELECT wl.client_id, c.company_name, c.company_code,
+                   COUNT(wl.id)                        AS total_visits,
+                   COALESCE(SUM(wl.duration_hours), 0) AS total_hours,
+                   COUNT(DISTINCT wl.user_id)          AS staff_count,
+                   SUM(wl.visit_status='visited')      AS visited,
+                   SUM(wl.visit_status='missed')       AS missed,
+                   MAX(wl.log_date)                    AS last_visit
+            FROM work_logs wl
+            LEFT JOIN companies c ON c.id = wl.client_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            GROUP BY wl.client_id, c.company_name, c.company_code
+            ORDER BY total_hours DESC
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        echo startSheet($sheetName);
+
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"8\" ss:StyleID=\"title_row\">
+                <Data ss:Type=\"String\">Consulting — Client-wise Summary | {$monthLabel}</Data>
+              </Cell>\n";
+        echo endRow();
+
+        echo startRow();
+        foreach (['#','Code','Client','Total Hours','Visits','Staff','Visited','Missed','Last Visit'] as $h) {
+            echo headerCell($h);
+        }
+        echo endRow();
+
+        $maxH = max(array_column($data,'total_hours') ?: [1]);
+        $i = 1;
+        foreach ($data as $r) {
+            $pct   = $maxH > 0 ? round(($r['total_hours']/$maxH)*100) : 0;
+            $style = $pct >= 75 ? 'done' : ($pct >= 40 ? 'wip' : 'odd');
+            echo startRow();
+            echo cell((string)$i++,                                                            $style);
+            echo cell($r['company_code'] ?? '—',                                               $style);
+            echo cell($r['company_name'] ?? '—',                                               $style);
+            echo numberCell((float)$r['total_hours']);
+            echo numberCell((int)$r['total_visits']);
+            echo numberCell((int)$r['staff_count']);
+            echo numberCell((int)$r['visited'],   'done');
+            echo numberCell((int)$r['missed'],    'pending');
+            echo cell($r['last_visit'] ? date('d M Y', strtotime($r['last_visit'])) : '—',    $style);
+            echo endRow();
+        }
+
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"2\" ss:StyleID=\"gold_header\"><Data ss:Type=\"String\">TOTAL</Data></Cell>\n";
+        echo numberCell(array_sum(array_column($data,'total_hours')));
+        echo numberCell(array_sum(array_column($data,'total_visits')));
+        echo cell('', 'odd');
+        echo numberCell(array_sum(array_column($data,'visited')), 'done');
+        echo numberCell(array_sum(array_column($data,'missed')),  'pending');
+        echo cell('', 'odd');
+        echo endRow();
+
+        echo endSheet();
+    }
+
+    // ── WHO VISITED ──────────────────────────────────────────
+    elseif ($view === 'who') {
+        $st = $db->prepare("
+            SELECT wl.client_id, c.company_name, wl.user_id, u.full_name AS staff_name,
+                   u.employee_id,
+                   wl.log_date, wl.duration_hours, wl.time_in, wl.time_out,
+                   wl.visit_status, wl.work_description
+            FROM work_logs wl
+            LEFT JOIN companies c ON c.id = wl.client_id
+            LEFT JOIN users u     ON u.id = wl.user_id
+            WHERE wl.month_year = ? {$scopeWhere}
+            ORDER BY c.company_name ASC, wl.log_date ASC
+            LIMIT 1000
+        ");
+        $st->execute([$month]);
+        $data = $st->fetchAll();
+
+        echo startSheet($sheetName);
+
+        echo startRow();
+        echo "<Cell ss:MergeAcross=\"9\" ss:StyleID=\"title_row\">
+                <Data ss:Type=\"String\">Consulting — Who Visited Each Client | {$monthLabel}</Data>
+              </Cell>\n";
+        echo endRow();
+
+        echo startRow();
+        foreach (['Client','Emp ID','Staff','Date','Time In','Time Out','Hours','Status','Description'] as $h) {
+            echo headerCell($h);
+        }
+        echo endRow();
+
+        foreach ($data as $r) {
+            $style = match($r['visit_status']) {
+                'visited'     => 'done',
+                'missed'      => 'pending',
+                'rescheduled' => 'wip',
+                default       => 'odd',
+            };
+            echo startRow();
+            echo cell($r['company_name'] ?? '—',                                                   $style);
+            echo cell($r['employee_id'] ?? '—',                                                    $style);
+            echo cell($r['staff_name'] ?? '—',                                                     $style);
+            echo cell(date('d M Y', strtotime($r['log_date'])),                                    $style);
+            echo cell($r['time_in']  ? date('g:i A', strtotime($r['time_in']))  : '—',            $style);
+            echo cell($r['time_out'] ? date('g:i A', strtotime($r['time_out'])) : '—',            $style);
+            echo numberCell((float)$r['duration_hours']);
+            echo cell(ucfirst($r['visit_status'] ?? ''),                                           $style);
+            echo cell(mb_strimwidth($r['work_description'] ?? '', 0, 80, '…'),                     $style);
+            echo endRow();
+        }
+
+        echo endSheet();
+    }
+
+    echo '</Workbook>';
+    exit;
+}
 // ── Fallback ──────────────────────────────────────────────────
 else {
     header('Content-Type: text/plain');

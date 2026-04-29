@@ -41,24 +41,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $bSt->execute([$user['branch_id']]);
         $bName = $bSt->fetchColumn();
 
-        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['user_id']   = $user['id'];
         $_SESSION['full_name'] = $user['full_name'];
-        $_SESSION['role'] = strtolower($user['role_name'] ?? 'staff');
+        $_SESSION['role']      = strtolower($user['role_name'] ?? 'staff');
         $_SESSION['branch_id'] = $user['branch_id'];
         $_SESSION['branch_name'] = $bName ?: '';
-        $_SESSION['dept_id'] = $user['department_id'];
-        $_SESSION['email'] = $user['email'];
+        $_SESSION['dept_id']   = $user['department_id'];
+        $_SESSION['email']     = $user['email'];
+
+        // Store dept_code in session for routing
+        $_SESSION['dept_code'] = '';
+        if (!empty($user['department_id'])) {
+            $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+            $deptChk->execute([$user['department_id']]);
+            $_SESSION['dept_code'] = $deptChk->fetchColumn() ?: '';
+        }
 
         unset($_SESSION['2fa_pending_user'], $_SESSION['2fa_pending_role']);
 
         // Check if consulting department for redirect
-        $isConsulting = false;
-        if (!empty($user['department_id'])) {
-            $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
-            $deptChk->execute([$user['department_id']]);
-            $deptRow = $deptChk->fetch();
-            $isConsulting = ($deptRow && $deptRow['dept_code'] === 'CON');
-        }
 
         if ($_SESSION['role'] === 'admin') {
             $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id=?");
@@ -76,12 +77,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $role = strtolower($user['role_name']);
         setRememberToken($user['id'], true);
         session_regenerate_id(true);
-        if ($isConsulting && $role === 'admin') {
-            header('Location: ../admin/planning/index.php');
-        } elseif ($isConsulting && $role === 'staff') {
-            header('Location: ../staff/planning/index.php');
+        $deptCode = $_SESSION['dept_code'] ?? '';
+
+        if ($deptCode === 'CON' && $role === 'admin') {
+            header('Location: ' . APP_URL . 'admin/planning/index.php');
+        } elseif ($deptCode === 'CON' && $role === 'staff') {
+            header('Location: ' . APP_URL . 'staff/planning/index.php');
         } else {
-            header('Location: ../' . $role . '/dashboard/');
+            header('Location: ' . APP_URL . $role . '/dashboard/index.php');
         }
         exit;
     } else {

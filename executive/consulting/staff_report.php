@@ -191,14 +191,14 @@ include '../../includes/header.php';
         <div class="d-flex gap-2 flex-wrap align-items-center">
             <input type="month" class="form-control form-control-sm" style="width:150px;"
                    value="<?= $month ?>" onchange="setParam('month',this.value)">
-            <a href="export.php?type=pdf&view=performance&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>"
-               class="btn btn-outline-secondary btn-sm">
-                <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
-            </a>
-            <a href="export.php?type=excel&view=performance&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>"
-               class="btn btn-outline-secondary btn-sm">
-                <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
-            </a>
+            <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&month=<?= urlencode($month) ?>&view=<?= urlencode($view) ?>&staff_id=<?= $staffFilter ?>"
+                class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                </a>
+                <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&month=<?= urlencode($month) ?>&view=<?= urlencode($view) ?>&staff_id=<?= $staffFilter ?>"
+                class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                </a>
             <a href="index.php" class="btn btn-outline-secondary btn-sm">
                 <i class="fas fa-arrow-left me-1"></i>Back
             </a>

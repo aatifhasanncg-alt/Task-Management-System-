@@ -148,6 +148,14 @@ include '../../includes/header.php';
                         <a href="index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-home me-1"></i> Dashboard
                         </a>
+                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=monthly&month=<?= urlencode($month) ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                        </a>
+                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=monthly&month=<?= urlencode($month) ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                        </a>
                     </div>
                 </div>
             </div>
@@ -175,7 +183,8 @@ include '../../includes/header.php';
                                 <div style="font-size:.78rem;font-weight:600;color:#6b7280;"><?= $label ?></div>
                             </div>
                             <div style="font-size:1.35rem;font-weight:800;color:#1f2937;">
-                                <?= htmlspecialchars((string) $value) ?></div>
+                                <?= htmlspecialchars((string) $value) ?>
+                            </div>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -214,9 +223,11 @@ include '../../includes/header.php';
                                         <tr>
                                             <td>
                                                 <div class="text-truncate" style="max-width:160px;font-weight:600;">
-                                                    <?= htmlspecialchars($p['planner_name'] ?? '—') ?></div>
+                                                    <?= htmlspecialchars($p['planner_name'] ?? '—') ?>
+                                                </div>
                                                 <div style="font-size:.69rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?></div>
+                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?>
+                                                </div>
                                             </td>
                                             <td><strong style="color:#c9a84c;">Week <?= $p['week_number'] ?></strong></td>
                                             <td class="text-nowrap" style="font-size:.77rem;color:#6b7280;">
@@ -230,7 +241,8 @@ include '../../includes/header.php';
                                             </td>
                                             <td><?= planBadge($p['status']) ?></td>
                                             <td style="font-size:.75rem;color:#9ca3af;">
-                                                <?= date('d M Y', strtotime($p['created_at'])) ?></td>
+                                                <?= date('d M Y', strtotime($p['created_at'])) ?>
+                                            </td>
                                             <td>
                                                 <div class="d-flex align-items-center gap-1 flex-wrap">
                                                     <a href="plan_view.php?id=<?= $p['id'] ?>"

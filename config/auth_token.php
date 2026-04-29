@@ -65,10 +65,12 @@ function tryAutoLogin(): bool {
         SELECT rt.id, rt.user_id, rt.expires_at,
                u.username, u.full_name, u.department_id,
                u.branch_id, u.employee_id, u.email,
-               r.role_name AS role
+               r.role_name AS role,
+               d.dept_code
         FROM   remember_tokens rt
         JOIN   users u ON u.id = rt.user_id
         JOIN   roles r ON r.id = u.role_id
+        LEFT JOIN departments d ON d.id = u.department_id
         WHERE  rt.token = ?
           AND  (rt.expires_at IS NULL OR rt.expires_at > NOW())
         LIMIT  1
@@ -108,6 +110,7 @@ function tryAutoLogin(): bool {
     $_SESSION['dept_id']       = $row['department_id'];
     $_SESSION['email']         = $row['email'];
     $_SESSION['employee_id']   = $row['employee_id'] ?? '';
+    $_SESSION['dept_code']     = $row['dept_code'] ?? '';
     $_SESSION['last_activity'] = time();
     $_SESSION['user']          = [
         'id'            => $row['user_id'],

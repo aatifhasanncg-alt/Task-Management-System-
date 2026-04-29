@@ -6,7 +6,25 @@ require_once '../config/session.php';
 
 // Already logged in → redirect
 if (!empty($_SESSION['user_id'])) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard/index.php');
+    $role = $_SESSION['role'];
+
+    // dept_code may be missing from old sessions — fetch fresh if needed
+    if (!isset($_SESSION['dept_code']) && !empty($_SESSION['dept_id'])) {
+        $db   = getDB();
+        $stmt = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+        $stmt->execute([$_SESSION['dept_id']]);
+        $_SESSION['dept_code'] = $stmt->fetchColumn() ?: '';
+    }
+
+    $deptCode = $_SESSION['dept_code'] ?? '';
+
+    if ($deptCode === 'CON' && $role === 'admin') {
+        header('Location: ' . APP_URL . 'admin/planning/index.php');
+    } elseif ($deptCode === 'CON' && $role === 'staff') {
+        header('Location: ' . APP_URL . 'staff/planning/index.php');
+    } else {
+        header('Location: ' . APP_URL . $role . '/dashboard/index.php');
+    }
     exit;
 }
 
@@ -148,6 +166,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['employee_id'] = $user['employee_id'] ?? '';
             $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
+            // Store dept_code in session for routing
+            $_SESSION['dept_code'] = '';
+            if (!empty($user['department_id'])) {
+                $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
+                $deptChk->execute([$user['department_id']]);
+                $deptRow = $deptChk->fetch(PDO::FETCH_ASSOC);
+                $_SESSION['dept_code'] = $deptRow['dept_code'] ?? '';
+            }
+
             // Admin access
             if ($role === 'admin') {
                 $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id = ?");
@@ -167,21 +194,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             setRememberToken($user['id'], true);
 
             // Check if user belongs to Consulting department (dept_code = 'CORP' or id — adjust to your dept)
-            $isConsulting = false;
-            if (!empty($user['department_id'])) {
-                $deptChk = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
-                $deptChk->execute([$user['department_id']]);
-                $deptRow = $deptChk->fetch(PDO::FETCH_ASSOC);
-                // Change 'CONSULT' below to whatever dept_code your Consulting dept uses
-                $isConsulting = ($deptRow && $deptRow['dept_code'] === 'CON');
-            }
+           // Route based on whether a planning folder exists for this dept
+            $deptCode = $_SESSION['dept_code'] ?? '';
 
-            if ($isConsulting && $role === 'admin') {
-                header('Location: ../admin/planning/index.php');
-            } elseif ($isConsulting && $role === 'staff') {
-                header('Location: ../staff/planning/index.php');
+            if ($deptCode === 'CON' && $role === 'admin') {
+                header('Location: ' . APP_URL . 'admin/planning/index.php');
+            } elseif ($deptCode === 'CON' && $role === 'staff') {
+                header('Location: ' . APP_URL . 'staff/planning/index.php');
             } else {
-                header('Location: ../' . $role . '/dashboard/index.php');
+                header('Location: ' . APP_URL . $role . '/dashboard/index.php');
             }
             exit;
         }

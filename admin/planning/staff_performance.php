@@ -68,7 +68,10 @@ $deptName = $deptRow->fetchColumn() ?: 'Consulting';
 // ── Unread notification count ─────────────────────────────────
 $notifCount = (int) $db->query("
     SELECT COUNT(*) FROM plan_notifications
-    WHERE user_id={$uid} AND is_read=0
+    WHERE user_id = {$uid}
+      AND is_read = 0
+      AND created_at >= CURDATE()
+      AND created_at < DATE_ADD(CURDATE(), INTERVAL 2 DAY)
 ")->fetchColumn();
 
 // ── Scope: staff in same branch (dept-aware + no-dept staff) ──
@@ -354,6 +357,14 @@ include '../../includes/header.php';
                         <a href="../../index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-th-large me-1"></i>Dashboard
                         </a>
+                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=monthly&month=<?= urlencode($month) ?>&staff_id=<?= $filterStaffId ?>&from=<?= urlencode($filterFrom) ?>&to=<?= urlencode($filterTo) ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                        </a>
+                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=monthly&month=<?= urlencode($month) ?>&staff_id=<?= $filterStaffId ?>"
+                            class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                        </a>
                     </div>
                 </div>
             </div>
@@ -562,7 +573,8 @@ include '../../includes/header.php';
                                         <div style="text-align:center;background:<?= $bg ?>;border-radius:8px;
                                 padding:.7rem .3rem;border:1px solid <?= $col ?>22;">
                                             <div style="font-size:1.4rem;font-weight:800;color:<?= $col ?>;">
-                                                <?= (int) $cnt ?></div>
+                                                <?= (int) $cnt ?>
+                                            </div>
                                             <div style="font-size:.68rem;color:<?= $col ?>;font-weight:600;"><?= $lbl ?>
                                             </div>
                                         </div>
@@ -635,13 +647,15 @@ include '../../includes/header.php';
                                                     </div>
                                                     <?php if ($s['employee_id']): ?>
                                                         <div style="font-size:.68rem;color:#9ca3af;">
-                                                            <?= htmlspecialchars($s['employee_id']) ?></div>
+                                                            <?= htmlspecialchars($s['employee_id']) ?>
+                                                        </div>
                                                     <?php endif; ?>
                                                 </div>
                                             </div>
                                         </td>
                                         <td>
-                                            <span style="font-size:.73rem;background:<?= $isNoDept ? '#fef3c7' : '#f3f4f6' ?>;
+                                            <span
+                                                style="font-size:.73rem;background:<?= $isNoDept ? '#fef3c7' : '#f3f4f6' ?>;
                                  color:<?= $isNoDept ? '#92400e' : '#6b7280' ?>;padding:.1rem .45rem;border-radius:6px;">
                                                 <?= htmlspecialchars($s['dept_label']) ?>
                                             </span>
@@ -653,7 +667,8 @@ include '../../includes/header.php';
                                                 style="font-weight:700;color:#3b82f6;"><?= number_format((float) $s['hours'], 1) ?>h</span>
                                         </td>
                                         <td class="text-center" style="font-size:.82rem;color:#6b7280;">
-                                            <?= (int) $s['active_days'] ?> days</td>
+                                            <?= (int) $s['active_days'] ?> days
+                                        </td>
                                         <td class="text-center"><span
                                                 style="font-size:.8rem;font-weight:600;color:#8b5cf6;"><?= (int) $s['clients'] ?></span>
                                         </td>
@@ -708,15 +723,19 @@ include '../../includes/header.php';
                                     <td colspan="4" style="padding:10px 14px;font-size:.82rem;color:#374151;">
                                         <i class="fas fa-calculator me-1 text-warning"></i>TOTAL
                                     </td>
-                                    <td class="text-center" style="color:#3b82f6;"><?= number_format($totalHours, 1) ?>h</td>
+                                    <td class="text-center" style="color:#3b82f6;"><?= number_format($totalHours, 1) ?>h
+                                    </td>
                                     <td class="text-center" style="color:#6b7280;">—</td>
-                                    <td class="text-center" style="color:#8b5cf6;"><?= (int) ($kpi['unique_clients'] ?? 0) ?>
+                                    <td class="text-center" style="color:#8b5cf6;">
+                                        <?= (int) ($kpi['unique_clients'] ?? 0) ?>
                                     </td>
                                     <td class="text-center" style="color:#10b981;"><?= (int) ($kpi['visited'] ?? 0) ?></td>
                                     <td class="text-center" style="color:#ef4444;"><?= (int) ($kpi['missed'] ?? 0) ?></td>
-                                    <td class="text-center" style="color:#f59e0b;"><?= (int) ($kpi['rescheduled'] ?? 0) ?></td>
+                                    <td class="text-center" style="color:#f59e0b;"><?= (int) ($kpi['rescheduled'] ?? 0) ?>
+                                    </td>
                                     <td class="text-center" style="color:#3b82f6;"><?= $matchedCount ?> /
-                                        <?= $plannedCount ?></td>
+                                        <?= $plannedCount ?>
+                                    </td>
                                     <td><strong style="color:<?= $effColor ?>"><?= $visitEff ?>%</strong></td>
                                     <td></td>
                                 </tr>
@@ -759,17 +778,21 @@ include '../../includes/header.php';
                                 <tr>
                                     <td>
                                         <div style="font-size:.83rem;font-weight:500;white-space:nowrap;">
-                                            <?= date('d M Y', strtotime($l['log_date'])) ?></div>
+                                            <?= date('d M Y', strtotime($l['log_date'])) ?>
+                                        </div>
                                         <div style="font-size:.68rem;color:#9ca3af;">
-                                            <?= htmlspecialchars($l['day_of_week'] ?? '') ?></div>
+                                            <?= htmlspecialchars($l['day_of_week'] ?? '') ?>
+                                        </div>
                                     </td>
                                     <td style="font-size:.82rem;font-weight:500;"><?= htmlspecialchars($l['staff_name']) ?>
                                     </td>
                                     <td>
                                         <div style="font-size:.83rem;font-weight:500;">
-                                            <?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 22, '…')) ?></div>
+                                            <?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 22, '…')) ?>
+                                        </div>
                                         <div style="font-size:.68rem;color:#9ca3af;">
-                                            <?= htmlspecialchars($l['company_code'] ?? '') ?></div>
+                                            <?= htmlspecialchars($l['company_code'] ?? '') ?>
+                                        </div>
                                     </td>
                                     <td class="text-center" style="font-size:.78rem;color:#6b7280;">
                                         <?= $l['time_in'] ? date('g:i A', strtotime($l['time_in'])) : '—' ?>

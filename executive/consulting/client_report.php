@@ -471,7 +471,23 @@ if ($filterClientId && $selClient): ?>
                 <?= htmlspecialchars($selClient['company_code']??'') ?>
             </span>
         </h5>
-        <span style="font-size:.75rem;color:#9ca3af;"><?= htmlspecialchars($selClient['branch_name']??'') ?></span>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <span style="font-size:.75rem;color:#9ca3af;"><?= htmlspecialchars($selClient['branch_name']??'') ?></span>
+            <a href="client_report.php?month=<?= urlencode($month) ?>&branch=<?= urlencode($_GET['branch']??'all') ?>"
+               style="font-size:.72rem;color:#9ca3af;text-decoration:none;border:1px solid #e5e7eb;
+                      border-radius:6px;padding:.15rem .5rem;margin-left:.25rem;"
+               title="Clear client filter">
+                <i class="fas fa-times"></i> Clear
+            </a>
+            <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>&from=<?= urlencode($filterFrom) ?>&to=<?= urlencode($filterTo) ?>"
+               class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;padding:.2rem .55rem;">
+                <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+            </a>
+            <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>"
+               class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;padding:.2rem .55rem;">
+                <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+            </a>
+        </div>
     </div>
     <div class="card-mis-body">
         <div class="row g-3 mb-3">
@@ -716,10 +732,11 @@ if ($filterClientId && $selClient): ?>
                     <?php endif; ?>
                 </td>
                 <td>
-                    <a href="?month=<?= $month ?>&branch=<?= $_GET['branch']??'all' ?>&client_id=<?= $cp['client_id'] ?>"
-                       style="font-size:.72rem;color:#3b82f6;text-decoration:none;">
-                        <i class="fas fa-search-plus"></i>
-                    </a>
+                    <a href="?month=<?= urlencode($month) ?>&branch=<?= urlencode($_GET['branch']??'all') ?>&client_id=<?= $cp['client_id'] ?><?= $filterStaffId ? '&staff_id='.$filterStaffId : '' ?><?= $filterStatus ? '&vstatus='.urlencode($filterStatus) : '' ?>"
+                        style="font-size:.72rem;color:#3b82f6;text-decoration:none;"
+                        title="Drill into <?= htmlspecialchars($cp['company_name']??'') ?>">
+                            <i class="fas fa-search-plus"></i> <span style="font-size:.68rem;">Drill</span>
+                        </a>
                 </td>
             </tr>
             <?php endforeach; ?>
