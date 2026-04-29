@@ -49,7 +49,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone     = trim($_POST['phone']              ?? $staff['phone']);
     $emergency = trim($_POST['emergency_contact']  ?? $staff['emergency_contact']);
     $roleId    = (int)($_POST['role_id']           ?? $staff['role_id']);
-    $branchId  = (int)($_POST['branch_id']         ?? $staff['branch_id']);
     $deptId    = (int)($_POST['department_id']     ?? $staff['department_id']);
     $managedBy = (int)($_POST['managed_by']        ?? $staff['managed_by']) ?: null;
     $joiningDate = $_POST['joining_date']          ?? $staff['joining_date'];
@@ -61,7 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$username) $errors[] = 'Username is required.';
     if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'A valid email is required.';
     if (!$roleId)   $errors[] = 'Role is required.';
-    if (!$branchId) $errors[] = 'Branch is required.';
     if (!$deptId)   $errors[] = 'Department is required.';
 
     $uCheck = $db->prepare("SELECT id FROM users WHERE username=? AND id!=?");
@@ -73,20 +71,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($eCheck->fetch()) $errors[] = 'Email is already used by another user.';
 
     if (!$errors) {
-        $oldRoleId = $staff['role_id'];
+        $oldRoleId = (int)$staff['role_id'];
 
+        // Always update base fields (NO branch_id — admin cannot change branch)
         $db->prepare("
             UPDATE users SET
                 full_name=?, username=?, email=?, phone=?, emergency_contact=?,
-                branch_id=?, department_id=?, managed_by=?,
+                department_id=?, managed_by=?,
                 joining_date=?, address=?, is_active=?, ga_enabled=?
             WHERE id=?
         ")->execute([
             $fullName, $username, $email, $phone ?: null, $emergency ?: null,
-            $branchId, $deptId, $managedBy,
+            $deptId, $managedBy,
             $joiningDate ?: null, $address ?: null, $is_active, $gaEnabled,
             $staffId
         ]);
+
         // Save additional departments (UDA)
         $db->prepare("DELETE FROM user_department_assignments WHERE user_id = ?")->execute([$staffId]);
         $extraDepts = $_POST['extra_departments'] ?? [];
@@ -100,13 +100,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        if ($oldRoleId != $roleId) {
+        // Role change — update role_id directly + log history
+        if ($oldRoleId !== $roleId) {
+
+            // 1. Capture old employee_id before changing anything
+            $oldEmpCode = $staff['employee_id'] ?? null;
+
+            // 2. Fetch new role name to build new employee code
+            $newRoleStmt = $db->prepare("SELECT role_name FROM roles WHERE id = ?");
+            $newRoleStmt->execute([$roleId]);
+            $newRoleData = $newRoleStmt->fetch();
+            $rolePrefix  = strtoupper(substr($newRoleData['role_name'] ?? 'STF', 0, 3));
+            $newEmpCode  = $rolePrefix . '-' . str_pad($staffId, 4, '0', STR_PAD_LEFT);
+
+            // 3. Update role_id AND employee_id in users table
+            $db->prepare("
+                UPDATE users SET role_id = ?, employee_id = ? WHERE id = ?
+            ")->execute([$roleId, $newEmpCode, $staffId]);
+
+            // 4. Log to user_role_history
+            $db->prepare("
+                INSERT INTO user_role_history
+                    (user_id, old_role_id, new_role_id,
+                    old_employee_id, new_employee_id,
+                    old_branch_id, new_branch_id,
+                    changed_by, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ")->execute([
+                $staffId,
+                $oldRoleId,
+                $roleId,
+                $oldEmpCode,
+                $newEmpCode,
+                $staff['branch_id'],  // branch stays the same — admin can't change it
+                $staff['branch_id'],  // so old and new branch_id are identical
+                $_SESSION['user_id'],
+                'Updated via admin staff edit form'
+            ]);
+
+            // 5. Call role_manager for permission resets
             require_once '../../config/role_manager.php';
             changeUserRole(
-                userId:      $staffId,
-                newRoleId:   $roleId,
-                newBranchId: $branchId,
-                reason:      'Updated via staff edit form'
+                $staffId,
+                $roleId,
+                $staff['branch_id'],  // pass existing branch since admin can't change it
+                'Updated via admin staff edit form'
             );
         }
 
@@ -411,18 +449,21 @@ include '../../includes/header.php';
                     <div class="row g-3">
 
                         <div class="col-md-6">
-                            <label class="form-label-mis">
-                                Branch <span class="required-star">*</span>
-                            </label>
-                            <select name="branch_id" class="form-select" required>
-                                <option value="">-- Select Branch --</option>
-                                <?php foreach ($allBranches as $b): ?>
-                                <option value="<?= $b['id'] ?>"
-                                    <?= ($staff['branch_id'] == $b['id']) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($b['branch_name']) ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label class="form-label-mis">Branch</label>
+                            <div class="input-group">
+                                <span class="input-group-text" style="background:#f9fafb;border-color:#e5e7eb;">
+                                    <i class="fas fa-code-branch" style="color:#9ca3af;font-size:.8rem;"></i>
+                                </span>
+                                <input type="text" class="form-control"
+                                    value="<?php
+                                        foreach ($allBranches as $b) {
+                                            if ($b['id'] == $staff['branch_id']) { echo htmlspecialchars($b['branch_name']); break; }
+                                        }
+                                    ?>"
+                                    readonly
+                                    style="background:#f9fafb;cursor:not-allowed;color:#9ca3af;">
+                            </div>
+                            <small style="font-size:.65rem;color:#9ca3af;">Branch cannot be changed by admin</small>
                         </div>
 
                         <div class="col-md-6">

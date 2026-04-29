@@ -73,47 +73,87 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($eCheck->fetch()) $errors[] = 'Email is already used by another user.';
 
     if (!$errors) {
-        $oldRoleId = $staff['role_id'];
+    $oldRoleId = (int)$staff['role_id']; // ← cast to int to ensure strict comparison
 
-        $db->prepare("
-            UPDATE users SET
-                full_name=?, username=?, email=?, phone=?, emergency_contact=?,
-                branch_id=?, department_id=?, managed_by=?,
-                joining_date=?, address=?, is_active=?, ga_enabled=?
-            WHERE id=?
-        ")->execute([
-            $fullName, $username, $email, $phone ?: null, $emergency ?: null,
-            $branchId, $deptId, $managedBy,
-            $joiningDate ?: null, $address ?: null, $is_active, $gaEnabled,
-            $staffId
-        ]);
-        // Save additional departments (UDA)
-        $db->prepare("DELETE FROM user_department_assignments WHERE user_id = ?")->execute([$staffId]);
-        $extraDepts = $_POST['extra_departments'] ?? [];
-        foreach ($extraDepts as $extraDeptId) {
-            $extraDeptId = (int)$extraDeptId;
-            if ($extraDeptId && $extraDeptId !== $deptId) {
-                $db->prepare("
-                    INSERT IGNORE INTO user_department_assignments (user_id, department_id)
-                    VALUES (?, ?)
-                ")->execute([$staffId, $extraDeptId]);
-            }
+    // Always update base fields
+    $db->prepare("
+        UPDATE users SET
+            full_name=?, username=?, email=?, phone=?, emergency_contact=?,
+            branch_id=?, department_id=?, managed_by=?,
+            joining_date=?, address=?, is_active=?, ga_enabled=?
+        WHERE id=?
+    ")->execute([
+        $fullName, $username, $email, $phone ?: null, $emergency ?: null,
+        $branchId, $deptId, $managedBy,
+        $joiningDate ?: null, $address ?: null, $is_active, $gaEnabled,
+        $staffId
+    ]);
+
+    // Save additional departments (UDA)
+    $db->prepare("DELETE FROM user_department_assignments WHERE user_id = ?")->execute([$staffId]);
+    $extraDepts = $_POST['extra_departments'] ?? [];
+    foreach ($extraDepts as $extraDeptId) {
+        $extraDeptId = (int)$extraDeptId;
+        if ($extraDeptId && $extraDeptId !== $deptId) {
+            $db->prepare("
+                INSERT IGNORE INTO user_department_assignments (user_id, department_id)
+                VALUES (?, ?)
+            ")->execute([$staffId, $extraDeptId]);
         }
-
-        if ($oldRoleId != $roleId) {
-            require_once '../../config/role_manager.php';
-            changeUserRole(
-                userId:      $staffId,
-                newRoleId:   $roleId,
-                newBranchId: $branchId,
-                reason:      'Updated via staff edit form'
-            );
-        }
-
-        setFlash('success', 'Staff member updated successfully.');
-        header("Location: view.php?id={$staffId}");
-        exit;
     }
+
+    // Role change — update role_id directly + call role manager
+    if ($oldRoleId !== $roleId) {
+
+        // 1. Capture old employee_id before changing anything
+        $oldEmpCode = $staff['employee_id'] ?? null;
+
+        // 2. Fetch new role name to build new employee code
+        $newRoleStmt = $db->prepare("SELECT role_name FROM roles WHERE id = ?");
+        $newRoleStmt->execute([$roleId]);
+        $newRoleData = $newRoleStmt->fetch();
+        $rolePrefix  = strtoupper(substr($newRoleData['role_name'] ?? 'STF', 0, 3));
+        $newEmpCode  = $rolePrefix . '-' . str_pad($staffId, 4, '0', STR_PAD_LEFT);
+
+        // 3. Update role_id AND employee_id together in users table
+        $db->prepare("
+            UPDATE users SET role_id = ?, employee_id = ? WHERE id = ?
+        ")->execute([$roleId, $newEmpCode, $staffId]);
+
+        // 4. Log to user_role_history (all columns including old/new employee_id)
+        $db->prepare("
+            INSERT INTO user_role_history 
+                (user_id, old_role_id, new_role_id,
+                old_employee_id, new_employee_id,
+                old_branch_id, new_branch_id,
+                changed_by, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ")->execute([
+            $staffId,
+            $oldRoleId,
+            $roleId,
+            $oldEmpCode,
+            $newEmpCode,
+            $staff['branch_id'],
+            $branchId,
+            $_SESSION['user_id'],
+            'Updated via staff edit form'
+        ]);
+
+        // 5. Call role_manager for permission resets (if it does additional work)
+        require_once '../../config/role_manager.php';
+        changeUserRole(
+            $staffId,
+            $roleId,
+            $branchId,
+            'Updated via staff edit form'
+        );
+    }
+
+    setFlash('success', 'Staff member updated successfully.');
+    header("Location: view.php?id={$staffId}");
+    exit;
+}
 }
 
 // Current role name for display

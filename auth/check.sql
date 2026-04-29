@@ -79,18 +79,21 @@ CREATE TABLE `admin_department_access` (
   `department_id` int(11) NOT NULL
 );
 
+DROP TABLE user_role_history;
+
 CREATE TABLE `user_role_history` (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  `user_id` int(11) NOT NULL,
-  `old_role_id` int(11) NOT NULL,
-  `new_role_id` int(11) NOT NULL,
-  `old_employee_id` varchar(50) DEFAULT NULL,
-  `new_employee_id` varchar(50) DEFAULT NULL,
-  `old_branch_id` int(11) DEFAULT NULL,
-  `new_branch_id` int(11) DEFAULT NULL,
-  `changed_by` int(11) NOT NULL,
-  `changed_at` timestamp NULL DEFAULT current_timestamp(),
-  `reason` text DEFAULT NULL
+  `id` INT(11) NOT NULL AUTO_INCREMENT,
+  `user_id` INT(11) NOT NULL,
+  `old_role_id` INT(11) NOT NULL,
+  `new_role_id` INT(11) NOT NULL,
+  `old_employee_id` VARCHAR(50) DEFAULT NULL,
+  `new_employee_id` VARCHAR(50) DEFAULT NULL,
+  `old_branch_id` INT(11) DEFAULT NULL,
+  `new_branch_id` INT(11) DEFAULT NULL,
+  `changed_by` INT(11) NOT NULL,
+  `changed_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(),
+  `reason` TEXT DEFAULT NULL,
+  PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 ALTER TABLE `user_role_history`
   ADD KEY `user_id` (`user_id`),
