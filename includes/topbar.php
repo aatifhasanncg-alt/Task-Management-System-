@@ -12,7 +12,7 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$__u['id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
-$__uid = (int)($user['id'] ?? 0);
+$__uid = (int) ($user['id'] ?? 0);
 
 // Unread count
 $__unread = 0;
@@ -688,7 +688,38 @@ if (!function_exists('__rewriteLink')) {
             setTimeout(() => toast.remove(), 350);
         }, 5000);
     }
+    function markAllReadDropdown(btn) {
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Marking…'; }
 
+        fetch("<?= APP_URL ?>/ajax/mark_notification_read.php", {
+            method: "POST",
+            credentials: "same-origin"
+            // No body = mark ALL read (matches your existing markAllRemindersRead logic)
+        })
+            .then(res => res.json())
+            .then(() => {
+                // 1. Remove all unread dots from dropdown items
+                document.querySelectorAll('.ndrop-dot').forEach(dot => dot.remove());
+
+                // 2. Remove gold left border from all dropdown items
+                document.querySelectorAll('.notif-drop-item').forEach(item => {
+                    item.style.borderLeft = '3px solid transparent';
+                    item.style.background = '#fff';
+                });
+
+                // 3. Zero the badge
+                setBadge(0);
+
+                // 4. Hide the mark-all button itself
+                if (btn) btn.style.display = 'none';
+            })
+            .catch(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-check-double me-1"></i>Mark all read';
+                }
+            });
+    }
 
 
     // ── Poll for new notifications ────────────────────────────────

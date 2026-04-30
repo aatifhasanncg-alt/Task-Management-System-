@@ -710,7 +710,7 @@ include '../../includes/header.php';
                                     <th class="text-center">Actual Hrs</th>
                                     <th style="min-width:130px;">Hour Eff.</th>
                                     <th style="min-width:130px;">Visit Eff.</th>
-                                    <th>First · Last Visit</th>
+                                    <th>Last Visit</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
@@ -808,11 +808,7 @@ include '../../includes/header.php';
                                                     plan</span><?php endif; ?>
                                         </td>
                                         <td style="font-size:.75rem;color:#6b7280;white-space:nowrap;">
-                                            <?= $cp['first_visit'] ? date('d M', strtotime($cp['first_visit'])) : '—' ?>
-                                            <?php if ($cp['first_visit'] && $cp['last_visit'] && $cp['first_visit'] !== $cp['last_visit']): ?>
-                                                <span style="color:#d1d5db;"> →
-                                                </span><?= date('d M', strtotime($cp['last_visit'])) ?>
-                                            <?php endif; ?>
+                                            <?= $cp['last_visit'] ? date('d M Y', strtotime($cp['last_visit'])) : '—' ?>
                                         </td>
                                         <td>
                                             <a href="?month=<?= urlencode($month) ?>&client_id=<?= $cp['client_id'] ?><?= $filterStaffId ? '&staff_id=' . $filterStaffId : '' ?><?= $filterStatus ? '&visit_status=' . urlencode($filterStatus) : '' ?>"

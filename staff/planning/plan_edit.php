@@ -7,7 +7,43 @@ require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 requireAnyRole();
+function planEmailRow(string $label, string $value): string
+{
+    return str_pad($label, 16) . ': ' . $value . "\n";
+}
 
+function sendPlanEditEmail(array $supervisor, array $data): void
+{
+    $to      = $supervisor['email'];
+    $supName = $supervisor['full_name'] ?? 'Supervisor';
+    $subject = 'Work Plan Edited - ' . $data['staff_name']
+             . ' Week ' . $data['week_number']
+             . ' (' . $data['month_label'] . ')';
+
+    $rows  = planEmailRow('Staff',         $data['staff_name']);
+    $rows .= planEmailRow('Month',         $data['month_label']);
+    $rows .= planEmailRow('Week',          'Week ' . $data['week_number']);
+    $rows .= planEmailRow('Date Range',    $data['week_range']);
+    $rows .= planEmailRow('Visit Entries', $data['entry_count'] . ' clients');
+    $rows .= planEmailRow('Total Hours',   $data['total_hours'] . ' hrs');
+    $rows .= planEmailRow('Remarks',       $data['remarks']);
+
+    $body  = "Hi {$supName},\n\n";
+    $body .= "A staff member has edited their weekly work plan. Here are the updated details:\n\n";
+    $body .= str_repeat('-', 40) . "\n";
+    $body .= $rows;
+    $body .= str_repeat('-', 40) . "\n\n";
+    $body .= "View the plan here:\n" . $data['plan_url'] . "\n\n";
+    $body .= "This is an automated notification. Please do not reply to this email.\n";
+
+    $host     = parse_url(APP_URL, PHP_URL_HOST) ?: 'localhost';
+    $headers  = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
+    $headers .= "From: " . APP_NAME . " <no-reply@" . $host . ">\r\n";
+    $headers .= "X-Mailer: PHP/" . PHP_VERSION . "\r\n";
+
+    mail($to, $subject, $body, $headers);
+}
 $db = getDB();
 $user = currentUser();
 $uid = (int) $user['id'];
@@ -122,6 +158,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $db->commit();
+
+            // ── Supervisor Notifications ───────────────────────────────────────
+            try {
+                $branchId = (int) $user['branch_id'];
+                $staffName = $user['full_name'] ?? ('User #' . $uid);
+
+                // Format week range
+                $weekRange = date('d M', strtotime($plan['week_start_date']))
+                    . ' – '
+                    . date('d M Y', strtotime($plan['week_end_date']));
+
+                // Count entries inserted
+                $entryCount = count(array_filter($entries, fn($e) => !empty($e['client_id'])));
+
+                // Calculate total planned hours
+                $totalHours = 0;
+                foreach ($entries as $e) {
+                    if (!empty($e['time_in']) && !empty($e['time_out'])) {
+                        $diff = (strtotime($e['time_out']) - strtotime($e['time_in'])) / 3600;
+                        if ($diff > 0)
+                            $totalHours += $diff;
+                    }
+                }
+                $totalHours = round($totalHours, 2);
+
+                $planUrl = APP_URL . '/admin/planning/plan_view.php?id=' . $planId;
+
+                // Find supervisors / admins in same branch
+                $supStmt = $db->prepare("
+        SELECT u.id, u.full_name, u.email
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE u.branch_id = ?
+          AND r.role_name = 'admin'
+          AND u.is_active = 1
+    ");
+                $supStmt->execute([$branchId]);
+                $supervisors = $supStmt->fetchAll();
+
+                foreach ($supervisors as $sup) {
+
+                    // ── 1. In-app notification ─────────────────────────────────
+                    $notifMsg = "{$staffName} edited their work plan for Week {$plan['week_number']} "
+                        . "({$weekRange}) with {$entryCount} visit entries ({$totalHours} hrs planned).";
+
+                    $notifStmt = $db->prepare("
+            INSERT INTO notifications
+                (user_id, type, title, message, link, is_read, created_at)
+            VALUES
+                (?, 'system', 'Work Plan Edited', ?, ?, 0, NOW())
+        ");
+                    $notifStmt->execute([$sup['id'], $notifMsg, $planUrl]);
+
+                    // ── 2. Email notification ──────────────────────────────────
+                    if (!empty($sup['email'])) {
+                        sendPlanEditEmail($sup, [
+                            'staff_name' => $staffName,
+                            'month_label' => $monthLabel,
+                            'week_number' => $plan['week_number'],
+                            'week_range' => $weekRange,
+                            'entry_count' => $entryCount,
+                            'total_hours' => $totalHours,
+                            'remarks' => $remarks ?: '—',
+                            'plan_url' => $planUrl,
+                        ]);
+                    }
+                }
+
+            } catch (Exception $notifEx) {
+                // Notification failure must never break the main flow
+                error_log('Plan edit notification error: ' . $notifEx->getMessage());
+            }
+            // ── End Notifications ──────────────────────────────────────────────
+
+            setFlash('success', 'Plan updated successfully!');
+            header('Location: plan_list.php?month=' . $month);
+            exit;
             setFlash('success', 'Plan updated successfully!');
             header('Location: plan_list.php?month=' . $month);
             exit;
@@ -179,7 +292,8 @@ include '../../includes/header.php';
                         <div class="page-hero-badge"><i class="fas fa-briefcase"></i> Consulting</div>
                         <h4>Edit Work Plan</h4>
                         <p><?= htmlspecialchars($user['full_name']) ?> · <?= $monthLabel ?> · Week
-                            <?= $plan['week_number'] ?></p>
+                            <?= $plan['week_number'] ?>
+                        </p>
                     </div>
                     <div class="d-flex gap-2 flex-wrap align-items-center">
                         <a href="plan_list.php?month=<?= $month ?>" class="btn btn-sm btn-outline-secondary">
@@ -325,27 +439,27 @@ include '../../includes/header.php';
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-let idx = 0;
-const weekStart = '<?= $plan['week_start_date'] ?>';
-const weekEnd   = '<?= $plan['week_end_date'] ?>';
+    let idx = 0;
+    const weekStart = '<?= $plan['week_start_date'] ?>';
+    const weekEnd = '<?= $plan['week_end_date'] ?>';
 
-// Build options HTML once
-const clientOptions = `
+    // Build options HTML once
+    const clientOptions = `
     <option value="">— Select Client —</option>
     <?php foreach ($companies as $c): ?>
     <option value="<?= $c['id'] ?>"><?= addslashes(htmlspecialchars($c['company_name'])) ?><?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?></option>
     <?php endforeach; ?>
 `;
 
-function addEntry(data = {}) {
-    const container = document.getElementById('entries');
-    document.getElementById('emptyEntries').style.display = 'none';
+    function addEntry(data = {}) {
+        const container = document.getElementById('entries');
+        document.getElementById('emptyEntries').style.display = 'none';
 
-    const div = document.createElement('div');
-    div.className = 'entry-row';
-    div.dataset.index = idx;
+        const div = document.createElement('div');
+        div.className = 'entry-row';
+        div.dataset.index = idx;
 
-    div.innerHTML = `
+        div.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <span style="font-size:.82rem;font-weight:600;color:#c9a84c;">
             <i class="fas fa-building me-1"></i>Visit #<span class="entry-num">1</span>
@@ -383,7 +497,7 @@ function addEntry(data = {}) {
         <div>
             <label class="cn-label">Notes</label>
             <input type="text" name="entries[${idx}][notes]" class="cn-input"
-                   placeholder="Purpose of visit…" value="${(data.notes || '').replace(/"/g,'&quot;')}">
+                   placeholder="Purpose of visit…" value="${(data.notes || '').replace(/"/g, '&quot;')}">
         </div>
         <div class="hrs-pill">
             <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
@@ -391,70 +505,71 @@ function addEntry(data = {}) {
         </div>
     </div>`;
 
-    container.appendChild(div);
+        container.appendChild(div);
 
-    // TomSelect on client dropdown
-    const sel = div.querySelector('.entry-client');
-    const ts = new TomSelect(sel, { placeholder: 'Search client…', maxOptions: 500 });
+        // TomSelect on client dropdown
+        const sel = div.querySelector('.entry-client');
+        const ts = new TomSelect(sel, { placeholder: 'Search client…', maxOptions: 500 });
 
-    // Pre-select existing client
-    if (data.client_id) ts.setValue(String(data.client_id));
+        // Pre-select existing client
+        if (data.client_id) ts.setValue(String(data.client_id));
 
-    // Time calc
-    div.querySelectorAll('.time-in,.time-out').forEach(t =>
-        t.addEventListener('change', () => calcHours(div))
-    );
+        // Time calc
+        div.querySelectorAll('.time-in,.time-out').forEach(t =>
+            t.addEventListener('change', () => calcHours(div))
+        );
 
-    // Calc immediately if preloaded
-    if (data.planned_time_in && data.planned_time_out) calcHours(div);
+        // Calc immediately if preloaded
+        if (data.planned_time_in && data.planned_time_out) calcHours(div);
 
-    idx++;
-    renumber();
-    updateSummary();
-}
+        idx++;
+        renumber();
+        updateSummary();
+    }
+    
 
-function removeEntry(btn) {
-    btn.closest('.entry-row').remove();
-    renumber();
-    updateSummary();
+    function removeEntry(btn) {
+        btn.closest('.entry-row').remove();
+        renumber();
+        updateSummary();
+        if (!document.querySelectorAll('.entry-row').length)
+            document.getElementById('emptyEntries').style.display = '';
+    }
+
+    function renumber() {
+        document.querySelectorAll('.entry-num').forEach((el, i) => el.textContent = i + 1);
+    }
+
+    function calcHours(row) {
+        const tin = row.querySelector('.time-in').value;
+        const tout = row.querySelector('.time-out').value;
+        if (tin && tout) {
+            const diff = (new Date('1970-01-01T' + tout) - new Date('1970-01-01T' + tin)) / 3600000;
+            row.querySelector('.planned-hrs').textContent = (diff > 0 ? diff : 0).toFixed(2) + 'h';
+        } else {
+            row.querySelector('.planned-hrs').textContent = '0.00h';
+        }
+        updateSummary();
+    }
+
+    function updateSummary() {
+        let total = 0, cnt = 0;
+        document.querySelectorAll('.entry-row').forEach(row => {
+            cnt++;
+            total += parseFloat(row.querySelector('.planned-hrs').textContent) || 0;
+        });
+        document.getElementById('totHrs').textContent = total.toFixed(1) + 'h';
+        document.getElementById('entCnt').textContent = cnt;
+    }
+
+    // Preload existing entries
+    <?php foreach ($entriesData as $e): ?>
+    addEntry(<?= json_encode($e) ?>);
+    <?php endforeach; ?>
+
+    // Show empty state if no entries
     if (!document.querySelectorAll('.entry-row').length)
         document.getElementById('emptyEntries').style.display = '';
-}
-
-function renumber() {
-    document.querySelectorAll('.entry-num').forEach((el, i) => el.textContent = i + 1);
-}
-
-function calcHours(row) {
-    const tin  = row.querySelector('.time-in').value;
-    const tout = row.querySelector('.time-out').value;
-    if (tin && tout) {
-        const diff = (new Date('1970-01-01T' + tout) - new Date('1970-01-01T' + tin)) / 3600000;
-        row.querySelector('.planned-hrs').textContent = (diff > 0 ? diff : 0).toFixed(2) + 'h';
-    } else {
-        row.querySelector('.planned-hrs').textContent = '0.00h';
-    }
-    updateSummary();
-}
-
-function updateSummary() {
-    let total = 0, cnt = 0;
-    document.querySelectorAll('.entry-row').forEach(row => {
-        cnt++;
-        total += parseFloat(row.querySelector('.planned-hrs').textContent) || 0;
-    });
-    document.getElementById('totHrs').textContent = total.toFixed(1) + 'h';
-    document.getElementById('entCnt').textContent = cnt;
-}
-
-// Preload existing entries
-<?php foreach ($entriesData as $e): ?>
-addEntry(<?= json_encode($e) ?>);
-<?php endforeach; ?>
-
-// Show empty state if no entries
-if (!document.querySelectorAll('.entry-row').length)
-    document.getElementById('emptyEntries').style.display = '';
 </script>
 
 <?php include '../../includes/footer.php'; ?>

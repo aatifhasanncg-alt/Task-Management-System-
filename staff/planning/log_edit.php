@@ -87,13 +87,196 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $logId,
             $uid
         ]);
+
+        // ── Fetch updated client name ──────────────────────────────────────
+        $clientStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
+        $clientStmt->execute([$clientId]);
+        $clientName = $clientStmt->fetchColumn() ?: '—';
+
+        // ── Find supervisors for this branch ───────────────────────────────
+        // ── Find supervisors for this branch ───────────────────────────────
+        $supStmt = $db->prepare("
+            SELECT u.id, u.full_name, u.email
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            WHERE u.branch_id = ?
+            AND r.role_name IN = 'admin'
+            AND u.is_active = 1
+        ");
+        $supStmt->execute([$branchId]);
+        $supervisors = $supStmt->fetchAll();
+
+        $staffName = $user['full_name'] ?? ('User #' . $uid);
+        $logDateFmt = date('d M Y', strtotime($logDate));
+        $logUrl = APP_URL . 'admin/planning/log_list.php?month=' . $monthYear;
+
+        $statusLabels = [
+            'visited' => 'Visited',
+            'missed' => 'Missed',
+            'rescheduled' => 'Rescheduled',
+        ];
+        $statusLabel = $statusLabels[$visitStatus] ?? $visitStatus;
+        $durationText = $durHours > 0 ? $durHours . ' hrs' : '—';
+
+        foreach ($supervisors as $sup) {
+
+            // ── 1. In-app notification ─────────────────────────────────────
+            $notifMsg = "{$staffName} edited a visit log for {$clientName} on {$logDateFmt} ({$statusLabel}).";
+            $notifStmt = $db->prepare("
+                INSERT INTO notifications
+                    (user_id, type, title, message, link, is_read, created_at)
+                VALUES
+                    (?, 'system', 'Visit Log Edited', ?, ?, 0, NOW())
+            ");
+            $notifStmt->execute([$sup['id'], $notifMsg, $logUrl]);
+
+            // ── 2. Email notification ──────────────────────────────────────
+            if (!empty($sup['email'])) {
+                sendLogEditEmail($sup, [
+                    'staff_name' => $staffName,
+                    'client_name' => $clientName,
+                    'log_date' => $logDateFmt,
+                    'time_in' => $timeIn ? date('h:i A', strtotime($timeIn)) : '—',
+                    'time_out' => $timeOut ? date('h:i A', strtotime($timeOut)) : '—',
+                    'duration' => $durationText,
+                    'status' => $statusLabel,
+                    'description' => $workDesc ?: '—',
+                    'log_url' => $logUrl,
+                ]);
+            }
+        }
+
         setFlash('success', 'Log updated successfully!');
         header('Location: log_list.php?month=' . $monthYear);
         exit;
     }
 }
 
-// Pre-fill from existing log or POST
+// ── Email helper ───────────────────────────────────────────────────────────────
+function sendLogEditEmail(array $supervisor, array $data): void
+{
+    $to = $supervisor['email'];
+    $supName = htmlspecialchars($supervisor['full_name'] ?? 'Supervisor');
+    $subject = "Visit Log Edited — {$data['client_name']} ({$data['log_date']})";
+
+    $body = '
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Visit Log Edited</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:\'Segoe UI\',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:32px 0;">
+  <tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;
+           overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);max-width:600px;width:100%;">
+
+      <!-- Header -->
+      <tr>
+        <td style="background:linear-gradient(135deg,#1e2a3a 0%,#2d3f55 100%);
+                   padding:28px 32px;text-align:center;">
+          <div style="font-size:22px;font-weight:700;color:#c9a84c;letter-spacing:.5px;">
+            📋 Visit Log Edited
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-top:4px;">Staff Activity Notification</div>
+        </td>
+      </tr>
+
+      <!-- Greeting -->
+      <tr>
+        <td style="padding:28px 32px 12px;">
+          <p style="margin:0;font-size:15px;color:#374151;">
+            Hi <strong>' . $supName . '</strong>,
+          </p>
+          <p style="margin:10px 0 0;font-size:14px;color:#6b7280;line-height:1.6;">
+            A staff member has <strong style="color:#c9a84c;">edited a client visit log</strong>.
+            Here are the updated details:
+          </p>
+        </td>
+      </tr>
+
+      <!-- Details card -->
+      <tr>
+        <td style="padding:12px 32px 24px;">
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;overflow:hidden;">
+            <tr style="background:#f1f5f9;">
+              <td colspan="2" style="padding:10px 16px;font-size:12px;font-weight:700;
+                  color:#64748b;letter-spacing:.6px;text-transform:uppercase;">
+                Log Details
+              </td>
+            </tr>
+            ' . buildEmailRow('👤 Staff', $data['staff_name'])
+        . buildEmailRow('🏢 Client', $data['client_name'])
+        . buildEmailRow('📅 Date', $data['log_date'])
+        . buildEmailRow('🕐 Time In', $data['time_in'])
+        . buildEmailRow('🕔 Time Out', $data['time_out'])
+        . buildEmailRow('⏱ Duration', $data['duration'])
+        . buildEmailRow('📌 Status', $data['status'])
+        . buildEmailRow('📝 Description', $data['description'], true) . '
+          </table>
+        </td>
+      </tr>
+
+      <!-- CTA -->
+      <tr>
+        <td style="padding:0 32px 32px;text-align:center;">
+          <a href="' . htmlspecialchars($data['log_url']) . '"
+             style="display:inline-block;background:linear-gradient(135deg,#c9a84c,#e0bc6a);
+                    color:#1e2a3a;font-weight:700;font-size:14px;padding:12px 32px;
+                    border-radius:8px;text-decoration:none;letter-spacing:.3px;">
+            View All Logs →
+          </a>
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td style="background:#f8fafc;border-top:1px solid #e5e7eb;
+                   padding:16px 32px;text-align:center;">
+          <p style="margin:0;font-size:11px;color:#9ca3af;">
+            This is an automated notification. Please do not reply to this email.
+          </p>
+        </td>
+      </tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>';
+
+    $headers = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $headers .= "From: " . APP_NAME . " <no-reply@" . parse_url(APP_URL, PHP_URL_HOST) . ">\r\n";
+    $headers .= "X-Mailer: PHP/" . PHP_VERSION . "\r\n";
+
+    mail($to, $subject, $body, $headers);
+}
+
+function buildEmailRow(string $label, string $value, bool $wrap = false): string
+{
+    static $odd = true;
+    $bg = $odd ? '#ffffff' : '#f9fafb';
+    $odd = !$odd;
+    $vStyle = $wrap
+        ? 'font-size:13px;color:#374151;line-height:1.5;white-space:pre-wrap;word-break:break-word;'
+        : 'font-size:13px;color:#374151;font-weight:600;';
+
+    return '
+    <tr style="background:' . $bg . ';">
+      <td style="padding:10px 16px;font-size:12px;color:#6b7280;white-space:nowrap;width:130px;">
+        ' . htmlspecialchars($label) . '
+      </td>
+      <td style="padding:10px 16px;border-left:1px solid #e5e7eb;' . $vStyle . '">
+        ' . nl2br(htmlspecialchars($value)) . '
+      </td>
+    </tr>';
+}
+
+// ── Pre-fill from existing log or POST ────────────────────────────────────────
 $f = [
     'client_id' => $_POST['client_id'] ?? $log['client_id'],
     'log_date' => $_POST['log_date'] ?? $log['log_date'],

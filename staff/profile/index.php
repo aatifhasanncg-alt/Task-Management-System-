@@ -37,6 +37,16 @@ $allDepts = array_filter($allDepts, function($d) use (&$seen) {
     $seen[] = $d['id'];
     return true;
 });
+$isConsultingUser = false;
+foreach ($allDepts as $dept) {
+    $deptCodeQ = $db->prepare("SELECT dept_code FROM departments WHERE id=?");
+    $deptCodeQ->execute([$dept['id']]);
+    $dCode = strtoupper((string)($deptCodeQ->fetchColumn() ?? ''));
+    if ($dCode === 'CON' || stripos($dept['dept_name'], 'consult') !== false) {
+        $isConsultingUser = true;
+        break;
+    }
+}
 $errors = [];
 
 // Handle password change
@@ -67,30 +77,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'chang
     }
 }
 
-// Task stats
-$taskStats = $db->prepare("
-    SELECT
-        COUNT(*) as total,
-        SUM(status_id=8) as done,
-        SUM(status_id=2) as wip,
-        SUM(status_id=3) as pending,
-        SUM(due_date < CURDATE() AND status_id=8) as overdue
-    FROM tasks WHERE assigned_to=? AND is_active=1
-");
-$taskStats->execute([$user['id']]);
-$stats = $taskStats->fetch();
-
-// Per-department task stats
+// Task stats — skip for consulting users
+$stats = ['total' => 0, 'done' => 0, 'wip' => 0, 'pending' => 0, 'overdue' => 0];
 $deptTaskStats = [];
-foreach ($allDepts as $dept) {
-    $dts = $db->prepare("
-        SELECT COUNT(*) as total,
-               SUM(status_id=8) as done,
-               SUM(due_date < CURDATE() AND status_id!=8) as overdue
-        FROM tasks WHERE assigned_to=? AND department_id=? AND is_active=1
+
+if (!$isConsultingUser) {
+    $taskStats = $db->prepare("
+        SELECT
+            COUNT(*) as total,
+            SUM(status_id=8) as done,
+            SUM(status_id=2) as wip,
+            SUM(status_id=3) as pending,
+            SUM(due_date < CURDATE() AND status_id!=8) as overdue
+        FROM tasks WHERE assigned_to=? AND is_active=1
     ");
-    $dts->execute([$user['id'], $dept['id']]);
-    $deptTaskStats[$dept['id']] = array_merge($dept, $dts->fetch(PDO::FETCH_ASSOC));
+    $taskStats->execute([$user['id']]);
+    $stats = $taskStats->fetch();
+
+    foreach ($allDepts as $dept) {
+        $dts = $db->prepare("
+            SELECT COUNT(*) as total,
+                   SUM(status_id=8) as done,
+                   SUM(due_date < CURDATE() AND status_id!=8) as overdue
+            FROM tasks WHERE assigned_to=? AND department_id=? AND is_active=1
+        ");
+        $dts->execute([$user['id'], $dept['id']]);
+        $deptTaskStats[$dept['id']] = array_merge($dept, $dts->fetch(PDO::FETCH_ASSOC));
+    }
 }
 
 include '../../includes/header.php';
@@ -150,6 +163,7 @@ include '../../includes/header.php';
                     </div>
 
                     <!-- Task Stats -->
+                    <?php if (!$isConsultingUser): ?>
                     <div class="card-mis">
                         <div class="card-mis-header">
                             <h5><i class="fas fa-chart-bar text-warning me-2"></i>My Stats</h5>
@@ -207,6 +221,7 @@ include '../../includes/header.php';
                         </div>
                     </div>
                     <?php endif; ?>
+                     <?php endif; // end !$isConsultingUser ?>
                 </div>
 
                 <!-- Info + Password -->
