@@ -22,7 +22,8 @@ $user = currentUser();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function cellVal($sheet, int $row, int $col): string {
-    $val = $sheet->getCellByColumnAndRow($col, $row)->getValue();
+    $coordinate = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($col) . $row;
+    $val = $sheet->getCell($coordinate)->getValue();
     return trim((string)($val ?? ''));
 }
 
@@ -138,8 +139,8 @@ for ($row = 2; $row <= $highRow; $row++) {
     if (strlen($name) > 200) $errs[] = 'Company name too long (max 200).';
 
     // Validate PAN
-    if ($pan !== '' && !preg_match('/^\d{10}$/', $pan))
-        $errs[] = 'PAN must be exactly 10 digits.';
+    if ($pan !== '' && !preg_match('/^\d{9}$/', $pan))
+        $errs[] = 'PAN must be exactly 9 digits.';
 
     // Validate email
     if ($cEmail !== '' && !filter_var($cEmail, FILTER_VALIDATE_EMAIL))
