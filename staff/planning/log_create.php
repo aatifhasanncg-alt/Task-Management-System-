@@ -21,7 +21,7 @@ $today = $now->format('Y-m-d');
 
 // Companies
 $companies = $db->prepare("
-    SELECT id, company_name, company_code FROM companies
+    SELECT id, company_name, company_code, pan_number FROM companies
     WHERE is_active=1
     ORDER BY company_name
 ");
@@ -219,9 +219,11 @@ include '../../includes/header.php';
                                         <select name="client_id" id="clientSelect" class="cn-input" required>
                                             <option value="">— Select Client —</option>
                                             <?php foreach ($companies as $c): ?>
-                                                <option value="<?= $c['id'] ?>" <?= ($_POST['client_id'] ?? '') == $c['id'] ? 'selected' : '' ?>>
+                                                <option value="<?= $c['id'] ?>" <?= ($_POST['client_id'] ?? '') == $c['id'] ? 'selected' : '' ?>
+                                                    data-pan="<?= htmlspecialchars($c['pan_number'] ?? '') ?>">
                                                     <?= htmlspecialchars($c['company_name']) ?>
                                                     <?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?>
+                                                    <?= !empty($c['pan_number']) ? ' · PAN: ' . $c['pan_number'] : '' ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
@@ -343,17 +345,22 @@ include '../../includes/header.php';
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-    new TomSelect('#clientSelect', { placeholder: 'Search client...', maxOptions: 500, allowEmptyOption: true });
+new TomSelect('#clientSelect', {
+    placeholder: 'Search by name, code or PAN...',
+    maxOptions: 500,
+    allowEmptyOption: true,
+    searchField: ['text']   // searches full option text including PAN
+});
 
     function calcDuration() {
-        const tin  = document.getElementById('timeIn').value;
+        const tin = document.getElementById('timeIn').value;
         const tout = document.getElementById('timeOut').value;
         const disp = document.getElementById('durationDisp');
         const side = document.getElementById('durationDispSide');
         if (tin && tout) {
-            const diff = (new Date('1970-01-01T'+tout) - new Date('1970-01-01T'+tin)) / 3600000;
-            const val  = diff > 0 ? diff.toFixed(2) + 'h' : '—';
-            const col  = diff > 0 ? '#c9a84c' : '#ef4444';
+            const diff = (new Date('1970-01-01T' + tout) - new Date('1970-01-01T' + tin)) / 3600000;
+            const val = diff > 0 ? diff.toFixed(2) + 'h' : '—';
+            const col = diff > 0 ? '#c9a84c' : '#ef4444';
             disp.textContent = val; disp.style.color = col;
             side.textContent = val; side.style.color = col;
         } else {

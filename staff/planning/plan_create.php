@@ -53,7 +53,7 @@ while ($cur <= $last && $wn <= 5) {
 
 // Companies for this branch
 $companies = $db->prepare("
-    SELECT id, company_name, company_code FROM companies
+    SELECT id, company_name, company_code, pan_number FROM companies
     WHERE is_active=1
     ORDER BY company_name
 ");
@@ -363,9 +363,10 @@ include '../../includes/header.php';
             <select name="entries[__IDX__][client_id]" class="cn-input client-select" required>
                 <option value="">— Select Client —</option>
                 <?php foreach ($companies as $c): ?>
-                <option value="<?= $c['id'] ?>">
+                <option value="<?= $c['id'] ?>" data-pan="<?= htmlspecialchars($c['pan_number'] ?? '') ?>">
                     <?= htmlspecialchars($c['company_name']) ?>
                     <?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?>
+                    <?= !empty($c['pan_number']) ? ' · PAN: ' . $c['pan_number'] : '' ?>
                 </option>
                 <?php endforeach; ?>
             </select>
@@ -435,7 +436,9 @@ function addEntry() {
 
     // TomSelect
     new TomSelect(row.querySelector('.client-select'), {
-        placeholder: 'Search client…', maxOptions: 500
+        placeholder: 'Search by name, code or PAN…',
+        maxOptions: 500,
+        searchField: ['text']
     });
 
     // Time calc

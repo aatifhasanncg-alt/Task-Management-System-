@@ -31,7 +31,7 @@ if (!$log) {
 }
 
 $branchId = (int) $user['branch_id'];
-$companies = $db->prepare("SELECT id, company_name, company_code FROM companies WHERE is_active=1 ORDER BY company_name");
+$companies = $db->prepare("SELECT id, company_name, company_code, pan_number FROM companies WHERE is_active=1 ORDER BY company_name");
 $companies->execute([]);
 $companies = $companies->fetchAll();
 
@@ -100,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             FROM users u
             JOIN roles r ON r.id = u.role_id
             WHERE u.branch_id = ?
-            AND r.role_name IN = 'admin'
+            AND r.role_name = 'admin'
             AND u.is_active = 1
         ");
         $supStmt->execute([$branchId]);
@@ -108,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $staffName = $user['full_name'] ?? ('User #' . $uid);
         $logDateFmt = date('d M Y', strtotime($logDate));
-        $logUrl = APP_URL . 'admin/planning/log_list.php?month=' . $monthYear;
+        $logUrl = APP_URL . '/admin/planning/log_list.php?month=' . $monthYear;
 
         $statusLabels = [
             'visited' => 'Visited',
@@ -354,9 +354,11 @@ include '../../includes/header.php';
                                         <select name="client_id" id="clientSelect" class="cn-input" required>
                                             <option value="">— Select Client —</option>
                                             <?php foreach ($companies as $c): ?>
-                                                <option value="<?= $c['id'] ?>" <?= $f['client_id'] == $c['id'] ? 'selected' : '' ?>>
+                                                <option value="<?= $c['id'] ?>" <?= $f['client_id'] == $c['id'] ? 'selected' : '' ?>
+                                                    data-pan="<?= htmlspecialchars($c['pan_number'] ?? '') ?>">
                                                     <?= htmlspecialchars($c['company_name']) ?>
                                                     <?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?>
+                                                    <?= !empty($c['pan_number']) ? ' · PAN: ' . $c['pan_number'] : '' ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
@@ -471,7 +473,12 @@ include '../../includes/header.php';
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-    new TomSelect('#clientSelect', { placeholder: 'Search client...', maxOptions: 500, allowEmptyOption: true });
+    new TomSelect('#clientSelect', {
+        placeholder: 'Search by name, code or PAN...',
+        maxOptions: 500,
+        allowEmptyOption: true,
+        searchField: ['text']   // searches full option text including PAN
+    });
 
     function calcDuration() {
         const tin = document.getElementById('timeIn').value;

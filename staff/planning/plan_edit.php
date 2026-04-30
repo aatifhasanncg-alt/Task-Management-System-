@@ -14,21 +14,21 @@ function planEmailRow(string $label, string $value): string
 
 function sendPlanEditEmail(array $supervisor, array $data): void
 {
-    $to      = $supervisor['email'];
+    $to = $supervisor['email'];
     $supName = $supervisor['full_name'] ?? 'Supervisor';
     $subject = 'Work Plan Edited - ' . $data['staff_name']
-             . ' Week ' . $data['week_number']
-             . ' (' . $data['month_label'] . ')';
+        . ' Week ' . $data['week_number']
+        . ' (' . $data['month_label'] . ')';
 
-    $rows  = planEmailRow('Staff',         $data['staff_name']);
-    $rows .= planEmailRow('Month',         $data['month_label']);
-    $rows .= planEmailRow('Week',          'Week ' . $data['week_number']);
-    $rows .= planEmailRow('Date Range',    $data['week_range']);
+    $rows = planEmailRow('Staff', $data['staff_name']);
+    $rows .= planEmailRow('Month', $data['month_label']);
+    $rows .= planEmailRow('Week', 'Week ' . $data['week_number']);
+    $rows .= planEmailRow('Date Range', $data['week_range']);
     $rows .= planEmailRow('Visit Entries', $data['entry_count'] . ' clients');
-    $rows .= planEmailRow('Total Hours',   $data['total_hours'] . ' hrs');
-    $rows .= planEmailRow('Remarks',       $data['remarks']);
+    $rows .= planEmailRow('Total Hours', $data['total_hours'] . ' hrs');
+    $rows .= planEmailRow('Remarks', $data['remarks']);
 
-    $body  = "Hi {$supName},\n\n";
+    $body = "Hi {$supName},\n\n";
     $body .= "A staff member has edited their weekly work plan. Here are the updated details:\n\n";
     $body .= str_repeat('-', 40) . "\n";
     $body .= $rows;
@@ -36,8 +36,8 @@ function sendPlanEditEmail(array $supervisor, array $data): void
     $body .= "View the plan here:\n" . $data['plan_url'] . "\n\n";
     $body .= "This is an automated notification. Please do not reply to this email.\n";
 
-    $host     = parse_url(APP_URL, PHP_URL_HOST) ?: 'localhost';
-    $headers  = "MIME-Version: 1.0\r\n";
+    $host = parse_url(APP_URL, PHP_URL_HOST) ?: 'localhost';
+    $headers = "MIME-Version: 1.0\r\n";
     $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
     $headers .= "From: " . APP_NAME . " <no-reply@" . $host . ">\r\n";
     $headers .= "X-Mailer: PHP/" . PHP_VERSION . "\r\n";
@@ -81,7 +81,7 @@ $monthLabel = $monthDate->format('F Y');
 
 /* ── COMPANIES ───────────────── */
 $companies = $db->query("
-    SELECT id, company_name, company_code
+    SELECT id, company_name, company_code, pan_number
     FROM companies WHERE is_active=1
     ORDER BY company_name
 ")->fetchAll();
@@ -136,6 +136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // get client code
                 $cc = '';
+                $pan = '';
                 foreach ($companies as $c) {
                     if ($c['id'] == $cid) {
                         $cc = $c['company_code'];
@@ -447,7 +448,11 @@ include '../../includes/header.php';
     const clientOptions = `
     <option value="">— Select Client —</option>
     <?php foreach ($companies as $c): ?>
-    <option value="<?= $c['id'] ?>"><?= addslashes(htmlspecialchars($c['company_name'])) ?><?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?></option>
+    <option value="<?= $c['id'] ?>" data-pan="<?= htmlspecialchars($c['pan_number'] ?? '') ?>">
+        <?= addslashes(htmlspecialchars($c['company_name'])) ?>
+        <?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?>
+        <?= !empty($c['pan_number']) ? ' · PAN: ' . addslashes($c['pan_number']) : '' ?>
+    </option>
     <?php endforeach; ?>
 `;
 
@@ -509,7 +514,11 @@ include '../../includes/header.php';
 
         // TomSelect on client dropdown
         const sel = div.querySelector('.entry-client');
-        const ts = new TomSelect(sel, { placeholder: 'Search client…', maxOptions: 500 });
+        const ts = new TomSelect(sel, {
+            placeholder: 'Search by name, code or PAN…',
+            maxOptions: 500,
+            searchField: ['text']
+        });
 
         // Pre-select existing client
         if (data.client_id) ts.setValue(String(data.client_id));
@@ -526,7 +535,7 @@ include '../../includes/header.php';
         renumber();
         updateSummary();
     }
-    
+
 
     function removeEntry(btn) {
         btn.closest('.entry-row').remove();
