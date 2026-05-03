@@ -1,6 +1,6 @@
 <?php
 /**
- * consulting/executive/plan_list.php — Executive: All Staff Plans
+ * app url/executive/consulting/plans.php — Executive: All Staff Plans
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
@@ -34,8 +34,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $remarks = trim($_POST['remarks'] ?? '');
 
     if ($planId && $action === 'approve') {
-        $db->prepare("UPDATE work_plans SET status='approved', approved_by=?, approved_at=NOW(), remarks=NULL WHERE id=? AND branch_id=?")
-            ->execute([$uid, $planId, $branchId]);
+        $db->prepare("UPDATE work_plans SET status='approved', approved_by=?, approved_at=NOW(), remarks=NULL WHERE id=? AND status='submitted'")
+            ->execute([$uid, $planId]);
 
         // Notify staff
         $pOwner = $db->query("SELECT user_id, week_number FROM work_plans WHERE id={$planId}")->fetch();
@@ -45,15 +45,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Plan Approved',
                 'Your Week ' . $pOwner['week_number'] . ' plan has been approved.',
                 'task',
-                APP_URL . '/consulting/staff/plan_view.php?id=' . $planId,
+                APP_URL . '/executive/consulting/plan_view.php?id=' . $planId,
                 false,
                 []
             );
         }
         setFlash('success', 'Plan approved.');
     } elseif ($planId && $action === 'reject' && $remarks) {
-        $db->prepare("UPDATE work_plans SET status='rejected', remarks=? WHERE id=? AND branch_id=?")
-            ->execute([$remarks, $planId, $branchId]);
+        $db->prepare("UPDATE work_plans SET status='rejected', remarks=? WHERE id=? AND status='submitted'")
+            ->execute([$remarks, $planId]);
 
         $pOwner = $db->query("SELECT user_id, week_number FROM work_plans WHERE id={$planId}")->fetch();
         if ($pOwner) {
@@ -62,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Plan Rejected',
                 'Your Week ' . $pOwner['week_number'] . ' plan was rejected: ' . $remarks,
                 'task',
-                APP_URL . '/consulting/staff/plan_view.php?id=' . $planId,
+                APP_URL . '/executive/consulting/plan_view.php?id=' . $planId,
                 false,
                 []
             );
@@ -71,12 +71,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'bulk_approve') {
         $ids = array_map('intval', $_POST['plan_ids'] ?? []);
         foreach ($ids as $pid) {
-            $db->prepare("UPDATE work_plans SET status='approved', approved_by=?, approved_at=NOW() WHERE id=? AND branch_id=? AND status='submitted'")
-                ->execute([$uid, $pid, $branchId]);
+            $db->prepare("UPDATE work_plans SET status='approved', approved_by=?, approved_at=NOW() WHERE id=? AND status='submitted'")
+                ->execute([$uid, $pid]);
         }
         setFlash('success', count($ids) . ' plan(s) approved.');
     }
-    header('Location: plan_list.php?month=' . $month . '&staff_id=' . $staffId . '&status=' . $status);
+    header('Location: plans.php?month=' . $month . '&staff_id=' . $staffId . '&status=' . $status);
     exit;
 }
 
