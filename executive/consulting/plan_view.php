@@ -388,12 +388,15 @@ include '../../includes/header.php';
                                         <?= date('d M Y', strtotime($e['plan_date'])) ?>
                                     </td>
                                     <td style="font-size:.75rem;color:#9ca3af;">
-                                        <?= htmlspecialchars($e['day_of_week'] ?? '') ?></td>
+                                        <?= htmlspecialchars($e['day_of_week'] ?? '') ?>
+                                    </td>
                                     <td>
                                         <div style="font-size:.83rem;font-weight:500;">
-                                            <?= htmlspecialchars($e['company_name']) ?></div>
+                                            <?= htmlspecialchars($e['company_name']) ?>
+                                        </div>
                                         <div style="font-size:.68rem;color:#9ca3af;">
-                                            <?= htmlspecialchars($e['company_code'] ?? '') ?></div>
+                                            <?= htmlspecialchars($e['company_code'] ?? '') ?>
+                                        </div>
                                     </td>
                                     <td style="font-size:.82rem;"><?= htmlspecialchars($e['assigned_name']) ?></td>
                                     <td class="text-center" style="font-size:.78rem;">
@@ -440,8 +443,8 @@ include '../../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td
-                                        style="font-size:.73rem;color:#6b7280;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                        <?= htmlspecialchars(mb_strimwidth($e['notes'] ?? '—', 0, 35, '…')) ?>
+                                        style="font-size:.73rem;color:#6b7280;max-width:200px;word-wrap:break-word;white-space:normal;">
+                                        <?= htmlspecialchars($e['notes'] ?? '—') ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

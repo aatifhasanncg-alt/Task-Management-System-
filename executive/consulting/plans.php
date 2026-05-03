@@ -182,6 +182,9 @@ include '../../includes/header.php';
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/datatables.custom.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<!-- ADD in the <head> section (after other CSS links): -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+</style>
 <style>
     .filter-bar {
         background: #f9fafb;
@@ -273,6 +276,12 @@ include '../../includes/header.php';
     .dataTables_wrapper .dataTables_paginate {
         padding: 10px 16px;
     }
+
+    /* ADD inside the existing <style> tag: */
+    #staffSelect+.ts-wrapper {
+        width: 100% !important;
+        min-width: 160px;
+    }
 </style>
 
 <div class="app-wrapper">
@@ -327,11 +336,12 @@ include '../../includes/header.php';
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
                     <label style="font-size:.75rem;color:#6b7280;white-space:nowrap;">Staff</label>
-                    <select name="staff_id" class="cn-input" style="min-width:160px;">
+                    <select name="staff_id" class="cn-input" style="min-width:160px;width:100%;" id="staffSelect">
                         <option value="">All Staff</option>
                         <?php foreach ($staffList as $sl): ?>
                             <option value="<?= $sl['id'] ?>" <?= $staffId == $sl['id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($sl['full_name']) ?>
+                                <?= $sl['employee_id'] ? ' — ' . htmlspecialchars($sl['employee_id']) : '' ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
@@ -421,9 +431,11 @@ include '../../includes/header.php';
                                             </td>
                                             <td>
                                                 <div style="font-weight:600;font-size:.82rem;">
-                                                    <?= htmlspecialchars($p['full_name']) ?></div>
+                                                    <?= htmlspecialchars($p['full_name']) ?>
+                                                </div>
                                                 <div style="font-size:.68rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?></div>
+                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?>
+                                                </div>
                                             </td>
                                             <td class="text-center">
                                                 <strong style="color:#c9a84c;">W<?= $p['week_number'] ?></strong>
@@ -514,6 +526,7 @@ include '../../includes/header.php';
 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
     $(document).ready(function () {
         if ($('#plansTable tbody tr td').length > 1) {
@@ -522,6 +535,11 @@ include '../../includes/header.php';
     });
     document.getElementById('selectAll')?.addEventListener('change', function () {
         document.querySelectorAll('.plan-chk').forEach(c => c.checked = this.checked);
+    });
+    const staffSelect = new TomSelect('#staffSelect', {
+        placeholder: 'Search staff member...',
+        maxOptions: 100,
+        allowEmptyOption: true
     });
     function quickApprove(id) {
         if (!confirm('Approve this plan?')) return;

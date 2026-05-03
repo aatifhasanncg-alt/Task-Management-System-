@@ -6,7 +6,7 @@ requireExecutive();
 
 $db = getDB();
 $user = currentUser();
-updateActiveAt($db, (int)$user['id']);
+updateActiveAt($db, (int) $user['id']);
 $pageTitle = 'Executive Dashboard';
 
 // ── Task statuses from DB ──
@@ -108,6 +108,11 @@ $topStaff = $db->query("
     LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
     LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE r.role_name = 'staff' AND u.is_active = 1
+      AND (d.dept_code IS NULL OR d.dept_code != 'CON')
+      AND u.id NOT IN (
+          SELECT uda.user_id FROM user_department_assignments uda
+          JOIN departments d2 ON d2.id = uda.department_id AND d2.dept_code = 'CON'
+      )
     GROUP BY u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
     ORDER BY done DESC
     LIMIT 5
@@ -173,6 +178,10 @@ include '../../includes/header.php';
         text-overflow: ellipsis;
         display: block;
     }
+    /* ADD inside the existing <style> tag: */
+.rt-table td { max-width: 0; }
+.rt-table td:first-child { max-width: none; }
+.rt-table td:last-child  { max-width: none; }
 </style>
 
 <div class="app-wrapper">
@@ -437,12 +446,12 @@ include '../../includes/header.php';
                         <table class="table-mis rt-table">
 
                             <colgroup>
-                                <col> <!-- Task # -->
-                                <col> <!-- Title (flex) -->
+                                <col style="width:auto;"> <!-- Task # -->
+                                <col style="width:auto;"> <!-- Title (flex) -->
                                 <col style="width:90px;"> <!-- Dept -->
-                                <col style="width:120px;"> <!-- Branch -->
-                                <col style="width:120px;"> <!-- Assigned -->
-                                <col style="width:150px;"> <!-- Status -->
+                                <col style="width:100px;"> <!-- Branch -->
+                                <col style="width:100px;"> <!-- Assigned -->
+                                <col style="width:110px;"> <!-- Status -->
                             </colgroup>
                             <thead>
                                 <tr>
@@ -474,7 +483,7 @@ include '../../includes/header.php';
                                                 <?= htmlspecialchars($t['task_number']) ?>
                                             </span>
                                         </td>
-                                        <td>
+                                        <td style="max-width:0;">
                                             <div class="ellipsis" style="font-size:.85rem;font-weight:500;"
                                                 title="<?= htmlspecialchars($t['title']) ?>">
                                                 <?= htmlspecialchars($t['title']) ?>

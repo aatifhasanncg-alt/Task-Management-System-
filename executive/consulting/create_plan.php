@@ -26,7 +26,6 @@ $staffList = $db->query("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     WHERE u.is_active = 1
-      AND u.branch_id = {$branchId}
       AND (
           u.id = {$uid}
           OR u.id IN (
