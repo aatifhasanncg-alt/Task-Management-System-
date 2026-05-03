@@ -209,10 +209,10 @@ function conNavActive(string $file, string $dir = ''): string
                 class="nav-item<?= conNavActive('today_tomorrow.php', 'planning') ?>">
                 <i class="fas fa-calendar-day"></i>
                 <span>Today & Tomorrow</span><?php if ($__planNotifCount > 0): ?>
-                        <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
-                            <?= $__planNotifCount ?>
-                        </span>
-                    <?php endif; ?>
+                    <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
+                        <?= $__planNotifCount ?>
+                    </span>
+                <?php endif; ?>
             </a>
             <a href="<?= APP_URL ?>admin/planning/plan_create.php"
                 class="nav-item<?= conNavActive('plan_create.php', 'planning') ?>">
@@ -247,6 +247,14 @@ function conNavActive(string $file, string $dir = ''): string
             <a href="<?= APP_URL ?>admin/planning/client_report.php"
                 class="nav-item<?= conNavActive('client_report.php', 'planning') ?>">
                 <i class="fas fa-building"></i><span>Client Report</span>
+            </a>
+            <div class="nav-section-label">Management</div>
+
+            <a href="<?= APP_URL ?>/admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
+                <i class="fas fa-building"></i><span>Companies</span>
+            </a>
+            <a href="<?= APP_URL ?>/admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
+                <i class="fas fa-users"></i><span>Staff</span>
             </a>
 
         <?php elseif ($__isBranchManager): ?>
@@ -340,6 +348,7 @@ function conNavActive(string $file, string $dir = ''): string
                 class="nav-item<?= conNavActive('client_report.php', 'planning') ?>">
                 <i class="fas fa-building"></i><span>Client Report</span>
             </a>
+
         <?php else: ?>
             <!-- NORMAL DEPT ADMIN SIDEBAR -->
 
@@ -446,7 +455,7 @@ function conNavActive(string $file, string $dir = ''): string
                 <i class="fas fa-file-invoice-dollar"></i><span>Tax Task</span>
             </a>
         <?php endif; ?>
-         
+
 
     </nav>
 
@@ -470,7 +479,7 @@ function conNavActive(string $file, string $dir = ''): string
                 <i class="fas fa-briefcase me-1"></i>
                 <?= htmlspecialchars($__adminProfile['dept_name'] ?? 'Consulting') ?>
             </div>
-     
+
         <?php elseif ($__isBranchManager): ?>
             <div style="font-size:.75rem;color:#10b981;margin-top:.2rem;">
                 <i class="fas fa-code-branch me-1"></i> Branch Manager Access

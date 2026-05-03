@@ -166,10 +166,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Invalid email format.';
     if (!$roleId)
         $errors[] = 'Role is required.';
-    if (!$branchId)
-        $errors[] = 'Branch is required.';
-    if (!$deptId)
-        $errors[] = 'Department is required.';
     if (!$password)
         $errors[] = 'Password is required.';
     if (strlen($password) < 6)
@@ -208,8 +204,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $phone ?: null,
                     $hashedPwd,
                     $roleId,
-                    $branchId,
-                    $deptId,
+                    $branchId ?: null,
+                    $deptId ?: null,
                     $managedBy,
                     $joiningDate ?: null,
                     $address ?: null,
@@ -379,11 +375,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
         ");
         $branchRow->execute(['%' . strtolower($branchName) . '%']);
         $branchId = $branchRow->fetchColumn() ?: null;
-        if (!$branchId) {
-            $skipped++;
-            $skipReasons[] = "Row {$lineNum}: branch \"{$branchName}\" not found.";
-            continue;
-        }
+        $branchId = $branchId ?: null;
 
         // Resolve department
         $deptRow = $db->prepare("
@@ -392,11 +384,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
         ");
         $deptRow->execute(['%' . strtolower($deptName) . '%']);
         $deptId = $deptRow->fetchColumn() ?: null;
-        if (!$deptId) {
-            $skipped++;
-            $skipReasons[] = "Row {$lineNum}: department \"{$deptName}\" not found.";
-            continue;
-        }
+        $deptId = $deptId ?: null;
 
         $finalPass = $password ?: 'Welcome@123';
         $hashed = password_hash($finalPass, PASSWORD_DEFAULT);
@@ -693,7 +681,7 @@ include '../../includes/header.php';
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Branch <span
                                                     class="required-star">*</span></label>
-                                            <select name="branch_id" class="form-select" required>
+                                            <select name="branch_id" class="form-select">
                                                 <option value="">-- Select Branch --</option>
                                                 <?php foreach ($allBranches as $b): ?>
                                                     <option value="<?= $b['id'] ?>" <?= ($_POST['branch_id'] ?? '') == $b['id'] ? 'selected' : '' ?>>
@@ -706,7 +694,7 @@ include '../../includes/header.php';
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Department <span
                                                     class="required-star">*</span></label>
-                                            <select name="department_id" class="form-select" required>
+                                            <select name="department_id" class="form-select">
                                                 <option value="">-- Select Department --</option>
                                                 <?php foreach ($allDepts as $d): ?>
                                                     <option value="<?= $d['id'] ?>" <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>

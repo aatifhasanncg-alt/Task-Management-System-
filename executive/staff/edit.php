@@ -61,8 +61,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$username) $errors[] = 'Username is required.';
     if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'A valid email is required.';
     if (!$roleId)   $errors[] = 'Role is required.';
-    if (!$branchId) $errors[] = 'Branch is required.';
-    if (!$deptId)   $errors[] = 'Department is required.';
 
     $uCheck = $db->prepare("SELECT id FROM users WHERE username=? AND id!=?");
     $uCheck->execute([$username, $staffId]);
@@ -84,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         WHERE id=?
     ")->execute([
         $fullName, $username, $email, $phone ?: null, $emergency ?: null,
-        $branchId, $deptId, $managedBy,
+        $branchId ?: null, $deptId ?: null, $managedBy,
         $joiningDate ?: null, $address ?: null, $is_active, $gaEnabled,
         $staffId
     ]);
@@ -454,7 +452,7 @@ include '../../includes/header.php';
                             <label class="form-label-mis">
                                 Branch <span class="required-star">*</span>
                             </label>
-                            <select name="branch_id" class="form-select" required>
+                            <select name="branch_id" class="form-select" >
                                 <option value="">-- Select Branch --</option>
                                 <?php foreach ($allBranches as $b): ?>
                                 <option value="<?= $b['id'] ?>"
@@ -469,7 +467,7 @@ include '../../includes/header.php';
                             <label class="form-label-mis">
                                 Department <span class="required-star">*</span>
                             </label>
-                            <select name="department_id" class="form-select" required>
+                            <select name="department_id" class="form-select" >
                                 <option value="">-- Select Department --</option>
                                 <?php foreach ($allDepts as $d): ?>
                                 <option value="<?= $d['id'] ?>"

@@ -6,6 +6,7 @@ requireAdmin();
 
 $db   = getDB();
 $user = currentUser();
+$deptId = (int)$user['department_id'];
 $pageTitle = 'Companies';
 
 $search    = trim($_GET['search']      ?? '');
@@ -41,10 +42,24 @@ $list = $db->prepare("
            b.branch_name,
            i.industry_name,
            (SELECT COUNT(*) FROM tasks t
-            WHERE t.company_id = c.id AND t.is_active = 1) AS task_count,
-           (SELECT COUNT(*) FROM tasks t
+            WHERE t.company_id = c.id AND t.is_active = 1
+            AND (
+                t.department_id = ?
+                OR t.department_id IN (
+                    SELECT department_id FROM user_department_assignments WHERE user_id = ?
+                )
+            )
+            ) AS task_count,
+            (SELECT COUNT(*) FROM tasks t
             JOIN task_status ts ON ts.id = t.status_id
-            WHERE t.company_id = c.id AND ts.status_name = 'Done') AS done_count
+            WHERE t.company_id = c.id AND ts.status_name = 'Done'
+            AND (
+                t.department_id = ?
+                OR t.department_id IN (
+                    SELECT department_id FROM user_department_assignments WHERE user_id = ?
+                )
+            )
+            ) AS done_count
     FROM companies c
     LEFT JOIN company_types ct ON ct.id = c.company_type_id
     LEFT JOIN branches b       ON b.id  = c.branch_id
@@ -53,7 +68,10 @@ $list = $db->prepare("
     ORDER BY c.company_name ASC
     LIMIT {$perPage} OFFSET {$offset}
 ");
-$list->execute($params);
+$list->execute(array_merge(
+    [$deptId, $user['id'], $deptId, $user['id']],
+    $params
+));
 $companies = $list->fetchAll();
 
 $allTypes      = $db->query("SELECT id, type_name FROM company_types ORDER BY type_name")->fetchAll();
