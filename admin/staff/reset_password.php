@@ -3,12 +3,6 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 
-
-if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied.');
-    header('Location: index.php'); exit;
-}
-
 $db          = getDB();
 $currentUser = currentUser();
 $staffId     = (int)($_GET['id'] ?? 0);
@@ -96,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
-<?php include '../../includes/sidebar_executive.php'; ?>
+<?php include '../../includes/sidebar_admin.php'; ?>
 <div class="main-content">
 <?php include '../../includes/topbar.php'; ?>
 <div style="padding:1.5rem 0;">

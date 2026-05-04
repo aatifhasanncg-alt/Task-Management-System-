@@ -276,6 +276,7 @@ function vstBadge(string $s): string {
                             <th class="text-center">Hours</th>
                             <th>Status</th>
                             <th>Description</th>
+<th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -302,7 +303,16 @@ function vstBadge(string $s): string {
                         <td style="font-size:.75rem;color:#6b7280;max-width:200px;">
                             <?= htmlspecialchars(mb_strimwidth($l['work_description'] ?? '', 0, 60, '…')) ?>
                         </td>
-                    </tr>
+                        <td>
+                            <?php if ($l['user_id'] == $uid): ?>
+                                <a href="log_edit.php?id=<?= $l['id'] ?>"
+                                class="cn-btn cn-btn-sm"
+                                style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
+                                    <i class="fas fa-pencil-alt"></i>
+                                </a>
+                            <?php endif; ?>
+                        </td>
+                        </tr>
                     <?php endforeach; ?>
                     </tbody>
                 </table>

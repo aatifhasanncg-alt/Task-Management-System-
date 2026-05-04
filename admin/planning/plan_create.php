@@ -83,21 +83,19 @@ $companies = $db->query("
 // Admin can assign to: dept staff in same branch + managed staff
 $deptStaff  = [];
 if ($isAdmin) {
-    // All active staff in same branch regardless of department
-   $st1 = $db->prepare("
-    SELECT DISTINCT u.id, u.full_name, u.employee_id
-    FROM users u
-    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE u.is_active = 1
-      AND u.branch_id = ?
-      AND (
-          u.department_id = ?
-          OR uda.department_id = ?
-      )
-      AND u.id != ?
-    ORDER BY u.full_name
-");
-$st1->execute([$branchId, $deptId, $deptId, $uid]);
+    $st1 = $db->prepare("
+        SELECT DISTINCT u.id, u.full_name, u.employee_id
+        FROM users u
+        LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+        WHERE u.is_active = 1
+          AND (
+              u.department_id = ?
+              OR uda.department_id = ?
+          )
+          AND u.id != ?
+        ORDER BY u.full_name
+    ");
+    $st1->execute([$deptId, $deptId, $uid]);
 $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 }
 // ── POST ──────────────────────────────────────────────────────

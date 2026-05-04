@@ -15,7 +15,6 @@ $uid = (int) $user['id'];
 
 $deptId = (int) $user['department_id'];
 
-$branchId = (int) $user['branch_id'];
 // ── UDA consulting dept detection ─────────────────────────────
 $__deptMetaQ = $db->prepare("SELECT dept_code, dept_name FROM departments WHERE id = ?");
 $__deptMetaQ->execute([$user['department_id']]);
@@ -249,6 +248,12 @@ include '../../includes/header.php';
                                                         class="cn-btn cn-btn-out cn-btn-sm">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
+                                                    <?php if ($p['status'] !== 'approved'): ?>
+                                                        <a href="plan_edit.php?id=<?= $p['id'] ?>" class="cn-btn cn-btn-sm"
+                                                            style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
+                                                            <i class="fas fa-pencil-alt"></i>
+                                                        </a>
+                                                    <?php endif; ?>
                                                     <?php if ($p['status'] === 'submitted'): ?>
                                                         <a href="plan_approvals.php?id=<?= $p['id'] ?>"
                                                             class="cn-btn cn-btn-gold cn-btn-sm">
