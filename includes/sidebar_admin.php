@@ -202,7 +202,7 @@ function conNavActive(string $file, string $dir = ''): string
             </a>
 
             <a href="<?= APP_URL ?>admin/planning/plan_list.php"
-                class="nav-item<?= conNavActive('plan_list.php', 'planning') ?>">
+                class="nav-item <?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                 <i class="fas fa-calendar-alt"></i><span>Work Plans</span>
             </a>
             <a href="<?= APP_URL ?>admin/planning/today_tomorrow.php"
@@ -225,7 +225,7 @@ function conNavActive(string $file, string $dir = ''): string
             </a>
 
             <a href="<?= APP_URL ?>admin/planning/log_list.php"
-                class="nav-item<?= conNavActive('log_list.php', 'planning') ?>">
+                class="nav-item  <?= isActive('/admin/planning/log_list') ?><?= isActive('/admin/planning/log_view') ?><?= isActive('/admin/planning/log_edit') ?>">
                 <i class="fas fa-clock"></i><span>Work Logs</span>
             </a>
 
@@ -262,7 +262,7 @@ function conNavActive(string $file, string $dir = ''): string
             </div>
 
             <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
-                class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                class="nav-item <?= conNavActive('office_log_list.php', 'planning') ?><?= conNavActive('office_log_view.php', 'planning') ?><?= conNavActive('office_log_edit.php', 'planning') ?>">
                 <i class="fas fa-clipboard-list"></i>
                 <span>Office Logs</span>
             </a>
@@ -336,7 +336,7 @@ function conNavActive(string $file, string $dir = ''): string
                 <i class="fas fa-briefcase me-1"></i> Consulting
             </div>
             <a href="<?= APP_URL ?>admin/planning/plan_list.php"
-                class="nav-item<?= conNavActive('plan_list.php', 'planning') ?>">
+                class="nav-item <?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                 <i class="fas fa-calendar-alt"></i><span>Work Plans</span>
             </a>
             <a href="<?= APP_URL ?>admin/planning/plan_create.php"
@@ -348,7 +348,7 @@ function conNavActive(string $file, string $dir = ''): string
                 <i class="fas fa-check-circle"></i><span>Plan Approvals</span>
             </a>
             <a href="<?= APP_URL ?>admin/planning/log_list.php"
-                class="nav-item<?= conNavActive('log_list.php', 'planning') ?>">
+                class="nav-item <?= conNavActive('log_list.php', 'planning') ?> <?= conNavActive('log_view.php', 'planning') ?><?= conNavActive('log_edit.php', 'planning') ?>">
                 <i class="fas fa-clock"></i><span>Work Logs</span>
             </a>
             <a href="<?= APP_URL ?>admin/planning/log_create.php"
@@ -369,7 +369,7 @@ function conNavActive(string $file, string $dir = ''): string
             </div>
 
             <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
-                class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                class="nav-item <?= conNavActive('office_log_list.php', 'planning') ?> <?= conNavActive('office_log_view.php', 'planning') ?><?= conNavActive('office_log_edit.php', 'planning') ?>">
                 <i class="fas fa-clipboard-list"></i>
                 <span>Office Logs</span>
             </a>
@@ -434,11 +434,11 @@ function conNavActive(string $file, string $dir = ''): string
                     <i class="fas fa-briefcase me-1"></i> Consulting
                 </div>
                 <a href="<?= APP_URL ?>admin/planning/plan_list.php"
-                    class="nav-item<?= conNavActive('plan_list.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                     <i class="fas fa-calendar-alt"></i><span>Work Plans</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/today_tomorrow.php"
-                    class="nav-item<?= conNavActive('today_tomorrow.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('today_tomorrow.php', 'planning') ?>">
                     <i class="fas fa-calendar-day"></i>
                     <span>Today & Tomorrow</span>
                     <?php if ($__planNotifCount > 0): ?>
@@ -448,27 +448,27 @@ function conNavActive(string $file, string $dir = ''): string
                     <?php endif; ?>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/plan_create.php"
-                    class="nav-item<?= conNavActive('plan_create.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('plan_create.php', 'planning') ?>">
                     <i class="fas fa-plus-circle"></i><span>Create Plan</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/plan_approvals.php"
-                    class="nav-item<?= conNavActive('plan_approvals.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('plan_approvals.php', 'planning') ?>">
                     <i class="fas fa-check-circle"></i><span>Plan Approvals</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/log_list.php"
-                    class="nav-item<?= conNavActive('log_list.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('log_list.php', 'planning') ?> <?= conNavActive('log_view.php', 'planning') ?><?= conNavActive('log_edit.php', 'planning') ?>">
                     <i class="fas fa-clock"></i><span>Work Logs</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/log_create.php"
-                    class="nav-item<?= conNavActive('log_create.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('log_create.php', 'planning') ?>">
                     <i class="fas fa-pen"></i><span>Create Log</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/staff_performance.php"
-                    class="nav-item<?= conNavActive('staff_performance.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('staff_performance.php', 'planning') ?>">
                     <i class="fas fa-users"></i><span>Staff Performance</span>
                 </a>
                 <a href="<?= APP_URL ?>admin/planning/client_report.php"
-                    class="nav-item<?= conNavActive('client_report.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('client_report.php', 'planning') ?>">
                     <i class="fas fa-building"></i><span>Client Report</span>
                 </a>
                 <!-- Office Work Section -->
@@ -477,13 +477,13 @@ function conNavActive(string $file, string $dir = ''): string
                 </div>
 
                 <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
-                    class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('office_log_list.php', 'planning') ?> <?= conNavActive('office_log_view.php', 'planning') ?><?= conNavActive('office_log_edit.php', 'planning') ?>">
                     <i class="fas fa-clipboard-list"></i>
                     <span>Office Logs</span>
                 </a>
 
                 <a href="<?= APP_URL ?>admin/planning/office_log_create.php"
-                    class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                    class="nav-item <?= conNavActive('office_log_create.php', 'planning') ?>">
                     <i class="fas fa-plus"></i>
                     <span>Create Office Log</span>
                 </a>

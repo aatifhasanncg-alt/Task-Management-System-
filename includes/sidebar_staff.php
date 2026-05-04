@@ -193,7 +193,7 @@ if (!function_exists('conNavActive')) {
                 <i class="fas fa-chart-pie"></i><span>Dashboard</span>
             </a>
             <a href="<?= APP_URL ?>staff/planning/plan_list.php"
-                class="nav-item<?= conNavActive('plan_list.php', 'planning') ?>">
+                class="nav-item<?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                 <i class="fas fa-calendar-alt"></i><span>My Work Plans</span>
             </a>
             <a href="<?= APP_URL ?>staff/planning/today_tomorrow.php"
@@ -218,7 +218,7 @@ if (!function_exists('conNavActive')) {
                 </script>
             <?php endif; ?>
             <a href="<?= APP_URL ?>staff/planning/log_list.php"
-                class="nav-item<?= conNavActive('log_list.php', 'planning') ?>">
+                class="nav-item<?= conNavActive('log_list.php', 'planning') ?> <?= conNavActive('log_view.php', 'planning') ?><?= conNavActive('log_edit.php', 'planning') ?>">
                 <i class="fas fa-clock"></i><span>My Work Logs</span>
             </a>
             <a href="<?= APP_URL ?>staff/planning/log_create.php"
@@ -237,7 +237,7 @@ if (!function_exists('conNavActive')) {
                 <i class="fas fa-building"></i><span>Office Logs</span>
             </a>
             <a href="<?= APP_URL ?>staff/planning/office_log_create.php"
-                class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?> ">
                 <i class="fas fa-plus-square"></i><span>Create Office Log</span>
             </a>
             <a href="<?= APP_URL ?>staff/planning/my_performance.php"
@@ -286,7 +286,7 @@ if (!function_exists('conNavActive')) {
                     <i class="fas fa-chart-pie"></i><span>Dashboard</span>
                 </a>
                 <a href="<?= APP_URL ?>staff/planning/plan_list.php"
-                    class="nav-item<?= conNavActive('plan_list.php', 'planning') ?>">
+                    class="nav-item<?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                     <i class="fas fa-calendar-alt"></i><span>My Work Plans</span>
                 </a>
                 <a href="<?= APP_URL ?>staff/planning/today_tomorrow.php"
@@ -304,7 +304,7 @@ if (!function_exists('conNavActive')) {
                     <i class="fas fa-plus-circle"></i><span>Create Plan</span>
                 </a>
                 <a href="<?= APP_URL ?>staff/planning/log_list.php"
-                    class="nav-item<?= conNavActive('log_list.php', 'planning') ?>">
+                    class="nav-item<?= conNavActive('log_list.php', 'planning') ?> <?= conNavActive('log_view.php', 'planning') ?><?= conNavActive('log_edit.php', 'planning') ?>">
                     <i class="fas fa-clock"></i><span>My Work Logs</span>
                 </a>
                 <a href="<?= APP_URL ?>staff/planning/log_create.php"

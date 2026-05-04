@@ -159,6 +159,7 @@ include '../../includes/header.php';
                     <?php if ($plan['approved_at']): ?> on
                         <?= date('d M Y H:i', strtotime($plan['approved_at'])) ?>     <?php endif; ?>
                 </div>
+                
             <?php endif; ?>
 
             <div class="row g-4">

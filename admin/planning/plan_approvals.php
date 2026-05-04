@@ -56,8 +56,9 @@ $scopeStmt = $db->prepare("
 ");
 $scopeStmt->execute([$branchId, $uid, $deptId, $deptId]);
 $scopeIds = array_unique(array_column($scopeStmt->fetchAll(PDO::FETCH_ASSOC), 'id'));
-if (!in_array($uid, $scopeIds)) $scopeIds[] = $uid;
-$inList = implode(',', array_map('intval', $scopeIds)) ?: (string)$uid;
+if (!in_array($uid, $scopeIds))
+    $scopeIds[] = $uid;
+$inList = implode(',', array_map('intval', $scopeIds)) ?: (string) $uid;
 
 // ── Month filter ───────────────────────────────────────────────
 $now = new DateTime();
@@ -85,8 +86,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $newStatus = $statusMap[$action];
 
         // Verify plan belongs to this dept
-        $chk = $db->prepare("SELECT id, user_id, week_number FROM work_plans WHERE id=? AND department_id=?");
-        $chk->execute([$planId, $deptId]);
+        $chk = $db->prepare("
+            SELECT id, user_id, week_number
+            FROM work_plans
+            WHERE id = ?
+            AND department_id = ?
+        ");
+        $chk->execute([$planId, $deptId]); // use ORIGINAL dept
         $planRow = $chk->fetch();
 
         if ($planRow) {
@@ -101,26 +107,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     UPDATE work_plans SET status=?, remarks=? WHERE id=?
                 ")->execute([$newStatus, $remarks ?: null, $planId]);
             }
-
-            // Notify the staff member
             try {
                 $staffUserId = (int) $planRow['user_id'];
-                $wkNum = $planRow['week_number'];
+                $weekNumber = (int) ($planRow['week_number'] ?? 0);
+
                 if ($staffUserId !== $uid) {
-                    $msg = $newStatus === 'approved'
-                        ? 'Your work plan (Week ' . $wkNum . ') has been approved ✅'
-                        : 'Your work plan (Week ' . $wkNum . ') was ' . $newStatus . ($remarks ? '. Note: ' . $remarks : '');
+
+                    $statusText = ucfirst($newStatus);
+
+                    // Message
+                    if ($newStatus === 'approved') {
+                        $message = "Your work plan (Week {$weekNumber}) has been approved ✅";
+                    } elseif ($newStatus === 'rejected') {
+                        $message = "Your work plan (Week {$weekNumber}) was rejected";
+                        if (!empty($remarks)) {
+                            $message .= ". Reason: {$remarks}";
+                        }
+                    } else {
+                        $message = "Your work plan (Week {$weekNumber}) status updated to {$newStatus}";
+                    }
+
+                    // IMPORTANT: correct admin link (NOT staff hardcoded)
+                    $link = APP_URL . "/staff/planning/plan_view.php?id=" . $planId;
+
                     notify(
                         $staffUserId,
-                        'Work Plan ' . ucfirst($newStatus),
-                        $msg,
-                        'status',
-                        APP_URL . '/consulting/staff/plan_view.php?id=' . $planId,
+                        "Work Plan " . ucfirst($newStatus),
+                        $message,
+                        'work_plan',   // 🔥 FIX: use existing working type
+                        $link,
                         true,
-                        []
+                        [
+                            'template' => 'work_plan_status', // optional custom template
+                            'plan' => [
+                                'id' => $planId,
+                                'week' => $weekNumber,
+                                'work_plan' => $newStatus
+                            ]
+                        ]
                     );
                 }
             } catch (Exception $ex) {
+                error_log("Work plan notify failed: " . $ex->getMessage());
             }
 
             logActivity('Plan #' . $planId . ' ' . $newStatus, 'consulting');
@@ -298,7 +326,7 @@ include '../../includes/header.php';
             </div>
 
             <!-- Three-column layout -->
-           <div class="row g-4">
+            <div class="row g-4">
 
 
                 <!-- ── LEFT: Pending approval ── -->

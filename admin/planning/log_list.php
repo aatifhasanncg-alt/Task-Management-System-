@@ -90,19 +90,46 @@ if ($statusFilter) {
     $where .= " AND wl.visit_status=?";
     $params[] = $statusFilter;
 }
+$typeFilter = $_GET['log_type'] ?? ''; // visit | office | all
+
+$whereVisit = "wl.month_year = ?";
+$whereOffice = "DATE_FORMAT(owl.log_date,'%Y-%m') = ?";
+
+$paramsVisit = [$month];
+$paramsOffice = [$month];
+
+if ($staffFilter) {
+    $whereVisit .= " AND wl.user_id = ?";
+    $whereOffice .= " AND owl.user_id = ?";
+    $paramsVisit[] = $staffFilter;
+    $paramsOffice[] = $staffFilter;
+}
+
+if ($statusFilter) {
+    $whereVisit .= " AND wl.visit_status = ?";
+    $paramsVisit[] = $statusFilter;
+
+    // map visit-status to office-status safely
+    if (in_array($statusFilter, ['wip','completed'])) {
+        $whereOffice .= " AND owl.status = ?";
+        $paramsOffice[] = $statusFilter;
+    }
+}
+
+if ($typeFilter === 'visit') {
+    $officePart = "SELECT NULL WHERE 1=0"; // disable office
+} elseif ($typeFilter === 'office') {
+    $visitPart = "SELECT NULL WHERE 1=0"; // disable visit
+}
+
 $stmt = $db->prepare("
 (
     SELECT 
-        wl.id,
-        wl.user_id,
-        wl.log_date,
-        wl.time_in,
-        wl.time_out,
+        wl.id, wl.user_id, wl.log_date, wl.time_in, wl.time_out,
         wl.duration_hours,
         wl.visit_status AS status,
         wl.work_description AS description,
-        c.company_name,
-        c.company_code,
+        c.company_name, c.company_code,
         u.full_name AS staff_name,
         u.employee_id,
         'VISIT' AS log_type,
@@ -110,31 +137,26 @@ $stmt = $db->prepare("
     FROM work_logs wl
     LEFT JOIN companies c ON c.id = wl.client_id
     LEFT JOIN users u ON u.id = wl.user_id
-    WHERE wl.month_year = ?
+    WHERE $whereVisit
 )
 
 UNION ALL
 
 (
     SELECT 
-        owl.id,
-        owl.user_id,
-        owl.log_date,
-        owl.time_in,
-        owl.time_out,
-        ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2) AS duration_hours,
+        owl.id, owl.user_id, owl.log_date, owl.time_in, owl.time_out,
+        ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in))/3600,2),
         owl.status,
         owl.description,
-        c.company_name,
-        c.company_code,
+        c.company_name, c.company_code,
         u.full_name AS staff_name,
         u.employee_id,
-        'OFFICE' AS log_type,
-        NULL AS day_of_week
+        'OFFICE',
+        NULL
     FROM office_work_logs owl
     LEFT JOIN companies c ON c.id = owl.client_id
     LEFT JOIN users u ON u.id = owl.user_id
-    WHERE DATE_FORMAT(owl.log_date, '%Y-%m') = ?
+    WHERE $whereOffice
 )
 
 ORDER BY log_date DESC, time_in DESC
@@ -149,14 +171,13 @@ $st1 = $db->prepare("
     FROM users u
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
     WHERE u.is_active = 1
-      AND u.branch_id = ?
       AND (
           u.department_id = ?
           OR uda.department_id = ?
       )
     ORDER BY u.full_name
 ");
-$st1->execute([$branchId, $deptId, $deptId]);
+$st1->execute([$deptId, $deptId]);
 $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 // KPIs
 $stmtKpi = $db->prepare("
@@ -196,8 +217,41 @@ function vstBadge($s): string {
 }
 ?>
 <link rel="stylesheet" href="consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/datatables.custom.css">
-<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+
+<style>
+.type-toggle {
+    display:flex;
+    gap:6px;
+    background:#f3f4f6;
+    padding:4px;
+    border-radius:10px;
+}
+.type-toggle a{
+    padding:.35rem .8rem;
+    font-size:.75rem;
+    border-radius:8px;
+    text-decoration:none;
+    font-weight:700;
+    color:#6b7280;
+}
+.type-toggle a.active{
+    background:#fff;
+    color:#1f2937;
+    box-shadow:0 2px 6px rgba(0,0,0,.06);
+}
+
+.log-badge{
+    font-size:.7rem;
+    font-weight:700;
+    padding:.2rem .5rem;
+    border-radius:6px;
+}
+.log-visit{background:#ecfdf5;color:#10b981;}
+.log-office{background:#eff6ff;color:#3b82f6;}
+</style>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
@@ -261,6 +315,11 @@ function vstBadge($s): string {
                                 <option value="rescheduled" <?= $statusFilter==='rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled</option>
                             </select>
                         </div>
+                        <div class="type-toggle">
+    <a href="?month=<?= $month ?>" class="<?= $typeFilter==''?'active':'' ?>">All</a>
+    <a href="?month=<?= $month ?>&log_type=visit" class="<?= $typeFilter=='visit'?'active':'' ?>">Visit</a>
+    <a href="?month=<?= $month ?>&log_type=office" class="<?= $typeFilter=='office'?'active':'' ?>">Office</a>
+</div>
                         <button class="btn btn-outline-secondary btn-sm" onclick="clearFilter()">
                             <i class="fas fa-times me-1"></i> Clear
                         </button>
@@ -428,16 +487,25 @@ $(document).ready(function() {
         $('#logsTable').DataTable({ order: [[0,'desc']], pageLength: 25 });
 });
 
-function applyFilter() {
+function applyFilter(){
     const m = document.querySelector('input[type=month]').value;
     const s = document.getElementById('fStaff').value;
-    const st= document.getElementById('fStatus').value;
+    const st = document.getElementById('fStatus').value;
+
     let url = '?month=' + m;
-    if (s)  url += '&staff_id=' + s;
+
+    const typeActive = document.querySelector('.type-toggle a.active');
+    if (typeActive) {
+        const href = typeActive.getAttribute('href');
+        const type = new URLSearchParams(href.split('?')[1]).get('log_type');
+        if (type) url += '&log_type=' + type;
+    }
+
+    if (s) url += '&staff_id=' + s;
     if (st) url += '&visit_status=' + st;
+
     location.href = url;
 }
-
 function clearFilter() {
     location.href = '?month=<?= $month ?>';
 }

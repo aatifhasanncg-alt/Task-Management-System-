@@ -30,13 +30,6 @@ $planStmt->execute([$planId]);
 $plan = $planStmt->fetch(PDO::FETCH_ASSOC);
 if (!$plan) { setFlash('error', 'Plan not found.'); header('Location: plan_list.php'); exit; }
 
-// Only allow editing of draft / rejected / submitted plans
-if (in_array($plan['status'], ['approved'])) {
-    setFlash('error', 'Approved plans cannot be edited. Please reject first if changes are needed.');
-    header('Location: plan_view.php?id=' . $planId);
-    exit;
-}
-
 // ── UDA consulting dept detection ─────────────────────────────
 $deptId = (int)$user['department_id'];
 $branchId = (int)$user['branch_id'];
