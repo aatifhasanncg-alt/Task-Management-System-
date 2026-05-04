@@ -1,6 +1,6 @@
 <?php
 /**
- * consulting/staff/log_edit.php — Staff: Edit Visit Log
+ * staff/planning/log_edit.php — Staff: Edit Visit Log
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
