@@ -335,6 +335,10 @@ function conNavActive(string $file, string $dir = ''): string
             <div class="nav-section-label">
                 <i class="fas fa-briefcase me-1"></i> Consulting
             </div>
+            <a href="<?= APP_URL ?>admin/planning/index.php" class="nav-item<?= conNavActive('index.php', 'planning') ?>">
+                <i class="fas fa-chart-pie"></i>
+                <span>Dashboard</span>
+            </a>
             <a href="<?= APP_URL ?>admin/planning/plan_list.php"
                 class="nav-item <?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                 <i class="fas fa-calendar-alt"></i><span>Work Plans</span>
@@ -433,6 +437,10 @@ function conNavActive(string $file, string $dir = ''): string
                 <div class="nav-section-label">
                     <i class="fas fa-briefcase me-1"></i> Consulting
                 </div>
+                <a href="<?= APP_URL ?>admin/planning/index.php" class="nav-item<?= conNavActive('index.php', 'planning') ?>">
+                <i class="fas fa-chart-pie"></i>
+                <span>Dashboard</span>
+            </a>
                 <a href="<?= APP_URL ?>admin/planning/plan_list.php"
                     class="nav-item <?= conNavActive('plan_list.php', 'planning') ?> <?= conNavActive('plan_view.php', 'planning') ?><?= conNavActive('plan_edit.php', 'planning') ?>">
                     <i class="fas fa-calendar-alt"></i><span>Work Plans</span>
