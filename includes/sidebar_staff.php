@@ -232,6 +232,14 @@ if (!function_exists('conNavActive')) {
                     });
                 </script>
             <?php endif; ?>
+            <a href="<?= APP_URL ?>staff/planning/office_log_list.php"
+                class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?><?= conNavActive('office_log_view.php', 'planning') ?><?= conNavActive('office_log_edit.php', 'planning') ?>">
+                <i class="fas fa-building"></i><span>Office Logs</span>
+            </a>
+            <a href="<?= APP_URL ?>staff/planning/office_log_create.php"
+                class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                <i class="fas fa-plus-square"></i><span>Create Office Log</span>
+            </a>
             <a href="<?= APP_URL ?>staff/planning/my_performance.php"
                 class="nav-item<?= conNavActive('my_performance.php', 'planning') ?>">
                 <i class="fas fa-chart-bar"></i><span>My Performance</span>
@@ -302,6 +310,14 @@ if (!function_exists('conNavActive')) {
                 <a href="<?= APP_URL ?>staff/planning/log_create.php"
                     class="nav-item<?= conNavActive('log_create.php', 'planning') ?>">
                     <i class="fas fa-edit"></i><span>Create Log</span>
+                </a>
+                <a href="<?= APP_URL ?>staff/planning/office_log_list.php"
+                    class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?><?= conNavActive('office_log_view.php', 'planning') ?><?= conNavActive('office_log_edit.php', 'planning') ?>">
+                    <i class="fas fa-building"></i><span>Office Logs</span>
+                </a>
+                <a href="<?= APP_URL ?>staff/planning/office_log_create.php"
+                    class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                    <i class="fas fa-plus-square"></i><span>Create Office Log</span>
                 </a>
             <?php endif; ?>
 

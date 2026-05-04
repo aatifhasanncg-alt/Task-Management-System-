@@ -256,7 +256,22 @@ function conNavActive(string $file, string $dir = ''): string
             <a href="<?= APP_URL ?>/admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
                 <i class="fas fa-users"></i><span>Staff</span>
             </a>
+            <!-- Office Work Section -->
+            <div class="nav-section-label">
+                <i class="fas fa-building me-1"></i> Office Work
+            </div>
 
+            <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
+                class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Office Logs</span>
+            </a>
+
+            <a href="<?= APP_URL ?>admin/planning/office_log_create.php"
+                class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                <i class="fas fa-plus"></i>
+                <span>Create Office Log</span>
+            </a>
         <?php elseif ($__isBranchManager): ?>
             <!-- ═══════════════════════════════════════════════════
              BRANCH MANAGER SIDEBAR (CORE dept admin)
@@ -347,6 +362,22 @@ function conNavActive(string $file, string $dir = ''): string
             <a href="<?= APP_URL ?>admin/planning/client_report.php"
                 class="nav-item<?= conNavActive('client_report.php', 'planning') ?>">
                 <i class="fas fa-building"></i><span>Client Report</span>
+            </a>
+            <!-- Office Work Section -->
+            <div class="nav-section-label">
+                <i class="fas fa-building me-1"></i> Office Work
+            </div>
+
+            <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
+                class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Office Logs</span>
+            </a>
+
+            <a href="<?= APP_URL ?>admin/planning/office_log_create.php"
+                class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                <i class="fas fa-plus"></i>
+                <span>Create Office Log</span>
             </a>
 
         <?php else: ?>
@@ -439,6 +470,22 @@ function conNavActive(string $file, string $dir = ''): string
                 <a href="<?= APP_URL ?>admin/planning/client_report.php"
                     class="nav-item<?= conNavActive('client_report.php', 'planning') ?>">
                     <i class="fas fa-building"></i><span>Client Report</span>
+                </a>
+                <!-- Office Work Section -->
+                <div class="nav-section-label">
+                    <i class="fas fa-building me-1"></i> Office Work
+                </div>
+
+                <a href="<?= APP_URL ?>admin/planning/office_log_list.php"
+                    class="nav-item<?= conNavActive('office_log_list.php', 'planning') ?>">
+                    <i class="fas fa-clipboard-list"></i>
+                    <span>Office Logs</span>
+                </a>
+
+                <a href="<?= APP_URL ?>admin/planning/office_log_create.php"
+                    class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
+                    <i class="fas fa-plus"></i>
+                    <span>Create Office Log</span>
                 </a>
             <?php endif; ?>
 

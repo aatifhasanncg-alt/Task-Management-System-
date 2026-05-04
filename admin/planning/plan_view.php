@@ -169,15 +169,16 @@ include '../../includes/header.php';
                             <div class="card-mis-header">
                                 <h5><i class="fas fa-table me-2 text-warning"></i>Plan Entries</h5>
                                 <span style="font-size:.78rem;color:#9ca3af;">
-                                    <?= count($entries) ?> entries
+                                    <?= count($dayEntries) ?> entries
                                 </span>
                             </div>
 
                             <div class="card-mis-body p-0">
-                                <?php if (empty($entries)): ?>
+
+                                <?php if (empty($dayEntries)): ?>
                                     <div class="empty-state p-4">
                                         <i class="fas fa-calendar-times"></i>
-                                        <h6>No entries in this plan</h6>
+                                        <h6>No entries for this date</h6>
                                     </div>
                                 <?php else: ?>
                                     <div class="table-responsive cn-table-wrap">
@@ -193,11 +194,13 @@ include '../../includes/header.php';
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <?php foreach ($entries as $e): ?>
+
+                                                <?php foreach ($dayEntries as $e): ?>
                                                     <tr>
                                                         <td style="font-size:.78rem;color:#6b7280;">
                                                             <?= date('d M', strtotime($e['plan_date'])) ?>
                                                         </td>
+
                                                         <td>
                                                             <div style="font-weight:600;font-size:.82rem;">
                                                                 <?= htmlspecialchars($e['company_name'] ?? '—') ?>
@@ -206,26 +209,32 @@ include '../../includes/header.php';
                                                                 <?= htmlspecialchars($e['company_code'] ?? '') ?>
                                                             </div>
                                                         </td>
+
                                                         <td><?= htmlspecialchars($e['assigned_name'] ?? '—') ?></td>
+
                                                         <td style="font-size:.78rem;">
                                                             <?= $e['planned_time_in'] ? date('h:i A', strtotime($e['planned_time_in'])) : '—' ?>
                                                             -
                                                             <?= $e['planned_time_out'] ? date('h:i A', strtotime($e['planned_time_out'])) : '—' ?>
                                                         </td>
+
                                                         <td class="text-center">
                                                             <strong style="color:#c9a84c;">
                                                                 <?= number_format((float) $e['planned_hours'], 1) ?>h
                                                             </strong>
                                                         </td>
+
                                                         <td style="font-size:.75rem;color:#6b7280;">
                                                             <?= htmlspecialchars($e['notes'] ?? '—') ?>
                                                         </td>
                                                     </tr>
                                                 <?php endforeach; ?>
+
                                             </tbody>
                                         </table>
                                     </div>
                                 <?php endif; ?>
+
                             </div>
                         </div>
                     <?php endforeach; ?>

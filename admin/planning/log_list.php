@@ -90,19 +90,58 @@ if ($statusFilter) {
     $where .= " AND wl.visit_status=?";
     $params[] = $statusFilter;
 }
-
 $stmt = $db->prepare("
-    SELECT wl.*, c.company_name, c.company_code, 
-           u.full_name AS staff_name, u.employee_id
+(
+    SELECT 
+        wl.id,
+        wl.user_id,
+        wl.log_date,
+        wl.time_in,
+        wl.time_out,
+        wl.duration_hours,
+        wl.visit_status AS status,
+        wl.work_description AS description,
+        c.company_name,
+        c.company_code,
+        u.full_name AS staff_name,
+        u.employee_id,
+        'VISIT' AS log_type,
+        wl.day_of_week
     FROM work_logs wl
-    LEFT JOIN companies c ON c.id=wl.client_id
-    LEFT JOIN users u ON u.id=wl.user_id
-    WHERE {$where}
-    ORDER BY wl.log_date DESC, wl.time_in DESC
+    LEFT JOIN companies c ON c.id = wl.client_id
+    LEFT JOIN users u ON u.id = wl.user_id
+    WHERE wl.month_year = ?
+)
+
+UNION ALL
+
+(
+    SELECT 
+        owl.id,
+        owl.user_id,
+        owl.log_date,
+        owl.time_in,
+        owl.time_out,
+        ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2) AS duration_hours,
+        owl.status,
+        owl.description,
+        c.company_name,
+        c.company_code,
+        u.full_name AS staff_name,
+        u.employee_id,
+        'OFFICE' AS log_type,
+        NULL AS day_of_week
+    FROM office_work_logs owl
+    LEFT JOIN companies c ON c.id = owl.client_id
+    LEFT JOIN users u ON u.id = owl.user_id
+    WHERE DATE_FORMAT(owl.log_date, '%Y-%m') = ?
+)
+
+ORDER BY log_date DESC, time_in DESC
 ");
 
-$stmt->execute($params);
-$logs = $stmt->fetchAll();
+$stmt->execute([$month, $month]);
+$logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Staff list for filter
 $st1 = $db->prepare("
@@ -137,14 +176,23 @@ $kpi = $stmtKpi->fetch();
 $pageTitle = 'All Visit Logs';
 include '../../includes/header.php';
 
-function vstBadge(string $s): string {
+function vstBadge($s): string {
+    $s = $s ?? 'unknown';
+
     $map = [
         'visited'     => ['#ecfdf5','#10b981','fa-check-circle','Visited'],
         'missed'      => ['#fef2f2','#ef4444','fa-times-circle','Missed'],
         'rescheduled' => ['#fffbeb','#f59e0b','fa-redo','Rescheduled'],
+        'wip'         => ['#eff6ff','#3b82f6','fa-spinner','WIP'],
+        'completed'   => ['#f0fdf4','#10b981','fa-check','Completed'],
+        'unknown'     => ['#f3f4f6','#9ca3af','fa-circle','—'],
     ];
-    [$bg,$col,$ico,$lbl] = $map[$s] ?? ['#f9fafb','#9ca3af','fa-circle','—'];
-    return "<span style='background:{$bg};color:{$col};padding:.15rem .5rem;border-radius:99px;font-size:.7rem;font-weight:600;display:inline-flex;align-items:center;gap:.3rem;'><i class='fas {$ico}' style='font-size:.6rem;'></i>{$lbl}</span>";
+
+    [$bg,$col,$ico,$lbl] = $map[$s] ?? $map['unknown'];
+
+    return "<span style='background:$bg;color:$col;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;font-weight:600;display:inline-flex;align-items:center;gap:.3rem;'>
+        <i class='fas $ico'></i>$lbl
+    </span>";
 }
 ?>
 <link rel="stylesheet" href="consulting.css">
@@ -269,6 +317,7 @@ function vstBadge(string $s): string {
                     <thead>
                         <tr>
                             <th>Date</th>
+                            <th>Type</th>
                             <th>Staff</th>
                             <th>Client</th>
                             <th class="text-center">Time In</th>
@@ -276,7 +325,7 @@ function vstBadge(string $s): string {
                             <th class="text-center">Hours</th>
                             <th>Status</th>
                             <th>Description</th>
-<th>Actions</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -284,8 +333,19 @@ function vstBadge(string $s): string {
                     <tr>
                         <td>
                             <div style="font-weight:600;white-space:nowrap;font-size:.83rem;"><?= date('d M Y', strtotime($l['log_date'])) ?></div>
-                            <div style="font-size:.68rem;color:#9ca3af;"><?= $l['day_of_week'] ?></div>
+                            <div style="font-size:.68rem;color:#9ca3af;"><?= $l['day_of_week'] ?? '—' ?? '—' ?></div>
                         </td>
+                        <td>
+    <?php if ($l['log_type'] === 'OFFICE'): ?>
+        <span style="background:#fef3c7;color:#92400e;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;">
+            Office
+        </span>
+    <?php else: ?>
+        <span style="background:#dbeafe;color:#1d4ed8;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;">
+            Visit
+        </span>
+    <?php endif; ?>
+</td>
                         <td>
                             <div style="font-weight:500;font-size:.82rem;"><?= htmlspecialchars($l['staff_name'] ?? '—') ?></div>
                             <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($l['employee_id'] ?? '') ?></div>
@@ -299,19 +359,54 @@ function vstBadge(string $s): string {
                         <td class="text-center">
                             <strong style="color:<?= (float)$l['duration_hours'] >= 4 ? '#10b981' : ((float)$l['duration_hours'] >= 2 ? '#f59e0b' : '#ef4444') ?>;font-weight:700;"><?= number_format((float)$l['duration_hours'],1) ?>h</strong>
                         </td>
-                        <td><?= vstBadge($l['visit_status']) ?></td>
+                        <td><?= vstBadge($l['status'] ?? 'unknown') ?></td>
                         <td style="font-size:.75rem;color:#6b7280;max-width:200px;">
                             <?= htmlspecialchars(mb_strimwidth($l['work_description'] ?? '', 0, 60, '…')) ?>
                         </td>
                         <td>
-                            <?php if ($l['user_id'] == $uid): ?>
-                                <a href="log_edit.php?id=<?= $l['id'] ?>"
-                                class="cn-btn cn-btn-sm"
-                                style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
-                                    <i class="fas fa-pencil-alt"></i>
-                                </a>
-                            <?php endif; ?>
-                        </td>
+    <div style="display:flex;gap:6px;align-items:center;justify-content:center;">
+
+        <!-- VIEW -->
+        <?php if (($l['log_type'] ?? '') === 'OFFICE'): ?>
+            <a href="office_log_view.php?id=<?= $l['id'] ?>"
+               class="cn-btn cn-btn-sm"
+               title="View"
+               style="background:#ecfeff;border:1px solid #a5f3fc;color:#0e7490;">
+                <i class="fas fa-eye"></i>
+            </a>
+        <?php else: ?>
+            <a href="log_view.php?id=<?= $l['id'] ?>"
+               class="cn-btn cn-btn-sm"
+               title="View"
+               style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;">
+                <i class="fas fa-eye"></i>
+            </a>
+        <?php endif; ?>
+
+
+        <!-- EDIT (only owner) -->
+        <?php if (($l['user_id'] ?? 0) == $uid): ?>
+
+            <?php if (($l['log_type'] ?? '') === 'OFFICE'): ?>
+                <a href="office_log_edit.php?id=<?= $l['id'] ?>"
+                   class="cn-btn cn-btn-sm"
+                   title="Edit"
+                   style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
+                    <i class="fas fa-pencil-alt"></i>
+                </a>
+            <?php else: ?>
+                <a href="log_edit.php?id=<?= $l['id'] ?>"
+                   class="cn-btn cn-btn-sm"
+                   title="Edit"
+                   style="background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;">
+                    <i class="fas fa-pencil-alt"></i>
+                </a>
+            <?php endif; ?>
+
+        <?php endif; ?>
+
+    </div>
+</td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
