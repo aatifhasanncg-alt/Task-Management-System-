@@ -633,13 +633,13 @@ include '../../includes/header.php';
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
-    // ── Managed By Tom Select ─────────────────────────────────────────────────
+    // ── Managed By TomSelect ──────────────────────────────────────────────────
     const managedByTs = new TomSelect('#managedBySelect', {
-        placeholder: 'Search by name, ID or branch…',
-         dropdownParent: 'body',
+        placeholder:    'Search by name, ID or branch…',
+        dropdownParent: 'body',
         allowEmptyOption: true,
-        maxOptions: 300,
-        searchField: ['text'],
+        maxOptions:     300,
+        searchField:    ['text'],
         render: {
             option: function(data, escape) {
                 const parts = data.text.split(' — ');
@@ -659,6 +659,22 @@ document.addEventListener('DOMContentLoaded', function () {
     const preManagedBy = '<?= (int)($staff['managed_by'] ?? 0) ?>';
     if (preManagedBy && preManagedBy !== '0') managedByTs.setValue(preManagedBy, true);
 
+    // ── Additional Departments picker TomSelect ───────────────────────────────
+    new TomSelect('#extra-dept-select', {
+        placeholder:      'Search department…',
+        allowEmptyOption: true,
+        dropdownParent:   'body',
+        maxOptions:       200,
+        onChange(val) {
+            if (!val) return;
+            const sel  = document.getElementById('extra-dept-select');
+            const name = sel.options[sel.selectedIndex]?.text;
+            if (extraDeptMap[val]) { sel.tomselect?.setValue('', true); return; }
+            extraDeptMap[val] = name;
+            renderExtraDepts();
+            sel.tomselect?.setValue('', true);
+        },
+    });
 
     // ── Toggle switches ───────────────────────────────────────────────────────
     function initToggle(checkId, trackId, thumbId, onColor) {
@@ -666,19 +682,16 @@ document.addEventListener('DOMContentLoaded', function () {
         const track = document.getElementById(trackId);
         const thumb = document.getElementById(thumbId);
         if (!check || !track || !thumb) return;
-
         function update() {
             track.style.background = check.checked ? onColor : '#d1d5db';
-            thumb.style.left       = check.checked ? '18px' : '2px';
+            thumb.style.left       = check.checked ? '18px'  : '2px';
         }
         check.addEventListener('change', update);
         update();
     }
-
     initToggle('isActiveCheck', 'activeTrack', 'activeThumb', '#10b981');
     initToggle('gaCheck',       'gaTrack',     'gaThumb',     '#3b82f6');
 
-    // Clicking the toggle label card also fires the checkbox
     ['activeToggle','gaToggle'].forEach(id => {
         const label = document.getElementById(id);
         if (label) {
@@ -689,19 +702,18 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // ── Role change warning ───────────────────────────────────────────────────
-    const roleSelect   = document.getElementById('roleSelect');
-    const warning      = document.getElementById('roleChangeWarning');
-    const oldRoleLabel = document.getElementById('oldRoleLabel');
-    const newRoleLabel = document.getElementById('newRoleLabel');
-    const originalRole = '<?= (int)$staff['role_id'] ?>';
+    const roleSelect      = document.getElementById('roleSelect');
+    const warning         = document.getElementById('roleChangeWarning');
+    const oldRoleLabel    = document.getElementById('oldRoleLabel');
+    const newRoleLabel    = document.getElementById('newRoleLabel');
+    const originalRole    = '<?= (int)$staff['role_id'] ?>';
     const originalRoleName = '<?= htmlspecialchars(ucfirst($currentRoleName), ENT_QUOTES) ?>';
 
     if (roleSelect) {
         roleSelect.addEventListener('change', function () {
             if (this.value !== originalRole) {
-                const newName = this.options[this.selectedIndex].text;
                 oldRoleLabel.textContent = originalRoleName;
-                newRoleLabel.textContent = newName;
+                newRoleLabel.textContent = this.options[this.selectedIndex].text;
                 warning.style.display   = 'block';
             } else {
                 warning.style.display = 'none';
@@ -709,7 +721,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ── Form submit confirmation if role changed ──────────────────────────────
     document.getElementById('editStaffForm')?.addEventListener('submit', function (e) {
         if (roleSelect && roleSelect.value !== originalRole) {
             if (!confirm('Role is changing. This will reset permissions. Continue?')) {
@@ -717,12 +728,11 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
-
 });
+
 // ── Extra Departments (pre-loaded from UDA) ───────────────────────────────────
 const extraDeptMap = {};
 
-// Pre-populate from server
 <?php
 $udaDeptNames = [];
 foreach ($allDepts as $d) {
@@ -738,13 +748,14 @@ for (const [id, name] of Object.entries(preloadedDepts)) {
 renderExtraDepts();
 
 function addExtraDept() {
+    const ts   = document.getElementById('extra-dept-select').tomselect;
     const sel  = document.getElementById('extra-dept-select');
-    const id   = sel.value;
+    const id   = ts ? ts.getValue() : sel.value;
     const name = sel.options[sel.selectedIndex]?.text;
-    if (!id || extraDeptMap[id]) return;
+    if (!id || extraDeptMap[id]) { ts?.setValue('', true); return; }
     extraDeptMap[id] = name;
     renderExtraDepts();
-    sel.value = '';
+    ts?.setValue('', true);
 }
 
 function removeExtraDept(id) {

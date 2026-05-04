@@ -219,10 +219,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($extraDepts as $extraDeptId) {
             $extraDeptId = (int) $extraDeptId;
             if ($extraDeptId && $extraDeptId !== $deptId) {
+                $deptManagers = $_POST['extra_dept_managers'] ?? [];
+                $deptManagedBy = (int) ($deptManagers[$extraDeptId] ?? 0) ?: null;
                 $db->prepare("
-                    INSERT IGNORE INTO user_department_assignments (user_id, department_id)
-                    VALUES (?, ?)
-                ")->execute([$newId, $extraDeptId]);
+                    INSERT IGNORE INTO user_department_assignments (user_id, department_id, managed_by)
+                    VALUES (?, ?, ?)
+                ")->execute([$newId, $extraDeptId, $deptManagedBy]);
             }
         }
         // Send welcome email with credentials + secret
@@ -462,6 +464,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
 
 include '../../includes/header.php';
 ?>
+<style>
+    /* Fix TomSelect dropdown clipping inside cards */
+    .ts-dropdown {
+        z-index: 9999 !important;
+    }
+
+    .ts-wrapper {
+        position: relative;
+    }
+
+    /* Match your existing form-select styling */
+    .ts-control {
+        border: 1px solid #dee2e6 !important;
+        border-radius: 0.375rem !important;
+        font-size: .875rem !important;
+        min-height: 38px !important;
+        padding: 0.25rem 0.5rem !important;
+        background-color: #fff !important;
+        box-shadow: none !important;
+    }
+
+    .ts-control:focus-within {
+        border-color: #c9a84c !important;
+        box-shadow: 0 0 0 0.2rem rgba(201, 168, 76, .15) !important;
+    }
+
+    .ts-dropdown .option.selected,
+    .ts-dropdown .option:hover {
+        background-color: #c9a84c !important;
+        color: #0a0f1e !important;
+    }
+
+    .ts-dropdown .option.active {
+        background-color: #f3f4f6 !important;
+        color: #1f2937 !important;
+    }
+
+    /* Smaller styling for the extra-dept manager selects inside cards */
+    #extra-dept-list .ts-control {
+        font-size: .75rem !important;
+        min-height: 30px !important;
+        padding: .2rem .4rem !important;
+    }
+</style>
+<!-- TomSelect -->
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
@@ -733,7 +782,7 @@ include '../../includes/header.php';
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Managed By</label>
-                                            <select name="managed_by" class="form-select">
+                                            <select name="managed_by" id="managed_by" class="form-select">
                                                 <option value="">-- Select Manager --</option>
                                                 <?php foreach ($allAdmins as $a): ?>
                                                     <option value="<?= $a['id'] ?>" <?= ($_POST['managed_by'] ?? '') == $a['id'] ? 'selected' : '' ?>>
@@ -968,8 +1017,7 @@ include '../../includes/header.php';
 
                 // ── 2FA toggle ────────────────────────────────────────────────────────────────
                 function toggle2FA(checkbox) {
-                    const body = document.getElementById('twofa-body');
-                    body.style.display = checkbox.checked ? 'block' : 'none';
+                    document.getElementById('twofa-body').style.display = checkbox.checked ? 'block' : 'none';
                 }
 
                 // ── Password toggle ───────────────────────────────────────────────────────────
@@ -1025,9 +1073,7 @@ include '../../includes/header.php';
                     document.getElementById('upload-btn').disabled = false;
                 }
 
-                function onFileSelect(input) {
-                    if (input.files[0]) showFile(input.files[0]);
-                }
+                function onFileSelect(input) { if (input.files[0]) showFile(input.files[0]); }
 
                 function handleDrop(e) {
                     e.preventDefault();
@@ -1047,7 +1093,8 @@ include '../../includes/header.php';
                 function clearFile() {
                     document.getElementById('bulk_file').value = '';
                     document.getElementById('file-preview').style.display = 'none';
-                    document.getElementById('drop-text').textContent = 'Click or drag & drop your Excel file here';
+                    document.getElementById('drop-text').textContent =
+                        'Click or drag & drop your Excel file here';
                     document.getElementById('drop-icon').innerHTML =
                         '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
                     document.getElementById('upload-btn').disabled = true;
@@ -1057,48 +1104,155 @@ include '../../includes/header.php';
                     document.getElementById('upload-btn').disabled = true;
                     document.getElementById('upload-spinner').style.display = 'flex';
                 });
-                // ── Extra Departments ────────────────────────────────────────────────────────
-                const extraDeptMap = {};
+
+                // ── Admin data for extra-dept manager dropdowns ───────────────────────────────
+                const adminOptions = <?= json_encode(array_map(fn($a) => [
+                    'id' => $a['id'],
+                    'name' => $a['full_name'],
+                    'branch' => $a['branch_name'] ?? '',
+                ], $allAdmins)) ?>;
+
+                function adminOptionsHtml(selectedId = '') {
+                    let html = '<option value="">— No Manager —</option>';
+                    adminOptions.forEach(a => {
+                        const sel = String(a.id) === String(selectedId) ? 'selected' : '';
+                        html += `<option value="${a.id}" ${sel}>${a.name}${a.branch ? ' (' + a.branch + ')' : ''}</option>`;
+                    });
+                    return html;
+                }
+
+                // TomSelect instances for extra-dept manager selects
+                const extraDeptTomSelects = {};   // { deptId: TomSelect instance }
+                const extraDeptMap = {};          // { deptId: { name, managed_by } }
+
+                // TomSelect shared config for manager dropdowns
+                function makeTomSelectConfig(deptId) {
+                    return {
+                        placeholder: 'Search manager…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← fixes clipping in extra-dept cards too
+                        onChange(val) { setDeptManager(deptId, val); },
+                    };
+                }
 
                 function addExtraDept() {
+                    const ts = document.getElementById('extra-dept-select').tomselect;
+                    const id = ts ? ts.getValue() : document.getElementById('extra-dept-select').value;
                     const sel = document.getElementById('extra-dept-select');
-                    const id = sel.value;
                     const name = sel.options[sel.selectedIndex]?.text;
-                    if (!id || extraDeptMap[id]) return;
-
-                    extraDeptMap[id] = name;
+                    if (!id || extraDeptMap[id]) {
+                        ts?.setValue('', true);
+                        return;
+                    }
+                    extraDeptMap[id] = { name, managed_by: '' };
                     renderExtraDepts();
-                    sel.value = '';
+                    ts?.setValue('', true);
                 }
 
                 function removeExtraDept(id) {
+                    // Destroy TomSelect instance before removing DOM
+                    if (extraDeptTomSelects[id]) {
+                        extraDeptTomSelects[id].destroy();
+                        delete extraDeptTomSelects[id];
+                    }
                     delete extraDeptMap[id];
                     renderExtraDepts();
+                }
+
+                function setDeptManager(deptId, val) {
+                    if (extraDeptMap[deptId]) {
+                        extraDeptMap[deptId].managed_by = val;
+                        const hiddenInput = document.querySelector(
+                            `input[name="extra_dept_managers[${deptId}]"]`
+                        );
+                        if (hiddenInput) hiddenInput.value = val;
+                    }
                 }
 
                 function renderExtraDepts() {
                     const list = document.getElementById('extra-dept-list');
                     const inputs = document.getElementById('extra-dept-inputs');
+
+                    // Destroy all existing TomSelect instances before wiping DOM
+                    for (const [id, ts] of Object.entries(extraDeptTomSelects)) {
+                        ts.destroy();
+                        delete extraDeptTomSelects[id];
+                    }
+
                     list.innerHTML = '';
                     inputs.innerHTML = '';
 
-                    for (const [id, name] of Object.entries(extraDeptMap)) {
+                    for (const [id, data] of Object.entries(extraDeptMap)) {
                         list.insertAdjacentHTML('beforeend', `
-            <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
-                         border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
-                         font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
-                ${name}
-                <button type="button" onclick="removeExtraDept('${id}')"
-                        style="background:none;border:none;color:#3b82f6;
-                               cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
-                    <i class="fas fa-times"></i>
-                </button>
-            </span>
-        `);
-                        inputs.insertAdjacentHTML('beforeend',
-                            `<input type="hidden" name="extra_departments[]" value="${id}">`
-                        );
+                <div style="background:#f8faff;border:1px solid #bfdbfe;border-radius:10px;
+                            padding:.55rem .75rem;display:flex;flex-direction:column;gap:.4rem;
+                            min-width:240px;max-width:280px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+                        <span style="color:#3b82f6;font-size:.78rem;font-weight:700;
+                                     display:flex;align-items:center;gap:.35rem;">
+                            <i class="fas fa-layer-group" style="font-size:.65rem;"></i>
+                            ${data.name}
+                        </span>
+                        <button type="button" onclick="removeExtraDept('${id}')"
+                                style="background:none;border:none;color:#9ca3af;
+                                       cursor:pointer;padding:0;font-size:.78rem;line-height:1;"
+                                title="Remove">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div>
+                        <div style="font-size:.65rem;color:#9ca3af;font-weight:600;
+                                    margin-bottom:.2rem;letter-spacing:.03em;">
+                            <i class="fas fa-user-tie" style="margin-right:.25rem;"></i>MANAGER
+                        </div>
+                        <select id="ts-dept-${id}"
+                                style="width:100%;">
+                            ${adminOptionsHtml(data.managed_by)}
+                        </select>
+                    </div>
+                </div>
+            `);
+
+                        inputs.insertAdjacentHTML('beforeend', `
+                <input type="hidden" name="extra_departments[]"          value="${id}">
+                <input type="hidden" name="extra_dept_managers[${id}]"   value="${data.managed_by}">
+            `);
+
+                        // Boot TomSelect on the newly added select
+                        extraDeptTomSelects[id] = new TomSelect(`#ts-dept-${id}`, makeTomSelectConfig(id));
                     }
                 }
+
+                // ── Init TomSelect on the main "Managed By" select ───────────────────────────
+                document.addEventListener('DOMContentLoaded', function () {
+                    // Main Managed By
+                    new TomSelect('#managed_by', {
+                        placeholder: 'Search manager…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← renders outside card, no clipping
+                    });
+
+                    // Additional Departments picker
+                    new TomSelect('#extra-dept-select', {
+                        placeholder: 'Search department…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← same fix
+                        onChange(val) {
+                            if (!val) return;
+                            const sel = document.getElementById('extra-dept-select');
+                            const name = sel.options[sel.selectedIndex]?.text;
+                            if (!val || extraDeptMap[val]) {
+                                sel.tomselect?.setValue('', true);
+                                return;
+                            }
+                            extraDeptMap[val] = { name, managed_by: '' };
+                            renderExtraDepts();
+                            sel.tomselect?.setValue('', true);
+                        },
+                    });
+                });
             </script>
             <?php include '../../includes/footer.php'; ?>

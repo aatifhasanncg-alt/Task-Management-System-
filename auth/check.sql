@@ -883,3 +883,50 @@ CREATE TABLE user_department_assignments (
 
     UNIQUE KEY unique_user_dept (user_id, department_id)
 );
+ALTER TABLE user_department_assignments
+ADD COLUMN managed_by INT DEFAULT NULL,
+ADD CONSTRAINT fk_uda_managed_by
+    FOREIGN KEY (managed_by) REFERENCES users(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE;
+
+CREATE TABLE office_work_logs (
+    id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    -- Who & where
+    user_id         INT NOT NULL,
+    department_id   INT NOT NULL,
+    branch_id       INT NOT NULL,
+
+    -- Client
+    client_id       INT NOT NULL COMMENT 'FK → companies.id',
+
+    -- When
+    log_date        DATE NOT NULL,
+    time_in         TIME NOT NULL COMMENT 'Time work started on this entry',
+    time_out        TIME NOT NULL COMMENT 'Time work ended on this entry',
+    -- What
+    description     TEXT NOT NULL,
+    notes           VARCHAR(500) DEFAULT NULL,
+
+    -- Status
+    status          ENUM('wip','completed') DEFAULT 'wip',
+
+    -- Meta
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    -- FKs
+    FOREIGN KEY (user_id)       REFERENCES users(id)       ON DELETE CASCADE  ON UPDATE CASCADE,
+    FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT  ON UPDATE CASCADE,
+    FOREIGN KEY (branch_id)     REFERENCES branches(id)    ON DELETE RESTRICT  ON UPDATE CASCADE,
+    FOREIGN KEY (client_id)     REFERENCES companies(id)   ON DELETE RESTRICT  ON UPDATE CASCADE,
+
+    -- Indexes
+    KEY idx_user_date   (user_id, log_date),
+    KEY idx_client_date (client_id, log_date),
+    KEY idx_dept_branch (department_id, branch_id),
+    KEY idx_date        (log_date),
+    KEY idx_status      (status)
+
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='In-office client work logs';

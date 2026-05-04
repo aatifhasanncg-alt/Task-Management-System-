@@ -745,7 +745,7 @@ include '../../includes/header.php';
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Managed By</label>
-                                            <select name="managed_by" class="form-select">
+                                            <select name="managed_by" class="form-select" id="managed_by">
                                                 <option value="">-- Select Manager --</option>
                                                 <?php foreach ($allAdmins as $a): ?>
                                                     <option value="<?= $a['id'] ?>" <?= ($_POST['managed_by'] ?? '') == $a['id'] ? 'selected' : '' ?>>
@@ -964,153 +964,176 @@ include '../../includes/header.php';
             </div><!-- /tab-bulk -->
 
 
-            <script>
-                // ── Tab switching ─────────────────────────────────────────────────────────────
-                function switchTab(tab) {
-                    document.getElementById('tab-single').style.display = tab === 'single' ? 'block' : 'none';
-                    document.getElementById('tab-bulk').style.display = tab === 'bulk' ? 'block' : 'none';
-                    const gold = '#c9a84c', gray = '#9ca3af';
-                    const active = tab === 'single' ? 'tab-single-btn' : 'tab-bulk-btn';
-                    const inactive = tab === 'single' ? 'tab-bulk-btn' : 'tab-single-btn';
-                    document.getElementById(active).style.color = gold;
-                    document.getElementById(active).style.borderBottomColor = gold;
-                    document.getElementById(inactive).style.color = gray;
-                    document.getElementById(inactive).style.borderBottomColor = 'transparent';
-                }
+            <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 
-                // ── 2FA toggle ────────────────────────────────────────────────────────────────
-                function toggle2FA(checkbox) {
-                    const body = document.getElementById('twofa-body');
-                    body.style.display = checkbox.checked ? 'block' : 'none';
-                }
+<script>
+    // ── Tab switching ─────────────────────────────────────────────────────────
+    function switchTab(tab) {
+        document.getElementById('tab-single').style.display = tab === 'single' ? 'block' : 'none';
+        document.getElementById('tab-bulk').style.display   = tab === 'bulk'   ? 'block' : 'none';
+        const gold = '#c9a84c', gray = '#9ca3af';
+        const active   = tab === 'single' ? 'tab-single-btn' : 'tab-bulk-btn';
+        const inactive = tab === 'single' ? 'tab-bulk-btn'   : 'tab-single-btn';
+        document.getElementById(active).style.color             = gold;
+        document.getElementById(active).style.borderBottomColor = gold;
+        document.getElementById(inactive).style.color             = gray;
+        document.getElementById(inactive).style.borderBottomColor = 'transparent';
+    }
 
-                // ── Password toggle ───────────────────────────────────────────────────────────
-                function togglePassword(fieldId, btn) {
-                    const field = document.getElementById(fieldId);
-                    const icon = btn.querySelector('i');
-                    if (field.type === 'password') {
-                        field.type = 'text';
-                        icon.classList.replace('fa-eye', 'fa-eye-slash');
-                    } else {
-                        field.type = 'password';
-                        icon.classList.replace('fa-eye-slash', 'fa-eye');
-                    }
-                }
+    // ── 2FA toggle ────────────────────────────────────────────────────────────
+    function toggle2FA(checkbox) {
+        document.getElementById('twofa-body').style.display = checkbox.checked ? 'block' : 'none';
+    }
 
-                // ── Copy 2FA secret ───────────────────────────────────────────────────────────
-                function copyGaSecret() {
-                    const text = document.getElementById('gaSecretDisplay').value;
-                    navigator.clipboard.writeText(text).then(() => {
-                        const icon = document.getElementById('copyGaIcon');
-                        icon.className = 'fas fa-check';
-                        icon.style.color = '#10b981';
-                        setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
-                    });
-                }
+    // ── Password toggle ───────────────────────────────────────────────────────
+    function togglePassword(fieldId, btn) {
+        const field = document.getElementById(fieldId);
+        const icon  = btn.querySelector('i');
+        if (field.type === 'password') {
+            field.type = 'text';
+            icon.classList.replace('fa-eye', 'fa-eye-slash');
+        } else {
+            field.type = 'password';
+            icon.classList.replace('fa-eye-slash', 'fa-eye');
+        }
+    }
 
-                // ── QR update on email blur ───────────────────────────────────────────────────
-                document.querySelector('[name="email"]')?.addEventListener('blur', function () {
-                    const email = this.value.trim();
-                    const secret = document.getElementById('gaSecretDisplay').value;
-                    if (!email) return;
-                    const otpUrl = 'otpauth://totp/ASK MIS:' + encodeURIComponent(email) +
-                        '?secret=' + secret + '&issuer=ASK MIS';
-                    document.getElementById('qrPreview').src =
-                        'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' +
-                        encodeURIComponent(otpUrl);
-                });
+    // ── Copy 2FA secret ───────────────────────────────────────────────────────
+    function copyGaSecret() {
+        const text = document.getElementById('gaSecretDisplay').value;
+        navigator.clipboard.writeText(text).then(() => {
+            const icon = document.getElementById('copyGaIcon');
+            icon.className = 'fas fa-check';
+            icon.style.color = '#10b981';
+            setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
+        });
+    }
 
-                // ── File drop / select helpers ────────────────────────────────────────────────
-                function formatBytes(bytes) {
-                    if (bytes < 1024) return bytes + ' B';
-                    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-                    return (bytes / 1048576).toFixed(2) + ' MB';
-                }
+    // ── QR update on email blur ───────────────────────────────────────────────
+    document.querySelector('[name="email"]')?.addEventListener('blur', function () {
+        const email  = this.value.trim();
+        const secret = document.getElementById('gaSecretDisplay').value;
+        if (!email) return;
+        const otpUrl = 'otpauth://totp/ASK MIS:' + encodeURIComponent(email) +
+                       '?secret=' + secret + '&issuer=ASK MIS';
+        document.getElementById('qrPreview').src =
+            'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' +
+            encodeURIComponent(otpUrl);
+    });
 
-                function showFile(file) {
-                    document.getElementById('file-name').textContent = file.name;
-                    document.getElementById('file-size').textContent = formatBytes(file.size);
-                    document.getElementById('file-preview').style.display = 'flex';
-                    document.getElementById('drop-text').textContent = 'File selected — ready to upload';
-                    document.getElementById('drop-icon').innerHTML =
-                        '<i class="fas fa-check-circle" style="font-size:2.2rem;color:#16a34a;"></i>';
-                    document.getElementById('upload-btn').disabled = false;
-                }
+    // ── File drop / select helpers ────────────────────────────────────────────
+    function formatBytes(bytes) {
+        if (bytes < 1024)    return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(2) + ' MB';
+    }
+    function showFile(file) {
+        document.getElementById('file-name').textContent  = file.name;
+        document.getElementById('file-size').textContent  = formatBytes(file.size);
+        document.getElementById('file-preview').style.display = 'flex';
+        document.getElementById('drop-text').textContent  = 'File selected — ready to upload';
+        document.getElementById('drop-icon').innerHTML    =
+            '<i class="fas fa-check-circle" style="font-size:2.2rem;color:#16a34a;"></i>';
+        document.getElementById('upload-btn').disabled   = false;
+    }
+    function onFileSelect(input) { if (input.files[0]) showFile(input.files[0]); }
+    function handleDrop(e) {
+        e.preventDefault();
+        const dz = document.getElementById('drop-zone');
+        dz.style.borderColor = '#d1d5db'; dz.style.background = '#fafafa';
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['xlsx','xls'].includes(ext)) { alert('Please upload an .xlsx or .xls file.'); return; }
+        const dt = new DataTransfer(); dt.items.add(file);
+        document.getElementById('bulk_file').files = dt.files;
+        showFile(file);
+    }
+    function clearFile() {
+        document.getElementById('bulk_file').value = '';
+        document.getElementById('file-preview').style.display = 'none';
+        document.getElementById('drop-text').textContent = 'Click or drag & drop your Excel file here';
+        document.getElementById('drop-icon').innerHTML =
+            '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
+        document.getElementById('upload-btn').disabled = true;
+    }
+    document.getElementById('bulk-form')?.addEventListener('submit', function () {
+        document.getElementById('upload-btn').disabled = true;
+        document.getElementById('upload-spinner').style.display = 'flex';
+    });
 
-                function onFileSelect(input) {
-                    if (input.files[0]) showFile(input.files[0]);
-                }
+    // ── Extra Departments ─────────────────────────────────────────────────────
+    const extraDeptMap        = {};   // { id: name }
+    const extraDeptTomSelects = {};   // TomSelect instances (not used here but kept for consistency)
 
-                function handleDrop(e) {
-                    e.preventDefault();
-                    const dz = document.getElementById('drop-zone');
-                    dz.style.borderColor = '#d1d5db';
-                    dz.style.background = '#fafafa';
-                    const file = e.dataTransfer.files[0];
-                    if (!file) return;
-                    const ext = file.name.split('.').pop().toLowerCase();
-                    if (!['xlsx', 'xls'].includes(ext)) { alert('Please upload an .xlsx or .xls file.'); return; }
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-                    document.getElementById('bulk_file').files = dt.files;
-                    showFile(file);
-                }
+    document.addEventListener('DOMContentLoaded', function () {
 
-                function clearFile() {
-                    document.getElementById('bulk_file').value = '';
-                    document.getElementById('file-preview').style.display = 'none';
-                    document.getElementById('drop-text').textContent = 'Click or drag & drop your Excel file here';
-                    document.getElementById('drop-icon').innerHTML =
-                        '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
-                    document.getElementById('upload-btn').disabled = true;
-                }
+        // Main Managed By
+        new TomSelect('#managed_by', {
+            placeholder:      'Search manager…',
+            allowEmptyOption: true,
+            dropdownParent:   'body',
+            maxOptions:       200,
+        });
 
-                document.getElementById('bulk-form')?.addEventListener('submit', function () {
-                    document.getElementById('upload-btn').disabled = true;
-                    document.getElementById('upload-spinner').style.display = 'flex';
-                });
-                // ── Extra Departments ────────────────────────────────────────────────────────
-                const extraDeptMap = {};
+        // Additional Departments picker
+        new TomSelect('#extra-dept-select', {
+            placeholder:      'Search department…',
+            allowEmptyOption: true,
+            dropdownParent:   'body',
+            maxOptions:       200,
+            onChange(val) {
+                if (!val) return;
+                const sel  = document.getElementById('extra-dept-select');
+                const name = sel.options[sel.selectedIndex]?.text;
+                if (extraDeptMap[val]) { sel.tomselect?.setValue('', true); return; }
+                extraDeptMap[val] = name;
+                renderExtraDepts();
+                sel.tomselect?.setValue('', true);
+            },
+        });
+    });
 
-                function addExtraDept() {
-                    const sel = document.getElementById('extra-dept-select');
-                    const id = sel.value;
-                    const name = sel.options[sel.selectedIndex]?.text;
-                    if (!id || extraDeptMap[id]) return;
+    function addExtraDept() {
+        const ts   = document.getElementById('extra-dept-select').tomselect;
+        const sel  = document.getElementById('extra-dept-select');
+        const id   = ts ? ts.getValue() : sel.value;
+        const name = sel.options[sel.selectedIndex]?.text;
+        if (!id || extraDeptMap[id]) { ts?.setValue('', true); return; }
+        extraDeptMap[id] = name;
+        renderExtraDepts();
+        ts?.setValue('', true);
+    }
 
-                    extraDeptMap[id] = name;
-                    renderExtraDepts();
-                    sel.value = '';
-                }
+    function removeExtraDept(id) {
+        delete extraDeptMap[id];
+        renderExtraDepts();
+    }
 
-                function removeExtraDept(id) {
-                    delete extraDeptMap[id];
-                    renderExtraDepts();
-                }
+    function renderExtraDepts() {
+        const list   = document.getElementById('extra-dept-list');
+        const inputs = document.getElementById('extra-dept-inputs');
+        list.innerHTML   = '';
+        inputs.innerHTML = '';
 
-                function renderExtraDepts() {
-                    const list = document.getElementById('extra-dept-list');
-                    const inputs = document.getElementById('extra-dept-inputs');
-                    list.innerHTML = '';
-                    inputs.innerHTML = '';
-
-                    for (const [id, name] of Object.entries(extraDeptMap)) {
-                        list.insertAdjacentHTML('beforeend', `
-            <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
-                         border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
-                         font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
-                ${name}
-                <button type="button" onclick="removeExtraDept('${id}')"
-                        style="background:none;border:none;color:#3b82f6;
-                               cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
-                    <i class="fas fa-times"></i>
-                </button>
-            </span>
-        `);
-                        inputs.insertAdjacentHTML('beforeend',
-                            `<input type="hidden" name="extra_departments[]" value="${id}">`
-                        );
-                    }
-                }
-            </script>
+        for (const [id, name] of Object.entries(extraDeptMap)) {
+            list.insertAdjacentHTML('beforeend', `
+                <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
+                             border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
+                             font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
+                    ${name}
+                    <button type="button" onclick="removeExtraDept('${id}')"
+                            style="background:none;border:none;color:#3b82f6;
+                                   cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </span>
+            `);
+            inputs.insertAdjacentHTML('beforeend',
+                `<input type="hidden" name="extra_departments[]" value="${id}">`
+            );
+        }
+    }
+</script>
             <?php include '../../includes/footer.php'; ?>
