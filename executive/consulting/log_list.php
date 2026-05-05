@@ -616,7 +616,8 @@ include '../../includes/header.php';
                     <div class="kpi-val"><?= $officeCnt ?></div>
                     <div class="kpi-label">Office Work
                         <span style="font-size:.65rem;display:block;color:#6b7280;margin-top:2px;">
-                            ✔ <?= $officeCompleted ?> done · ⏳ <?= $officeWip ?> WIP
+                            ✔ <?= $officeCompleted ?> · ⏳ <?= $officeWip ?> . ▶️ <?= $officeNotStarted ?> · ⏸
+                            <?= $officeHolding ?>
                         </span>
                     </div>
                 </div>
@@ -912,39 +913,107 @@ include '../../includes/header.php';
                             $totAll = count($logs);
                             ?>
                             <tfoot>
-                                <tr style="background:#f9fafb;border-top:2px solid #e5e7eb;">
-                                    <td colspan="2"
-                                        style="padding:10px 14px;font-size:.78rem;font-weight:700;color:#374151;">
-                                        <i class="fas fa-sigma me-1" style="color:#c9a84c;"></i>
-                                        Totals &nbsp;<span style="font-weight:400;color:#9ca3af;">(<?= $totAll ?>
-                                            rows)</span>
-                                    </td>
-                                    <td colspan="2" style="padding:10px 6px;font-size:.75rem;color:#6b7280;">
-                                        <span style="margin-right:10px;">🚗 Field: <strong><?= $totField ?></strong></span>
-                                        <span>🏢 Office: <strong><?= $totOffice ?></strong></span>
-                                    </td>
-                                    <!-- Time In / Time Out — no meaningful total -->
-                                    <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
-                                    <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
-                                    <!-- Total hours -->
-                                    <td class="text-center" style="padding:10px 6px;">
-                                        <strong style="font-size:.88rem;color:#c9a84c;">
-                                            <?= number_format($totHours, 1) ?>h
-                                        </strong>
-                                    </td>
-                                    <!-- Status breakdown -->
-                                    <td class="text-center" style="padding:10px 6px;font-size:.72rem;line-height:1.6;">
-                                        <?php if ($totField > 0): ?>
-                                            <div>✅ <?= $totVisited ?> &nbsp;❌ <?= $totMissed ?> &nbsp;🔄 <?= $totRescheduled ?>
+                                <tr style="background:#f8fafc;border-top:2px solid #e5e7eb;">
+                                    <td colspan="10" style="padding:14px 18px;">
+                                        <div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;">
+
+                                            <!-- Total rows -->
+                                            <div style="display:flex;align-items:center;gap:6px;">
+                                                <span
+                                                    style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">Total</span>
+                                                <span
+                                                    style="font-size:.85rem;font-weight:800;color:#1f2937;"><?= $totAll ?></span>
+                                                <span style="font-size:.72rem;color:#9ca3af;">rows</span>
                                             </div>
-                                        <?php endif; ?>
-                                        <?php if ($totOffice > 0): ?>
-                                            <div>✔ <?= $totCompleted ?> done &nbsp;⏳ <?= $totWip ?> WIP &nbsp;⏸
-                                                <?= $totHolding ?> Holding &nbsp;▶️ <?= $totNotStarted ?> Not Started
+
+                                            <span
+                                                style="width:1px;height:18px;background:#e5e7eb;display:inline-block;"></span>
+
+                                            <!-- Hours -->
+                                            <div style="display:flex;align-items:center;gap:5px;">
+                                                <i class="fas fa-clock" style="color:#c9a84c;font-size:.75rem;"></i>
+                                                <span
+                                                    style="font-size:.85rem;font-weight:800;color:#c9a84c;"><?= number_format($totHours, 1) ?>h</span>
+                                                <span style="font-size:.7rem;color:#9ca3af;">total</span>
                                             </div>
-                                        <?php endif; ?>
+
+                                            <span
+                                                style="width:1px;height:18px;background:#e5e7eb;display:inline-block;"></span>
+
+                                            <!-- Field breakdown -->
+                                            <?php if ($totField > 0): ?>
+                                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                                    <span style="display:inline-flex;align-items:center;gap:4px;background:#dbeafe;color:#1d4ed8;
+                                 font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:99px;">
+                                                        <i class="fas fa-car" style="font-size:.6rem;"></i> <?= $totField ?>
+                                                        Field
+                                                    </span>
+                                                    <?php if ($totVisited > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#dcfce7;color:#166534;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-check" style="font-size:.55rem;"></i>
+                                                            <?= $totVisited ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($totMissed > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#dc2626;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-times" style="font-size:.55rem;"></i> <?= $totMissed ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($totRescheduled > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#fef9c3;color:#854d0e;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-redo" style="font-size:.55rem;"></i>
+                                                            <?= $totRescheduled ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <span
+                                                    style="width:1px;height:18px;background:#e5e7eb;display:inline-block;"></span>
+                                            <?php endif; ?>
+
+                                            <!-- Office breakdown -->
+                                            <?php if ($totOffice > 0): ?>
+                                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                                    <span style="display:inline-flex;align-items:center;gap:4px;background:#fce7f3;color:#be185d;
+                                 font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:99px;">
+                                                        <i class="fas fa-building" style="font-size:.6rem;"></i>
+                                                        <?= $totOffice ?> Office
+                                                    </span>
+                                                    <?php if ($totCompleted > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#dcfce7;color:#166534;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-check-double" style="font-size:.55rem;"></i>
+                                                            <?= $totCompleted ?> Done
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($totWip > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#eff6ff;color:#1d4ed8;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-spinner" style="font-size:.55rem;"></i> <?= $totWip ?>
+                                                            WIP
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($totHolding > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#ede9fe;color:#6d28d9;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-pause" style="font-size:.55rem;"></i>
+                                                            <?= $totHolding ?> Hold
+                                                        </span>
+                                                    <?php endif; ?>
+                                                    <?php if ($totNotStarted > 0): ?>
+                                                        <span style="display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#dc2626;
+                                 font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:99px;">
+                                                            <i class="fas fa-clock" style="font-size:.55rem;"></i>
+                                                            <?= $totNotStarted ?> Not Started
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+
+                                        </div>
                                     </td>
-                                    <td colspan="2" style="padding:10px 6px;"></td>
                                 </tr>
                             </tfoot>
                         <?php endif; ?>
@@ -954,40 +1023,90 @@ include '../../includes/header.php';
                 <?php if (!empty($logs)): ?>
                     <!-- Summary bar below table -->
                     <div style="
-                    display:flex; flex-wrap:wrap; gap:10px 24px;
-                    padding:12px 18px;
-                    border-top:1px solid #f3f4f6;
-                    background:#fafafa;
-                    border-radius:0 0 10px 10px;
-                    font-size:.78rem; color:#374151;
-                    align-items:center;
-                ">
-                        <span style="font-weight:700;color:#111827;">
-                            <i class="fas fa-table-list me-1" style="color:#c9a84c;"></i>
-                            <?= $totAll ?> record<?= $totAll != 1 ? 's' : '' ?>
-                        </span>
-                        <span style="color:#6b7280;">|</span>
-                        <span>
-                            <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
-                            <strong><?= number_format($totHours, 1) ?>h</strong> total
-                        </span>
-                        <span style="color:#6b7280;">|</span>
-                        <span>
-                            <i class="fas fa-car me-1" style="color:#1d4ed8;"></i>
-                            Field: <strong><?= $totField ?></strong>
-                            &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
-                                (✅ <?= $totVisited ?> · ❌ <?= $totMissed ?> · 🔄 <?= $totRescheduled ?>)
-                            </span>
-                        </span>
-                        <span style="color:#6b7280;">|</span>
-                        <span>
-                            <i class="fas fa-building me-1" style="color:#be185d;"></i>
-                            Office: <strong><?= $totOffice ?></strong>
-                            &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
-                                (✔ <?= $totCompleted ?> done · ⏳ <?= $totWip ?> WIP · ⏸ <?= $totHolding ?> Holding · ▶️
-                                <?= $totNotStarted ?> Not Started)
-                            </span>
-                        </span>
+    display:flex; flex-wrap:wrap; gap:8px 12px;
+    padding:12px 18px;
+    border-top:1px solid #f3f4f6;
+    background:#f8fafc;
+    border-radius:0 0 10px 10px;
+    align-items:center;
+">
+                        <!-- Record count -->
+                        <div style="display:inline-flex;align-items:center;gap:5px;
+                background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:4px 10px;">
+                            <i class="fas fa-table-list" style="color:#c9a84c;font-size:.72rem;"></i>
+                            <span style="font-size:.78rem;font-weight:800;color:#1f2937;"><?= $totAll ?></span>
+                            <span style="font-size:.7rem;color:#9ca3af;">record<?= $totAll != 1 ? 's' : '' ?></span>
+                        </div>
+
+                        <!-- Hours -->
+                        <div style="display:inline-flex;align-items:center;gap:5px;
+                background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:4px 10px;">
+                            <i class="fas fa-clock" style="color:#c9a84c;font-size:.72rem;"></i>
+                            <span
+                                style="font-size:.78rem;font-weight:800;color:#c9a84c;"><?= number_format($totHours, 1) ?>h</span>
+                        </div>
+
+                        <?php if ($totField > 0): ?>
+                            <!-- Field pills -->
+                            <div style="display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;">
+                                <span style="display:inline-flex;align-items:center;gap:4px;background:#dbeafe;color:#1d4ed8;
+                     font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:8px;">
+                                    <i class="fas fa-car" style="font-size:.62rem;"></i> <?= $totField ?> Field
+                                </span>
+                                <?php if ($totVisited > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#dcfce7;color:#166534;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-check" style="font-size:.58rem;"></i> <?= $totVisited ?> Visited
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($totMissed > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#dc2626;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-times" style="font-size:.58rem;"></i> <?= $totMissed ?> Missed
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($totRescheduled > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#fef9c3;color:#854d0e;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-redo" style="font-size:.58rem;"></i> <?= $totRescheduled ?> Rescheduled
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+
+                        <?php if ($totOffice > 0): ?>
+                            <!-- Office pills -->
+                            <div style="display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;">
+                                <span style="display:inline-flex;align-items:center;gap:4px;background:#fce7f3;color:#be185d;
+                     font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:8px;">
+                                    <i class="fas fa-building" style="font-size:.62rem;"></i> <?= $totOffice ?> Office
+                                </span>
+                                <?php if ($totCompleted > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#dcfce7;color:#166534;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-check-double" style="font-size:.58rem;"></i> <?= $totCompleted ?> Done
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($totWip > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#eff6ff;color:#1d4ed8;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-spinner" style="font-size:.58rem;"></i> <?= $totWip ?> WIP
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($totHolding > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#ede9fe;color:#6d28d9;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-pause" style="font-size:.58rem;"></i> <?= $totHolding ?> Holding
+                                    </span>
+                                <?php endif; ?>
+                                <?php if ($totNotStarted > 0): ?>
+                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#dc2626;
+                     font-size:.7rem;font-weight:700;padding:3px 8px;border-radius:6px;">
+                                        <i class="fas fa-clock" style="font-size:.58rem;"></i> <?= $totNotStarted ?> Not Started
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </div>
