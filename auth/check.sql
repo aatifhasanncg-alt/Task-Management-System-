@@ -930,3 +930,6 @@ CREATE TABLE office_work_logs (
     KEY idx_status      (status)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='In-office client work logs';
+
+ALTER TABLE office_work_logs 
+MODIFY status ENUM('not_started','wip','holding','completed') DEFAULT 'not_started';

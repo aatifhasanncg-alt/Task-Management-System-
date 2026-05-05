@@ -8,74 +8,92 @@ require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 requireAnyRole();
 
-$db   = getDB();
+$db = getDB();
 $user = currentUser();
-$uid  = (int) $user['id'];
+$uid = (int) $user['id'];
 
-$now          = new DateTime();
-$month        = $_GET['month']         ?? $now->format('Y-m');
-$staffId      = (int) ($_GET['staff_id']    ?? 0);
-$clientId     = (int) ($_GET['client_id']   ?? 0);
-$fieldStatus  = $_GET['field_status']  ?? '';   // visited | missed | rescheduled
+$now = new DateTime();
+$month = $_GET['month'] ?? $now->format('Y-m');
+$staffId = (int) ($_GET['staff_id'] ?? 0);
+$clientId = (int) ($_GET['client_id'] ?? 0);
+$fieldStatus = $_GET['field_status'] ?? '';   // visited | missed | rescheduled
 $officeStatus = $_GET['office_status'] ?? '';   // wip | completed
-$weekNum      = (int) ($_GET['week']        ?? 0);
-$logType      = $_GET['log_type']      ?? '';   // '' = all | 'field' | 'office'
+$weekNum = (int) ($_GET['week'] ?? 0);
+$logType = $_GET['log_type'] ?? '';   // '' = all | 'field' | 'office'
+$branchId = (int) ($_GET['branch_id'] ?? 0);
 
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
 $monthLabel = $monthDate->format('F Y');
-
+$branchList = $db->query("
+    SELECT id, branch_name, branch_code
+    FROM branches
+    WHERE is_active = 1
+    ORDER BY branch_name
+")->fetchAll();
 /* ══════════════════════════════════════════════════
    KPIs  (both tables unioned for totals)
    Office status: wip | completed  (real column value)
    Field status:  visited | missed | rescheduled
 ══════════════════════════════════════════════════ */
-$kpiParams  = [$month, $month];
-$kpiStaffW  = $staffId  ? " AND user_id = ?"  : "";
+$kpiParams = [$month, $month];
+$kpiStaffW = $staffId ? " AND user_id = ?" : "";
 $kpiClientW = $clientId ? " AND client_id = ?" : "";
-if ($staffId)  { $kpiParams[] = $staffId;  $kpiParams[] = $staffId;  }
-if ($clientId) { $kpiParams[] = $clientId; $kpiParams[] = $clientId; }
+$kpiBranchW = $branchId ? " AND branch_id = ?" : "";
+if ($staffId) {
+    $kpiParams[] = $staffId;
+    $kpiParams[] = $staffId;
+}
+if ($clientId) {
+    $kpiParams[] = $clientId;
+    $kpiParams[] = $clientId;
+}
+if ($branchId) {
+    $kpiParams[] = $branchId;
+    $kpiParams[] = $branchId;
+}
 
 $kpiSQL = "
     SELECT
         COUNT(*) AS total_logs,
         COALESCE(SUM(duration_hours), 0) AS total_hours,
-        /* Field status counts */
-        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'visited'     THEN 1 ELSE 0 END) AS field_visited,
-        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'missed'      THEN 1 ELSE 0 END) AS field_missed,
-        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'rescheduled' THEN 1 ELSE 0 END) AS field_rescheduled,
-        /* Office status counts */
-        SUM(CASE WHEN log_source = 'office' AND office_status = 'completed'  THEN 1 ELSE 0 END) AS office_completed,
-        SUM(CASE WHEN log_source = 'office' AND office_status = 'wip'        THEN 1 ELSE 0 END) AS office_wip,
-        /* Source counts */
+        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'visited'      THEN 1 ELSE 0 END) AS field_visited,
+        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'missed'       THEN 1 ELSE 0 END) AS field_missed,
+        SUM(CASE WHEN log_source = 'field'  AND visit_status = 'rescheduled'  THEN 1 ELSE 0 END) AS field_rescheduled,
+        SUM(CASE WHEN log_source = 'office' AND office_status = 'completed'   THEN 1 ELSE 0 END) AS office_completed,
+        SUM(CASE WHEN log_source = 'office' AND office_status = 'not_started' THEN 1 ELSE 0 END) AS office_not_started,
+        SUM(CASE WHEN log_source = 'office' AND office_status = 'wip'         THEN 1 ELSE 0 END) AS office_wip,
+        SUM(CASE WHEN log_source = 'office' AND office_status = 'holding'     THEN 1 ELSE 0 END) AS office_holding,
         SUM(CASE WHEN log_source = 'office' THEN 1 ELSE 0 END) AS office_cnt,
         SUM(CASE WHEN log_source = 'field'  THEN 1 ELSE 0 END) AS field_cnt
     FROM (
-        SELECT user_id, client_id, duration_hours,
+        SELECT user_id, client_id, branch_id, duration_hours,
                visit_status, NULL AS office_status, 'field' AS log_source
         FROM work_logs
-        WHERE month_year = ? {$kpiStaffW} {$kpiClientW}
+        WHERE month_year = ? {$kpiStaffW} {$kpiClientW} {$kpiBranchW}
 
         UNION ALL
 
-        SELECT user_id, client_id,
+        SELECT user_id, client_id, branch_id,
                ROUND(TIME_TO_SEC(TIMEDIFF(time_out, time_in)) / 3600, 2) AS duration_hours,
                NULL AS visit_status, status AS office_status, 'office' AS log_source
         FROM office_work_logs
-        WHERE DATE_FORMAT(log_date, '%Y-%m') = ? {$kpiStaffW} {$kpiClientW}
+        WHERE DATE_FORMAT(log_date, '%Y-%m') = ? {$kpiStaffW} {$kpiClientW} {$kpiBranchW}
     ) AS combined
 ";
 $kpiStmt = $db->prepare($kpiSQL);
 $kpiStmt->execute($kpiParams);
-$kpi             = $kpiStmt->fetch(PDO::FETCH_ASSOC);
-$totalLogs       = (int)   ($kpi['total_logs']       ?? 0);
-$totalHours      = (float) ($kpi['total_hours']      ?? 0);
-$fieldVisited    = (int)   ($kpi['field_visited']    ?? 0);
-$fieldMissed     = (int)   ($kpi['field_missed']     ?? 0);
-$fieldRescheduled= (int)   ($kpi['field_rescheduled']?? 0);
-$officeCompleted = (int)   ($kpi['office_completed'] ?? 0);
-$officeWip       = (int)   ($kpi['office_wip']       ?? 0);
-$officeCnt       = (int)   ($kpi['office_cnt']       ?? 0);
-$fieldCnt        = (int)   ($kpi['field_cnt']        ?? 0);
+$kpi = $kpiStmt->fetch(PDO::FETCH_ASSOC);
+$totalLogs = (int) ($kpi['total_logs'] ?? 0);
+$totalHours = (float) ($kpi['total_hours'] ?? 0);
+$fieldVisited = (int) ($kpi['field_visited'] ?? 0);
+$fieldMissed = (int) ($kpi['field_missed'] ?? 0);
+$fieldRescheduled = (int) ($kpi['field_rescheduled'] ?? 0);
+$officeCompleted = (int) ($kpi['office_completed'] ?? 0);
+$officeNotStarted = (int) ($kpi['office_not_started'] ?? 0);
+$officeWip = (int) ($kpi['office_wip'] ?? 0);
+$officeHolding = (int) ($kpi['office_holding'] ?? 0);
+$officeCnt = (int) ($kpi['office_cnt'] ?? 0);
+$fieldCnt = (int) ($kpi['field_cnt'] ?? 0);
 
 /* ══════════════════════════════════════════════════
    Staff list
@@ -113,33 +131,45 @@ $clientList = $db->query("
    fieldStatus  → applied only to work_logs (visit_status col)
    officeStatus → applied only to office_work_logs (status col)
 ══════════════════════════════════════════════════ */
-$where1  = ["wl.month_year = ?"];
-$where2  = ["DATE_FORMAT(owl.log_date, '%Y-%m') = ?"];
+$where1 = ["wl.month_year = ?"];
+$where2 = ["DATE_FORMAT(owl.log_date, '%Y-%m') = ?"];
 $params1 = [$month];
 $params2 = [$month];
 
 if ($staffId) {
-    $where1[] = "wl.user_id = ?";    $params1[] = $staffId;
-    $where2[] = "owl.user_id = ?";   $params2[] = $staffId;
+    $where1[] = "wl.user_id = ?";
+    $params1[] = $staffId;
+    $where2[] = "owl.user_id = ?";
+    $params2[] = $staffId;
 }
 if ($clientId) {
-    $where1[] = "wl.client_id = ?";  $params1[] = $clientId;
-    $where2[] = "owl.client_id = ?"; $params2[] = $clientId;
+    $where1[] = "wl.client_id = ?";
+    $params1[] = $clientId;
+    $where2[] = "owl.client_id = ?";
+    $params2[] = $clientId;
 }
 // Field-only status filter
 if ($fieldStatus) {
-    $where1[] = "wl.visit_status = ?"; $params1[] = $fieldStatus;
+    $where1[] = "wl.visit_status = ?";
+    $params1[] = $fieldStatus;
 }
 // Office-only status filter (maps to the `status` column: wip | completed)
 if ($officeStatus) {
-    $where2[] = "owl.status = ?"; $params2[] = $officeStatus;
+    $where2[] = "owl.status = ?";
+    $params2[] = $officeStatus;
 }
 if ($weekNum) {
-    $where1[] = "wl.week_number = ?"; $params1[] = $weekNum;
+    $where1[] = "wl.week_number = ?";
+    $params1[] = $weekNum;
     $where2[] = "WEEK(owl.log_date, 1) - WEEK(DATE_FORMAT(owl.log_date,'%Y-%m-01'), 1) + 1 = ?";
     $params2[] = $weekNum;
 }
-
+if ($branchId) {
+    $where1[] = "wl.branch_id = ?";
+    $params1[] = $branchId;
+    $where2[] = "owl.branch_id = ?";
+    $params2[] = $branchId;
+}
 $sql1 = "
     SELECT
         wl.id,
@@ -203,24 +233,28 @@ $sql2 = "
 // Determine which legs to include:
 // - Explicit log_type filter always wins
 // - If only officeStatus set, skip field leg; if only fieldStatus set, skip office leg
-$includeField  = true;
+$includeField = true;
 $includeOffice = true;
 
-if ($logType === 'field')  { $includeOffice = false; }
-if ($logType === 'office') { $includeField  = false; }
+if ($logType === 'field') {
+    $includeOffice = false;
+}
+if ($logType === 'office') {
+    $includeField = false;
+}
 
 // If user filtered office status but didn't pick log_type=office, still hide field leg? No —
 // they may want both. But if ONLY officeStatus is set (no fieldStatus) with logType='',
 // we still show field rows (unfiltered by office status) + filtered office rows. That's correct.
 
 if ($includeField && $includeOffice) {
-    $unionSQL  = "({$sql1}) UNION ALL ({$sql2})";
+    $unionSQL = "({$sql1}) UNION ALL ({$sql2})";
     $allParams = array_merge($params1, $params2);
 } elseif ($includeField) {
-    $unionSQL  = $sql1;
+    $unionSQL = $sql1;
     $allParams = $params1;
 } else {
-    $unionSQL  = $sql2;
+    $unionSQL = $sql2;
     $allParams = $params2;
 }
 
@@ -240,137 +274,294 @@ include '../../includes/header.php';
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
 
 <style>
-/* ── Filter bar ── */
-.filter-bar {
-    background: #f9fafb;
-    border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 16px;
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-}
+    /* ── Filter bar ── */
+    .filter-bar {
+        background: #f9fafb;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin-bottom: 16px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
 
-/* ── Tom Select ── */
-.ts-dropdown .option.active,
-.ts-dropdown .option:hover { background: #c9a84c !important; color: #fff !important; }
-.ts-wrapper.focus .ts-control { border-color: #c9a84c !important; box-shadow: none !important; }
-#staffSelect  + .ts-wrapper,
-#clientSelect + .ts-wrapper { width: 100% !important; min-width: 200px; }
-.ts-wrapper .ts-control { border: 1.5px solid #e5e7eb; border-radius: 6px; font-size: .8rem; padding: 5px 10px; }
+    /* ── Tom Select ── */
+    .ts-dropdown .option.active,
+    .ts-dropdown .option:hover {
+        background: #c9a84c !important;
+        color: #fff !important;
+    }
 
-/* ── DataTables ── */
-.dataTables_wrapper .dataTables_paginate .paginate_button {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-width: 32px; height: 32px; padding: 0 10px; margin: 0 2px;
-    border-radius: 6px; border: 1.5px solid #e5e7eb !important;
-    background: #fff !important; color: #374151 !important;
-    font-size: .8rem; font-weight: 600; cursor: pointer;
-}
-.dataTables_wrapper .dataTables_paginate .paginate_button.current,
-.dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
-    background: #c9a84c !important; border-color: #c9a84c !important; color: #fff !important;
-}
-.dataTables_wrapper .dataTables_paginate .paginate_button:hover {
-    background: #f9fafb !important; border-color: #c9a84c !important; color: #c9a84c !important;
-}
-.dataTables_wrapper .dataTables_filter input,
-.dataTables_wrapper .dataTables_length select {
-    border: 1.5px solid #e5e7eb; border-radius: 6px; padding: 5px 10px; font-size: .8rem; margin-left: 6px;
-}
-.dataTables_wrapper .dataTables_info,
-.dataTables_wrapper .dataTables_length,
-.dataTables_wrapper .dataTables_filter { font-size: .8rem; color: #6b7280; padding: 10px 16px; }
-.dataTables_wrapper .dataTables_paginate { padding: 10px 16px; }
+    .ts-wrapper.focus .ts-control {
+        border-color: #c9a84c !important;
+        box-shadow: none !important;
+    }
 
-/* ── Source badge ── */
-.badge-field  { background:#dbeafe; color:#1d4ed8; border-radius:999px; padding:2px 9px; font-size:.68rem; font-weight:700; letter-spacing:.3px; }
-.badge-office { background:#fce7f3; color:#be185d; border-radius:999px; padding:2px 9px; font-size:.68rem; font-weight:700; letter-spacing:.3px; }
+    #staffSelect+.ts-wrapper,
+    #clientSelect+.ts-wrapper {
+        width: 100% !important;
+        min-width: 200px;
+    }
 
-/* ── View button ── */
-.btn-view-log {
-    border: none; background: none; cursor: pointer;
-    color: #c9a84c; font-size: .8rem; padding: 3px 7px;
-    border-radius: 5px; transition: background .15s;
-}
-.btn-view-log:hover { background: #fef9ec; }
+    .ts-wrapper .ts-control {
+        border: 1.5px solid #e5e7eb;
+        border-radius: 6px;
+        font-size: .8rem;
+        padding: 5px 10px;
+    }
 
-/* ══════════════════════════════════════════════
+    /* ── DataTables ── */
+    .dataTables_wrapper .dataTables_paginate .paginate_button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 32px;
+        height: 32px;
+        padding: 0 10px;
+        margin: 0 2px;
+        border-radius: 6px;
+        border: 1.5px solid #e5e7eb !important;
+        background: #fff !important;
+        color: #374151 !important;
+        font-size: .8rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+    .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+        background: #c9a84c !important;
+        border-color: #c9a84c !important;
+        color: #fff !important;
+    }
+
+    .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+        background: #f9fafb !important;
+        border-color: #c9a84c !important;
+        color: #c9a84c !important;
+    }
+
+    .dataTables_wrapper .dataTables_filter input,
+    .dataTables_wrapper .dataTables_length select {
+        border: 1.5px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: .8rem;
+        margin-left: 6px;
+    }
+
+    .dataTables_wrapper .dataTables_info,
+    .dataTables_wrapper .dataTables_length,
+    .dataTables_wrapper .dataTables_filter {
+        font-size: .8rem;
+        color: #6b7280;
+        padding: 10px 16px;
+    }
+
+    .dataTables_wrapper .dataTables_paginate {
+        padding: 10px 16px;
+    }
+
+    /* ── Source badge ── */
+    .badge-field {
+        background: #dbeafe;
+        color: #1d4ed8;
+        border-radius: 999px;
+        padding: 2px 9px;
+        font-size: .68rem;
+        font-weight: 700;
+        letter-spacing: .3px;
+    }
+
+    .badge-office {
+        background: #fce7f3;
+        color: #be185d;
+        border-radius: 999px;
+        padding: 2px 9px;
+        font-size: .68rem;
+        font-weight: 700;
+        letter-spacing: .3px;
+    }
+
+    /* ── View button ── */
+    .btn-view-log {
+        border: none;
+        background: none;
+        cursor: pointer;
+        color: #c9a84c;
+        font-size: .8rem;
+        padding: 3px 7px;
+        border-radius: 5px;
+        transition: background .15s;
+    }
+
+    .btn-view-log:hover {
+        background: #fef9ec;
+    }
+
+    .ts-dropdown .option.active,
+    .ts-dropdown .option:hover {
+        background: var(--gold) !important;
+        color: #fff !important;
+    }
+
+    .ts-wrapper.focus .ts-control {
+        border-color: var(--gold) !important;
+        box-shadow: none !important;
+    }
+
+    .ts-wrapper .ts-control {
+        border: 1.5px solid var(--border);
+        border-radius: 8px;
+        font-size: .77rem;
+        padding: 3px 8px;
+        height: 33px;
+        font-family: inherit;
+    }
+
+    /* ══════════════════════════════════════════════
    LOG DETAIL MODAL
 ══════════════════════════════════════════════ */
-.log-modal-overlay {
-    display: none;
-    position: fixed; inset: 0; z-index: 9999;
-    background: rgba(0,0,0,.45);
-    align-items: center; justify-content: center;
-}
-.log-modal-overlay.active { display: flex; }
+    .log-modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: rgba(0, 0, 0, .45);
+        align-items: center;
+        justify-content: center;
+    }
 
-.log-modal {
-    background: #fff;
-    border-radius: 14px;
-    width: 560px;
-    max-width: 96vw;
-    max-height: 90vh;
-    overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0,0,0,.25);
-    animation: modalIn .22s ease;
-}
-@keyframes modalIn { from { opacity:0; transform:translateY(18px); } to { opacity:1; transform:translateY(0); } }
+    .log-modal-overlay.active {
+        display: flex;
+    }
 
-.log-modal-header {
-    padding: 18px 22px 14px;
-    border-bottom: 1px solid #f3f4f6;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-}
-.log-modal-icon {
-    width: 42px; height: 42px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; flex-shrink: 0;
-}
-.log-modal-icon.field  { background: #dbeafe; color: #1d4ed8; }
-.log-modal-icon.office { background: #fce7f3; color: #be185d; }
+    .log-modal {
+        background: #fff;
+        border-radius: 14px;
+        width: 560px;
+        max-width: 96vw;
+        max-height: 90vh;
+        overflow-y: auto;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, .25);
+        animation: modalIn .22s ease;
+    }
 
-.log-modal-title { font-size: .95rem; font-weight: 700; color: #111827; }
-.log-modal-sub   { font-size: .75rem; color: #9ca3af; margin-top: 2px; }
+    @keyframes modalIn {
+        from {
+            opacity: 0;
+            transform: translateY(18px);
+        }
 
-.log-modal-close {
-    margin-left: auto; background: none; border: none;
-    font-size: 1.1rem; color: #9ca3af; cursor: pointer; padding: 4px;
-    border-radius: 6px; transition: color .15s;
-}
-.log-modal-close:hover { color: #ef4444; }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
 
-.log-modal-body { padding: 18px 22px; }
+    .log-modal-header {
+        padding: 18px 22px 14px;
+        border-bottom: 1px solid #f3f4f6;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+    }
 
-.log-detail-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px 20px;
-}
-.log-detail-item label {
-    display: block; font-size: .68rem; color: #9ca3af;
-    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px;
-}
-.log-detail-item .val {
-    font-size: .83rem; font-weight: 600; color: #1f2937;
-}
-.log-detail-item.full { grid-column: 1 / -1; }
+    .log-modal-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
 
-.log-desc-box {
-    background: #f9fafb; border-radius: 8px;
-    padding: 10px 14px; font-size: .8rem;
-    color: #374151; line-height: 1.6; white-space: pre-wrap;
-}
+    .log-modal-icon.field {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
 
-.log-modal-footer {
-    padding: 14px 22px;
-    border-top: 1px solid #f3f4f6;
-    display: flex; justify-content: flex-end;
-}
+    .log-modal-icon.office {
+        background: #fce7f3;
+        color: #be185d;
+    }
+
+    .log-modal-title {
+        font-size: .95rem;
+        font-weight: 700;
+        color: #111827;
+    }
+
+    .log-modal-sub {
+        font-size: .75rem;
+        color: #9ca3af;
+        margin-top: 2px;
+    }
+
+    .log-modal-close {
+        margin-left: auto;
+        background: none;
+        border: none;
+        font-size: 1.1rem;
+        color: #9ca3af;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 6px;
+        transition: color .15s;
+    }
+
+    .log-modal-close:hover {
+        color: #ef4444;
+    }
+
+    .log-modal-body {
+        padding: 18px 22px;
+    }
+
+    .log-detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 20px;
+    }
+
+    .log-detail-item label {
+        display: block;
+        font-size: .68rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        margin-bottom: 3px;
+    }
+
+    .log-detail-item .val {
+        font-size: .83rem;
+        font-weight: 600;
+        color: #1f2937;
+    }
+
+    .log-detail-item.full {
+        grid-column: 1 / -1;
+    }
+
+    .log-desc-box {
+        background: #f9fafb;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: .8rem;
+        color: #374151;
+        line-height: 1.6;
+        white-space: pre-wrap;
+    }
+
+    .log-modal-footer {
+        padding: 14px 22px;
+        border-top: 1px solid #f3f4f6;
+        display: flex;
+        justify-content: flex-end;
+    }
 </style>
 
 <div class="app-wrapper">
@@ -444,8 +635,8 @@ include '../../includes/header.php';
                 <div style="display:flex;align-items:center;gap:6px;">
                     <label style="font-size:.75rem;color:#6b7280;white-space:nowrap;">Type</label>
                     <select name="log_type" class="cn-input" style="width:120px;">
-                        <option value=""       <?= $logType === ''       ? 'selected' : '' ?>>All Types</option>
-                        <option value="field"  <?= $logType === 'field'  ? 'selected' : '' ?>>🚗 Field</option>
+                        <option value="" <?= $logType === '' ? 'selected' : '' ?>>All Types</option>
+                        <option value="field" <?= $logType === 'field' ? 'selected' : '' ?>>🚗 Field</option>
                         <option value="office" <?= $logType === 'office' ? 'selected' : '' ?>>🏢 Office</option>
                     </select>
                 </div>
@@ -470,24 +661,36 @@ include '../../includes/header.php';
                     <select name="client_id" id="clientSelect" style="width:100%;">
                         <option value="">All Clients</option>
                         <?php foreach ($clientList as $cl): ?>
-                            <option value="<?= $cl['id'] ?>"
-                                <?= $clientId == $cl['id'] ? 'selected' : '' ?>>
+                            <option value="<?= $cl['id'] ?>" <?= $clientId == $cl['id'] ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($cl['company_name']) ?>
                                 <?= $cl['company_code'] ? ' — ' . htmlspecialchars($cl['company_code']) : '' ?>
-                                <?= $cl['pan_number']   ? ' | PAN: ' . htmlspecialchars($cl['pan_number']) : '' ?>
+                                <?= $cl['pan_number'] ? ' | PAN: ' . htmlspecialchars($cl['pan_number']) : '' ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
-
+                <!-- Branch -->
+                <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px;">
+                    <label style="font-size:.75rem;color:#6b7280;white-space:nowrap;">Branch</label>
+                    <select name="branch_id" id="branchSelect" style="width:100%;">
+                        <option value="">All Branches</option>
+                        <?php foreach ($branchList as $br): ?>
+                            <option value="<?= $br['id'] ?>" <?= $branchId == $br['id'] ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($br['branch_name']) ?>
+                                <?= $br['branch_code'] ? ' — ' . htmlspecialchars($br['branch_code']) : '' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 <!-- Field Status — shown when type = all or field -->
                 <div id="fieldStatusWrap" style="display:flex;align-items:center;gap:6px;">
                     <label style="font-size:.75rem;color:#6b7280;white-space:nowrap;">Field Status</label>
                     <select name="field_status" id="fieldStatusSelect" class="cn-input" style="width:145px;">
                         <option value="">All</option>
-                        <option value="visited"     <?= $fieldStatus === 'visited'     ? 'selected' : '' ?>>✅ Visited</option>
-                        <option value="missed"      <?= $fieldStatus === 'missed'      ? 'selected' : '' ?>>❌ Missed</option>
-                        <option value="rescheduled" <?= $fieldStatus === 'rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled</option>
+                        <option value="visited" <?= $fieldStatus === 'visited' ? 'selected' : '' ?>>✅ Visited</option>
+                        <option value="missed" <?= $fieldStatus === 'missed' ? 'selected' : '' ?>>❌ Missed</option>
+                        <option value="rescheduled" <?= $fieldStatus === 'rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled
+                        </option>
                     </select>
                 </div>
 
@@ -496,8 +699,12 @@ include '../../includes/header.php';
                     <label style="font-size:.75rem;color:#6b7280;white-space:nowrap;">Office Status</label>
                     <select name="office_status" id="officeStatusSelect" class="cn-input" style="width:140px;">
                         <option value="">All</option>
-                        <option value="wip"       <?= $officeStatus === 'wip'       ? 'selected' : '' ?>>⏳ WIP</option>
-                        <option value="completed" <?= $officeStatus === 'completed' ? 'selected' : '' ?>>✔ Completed</option>
+                        <option value="not_started" <?= $officeStatus === 'not_started' ? 'selected' : '' ?>>▶️ Not Started
+                        </option>
+                        <option value="wip" <?= $officeStatus === 'wip' ? 'selected' : '' ?>>⏳ WIP</option>
+                        <option value="holding" <?= $officeStatus === 'holding' ? 'selected' : '' ?>>⏸ Holding</option>
+                        <option value="completed" <?= $officeStatus === 'completed' ? 'selected' : '' ?>>✔ Completed
+                        </option>
                     </select>
                 </div>
 
@@ -559,55 +766,65 @@ include '../../includes/header.php';
                             <?php else: ?>
                                 <?php foreach ($logs as $l):
                                     $isOffice = ($l['log_source'] === 'office');
-                                    $desc     = $isOffice
-                                        ? ($l['description']      ?? '')
+                                    $desc = $isOffice
+                                        ? ($l['description'] ?? '')
                                         : ($l['work_description'] ?? '');
-                                    $notes    = $l['notes'] ?? '';
+                                    $notes = $l['notes'] ?? '';
 
                                     $modalData = htmlspecialchars(json_encode([
-                                        'source'        => $l['log_source'],
-                                        'log_date'      => date('d M Y', strtotime($l['log_date'])),
-                                        'day_of_week'   => $l['day_of_week'] ?? '',
-                                        'week_number'   => $l['week_number'] ?? '',
-                                        'full_name'     => $l['full_name'],
-                                        'employee_id'   => $l['employee_id'] ?? '',
-                                        'company_name'  => $l['company_name'],
-                                        'company_code'  => $l['company_code'] ?? '',
-                                        'pan_number'    => $l['pan_number'] ?? '',
-                                        'dept_name'     => $l['dept_name'] ?? '',
-                                        'branch_name'   => $l['branch_name'] ?? '',
-                                        'time_in'       => $l['time_in']  ? date('h:i A', strtotime($l['time_in']))  : '—',
-                                        'time_out'      => $l['time_out'] ? date('h:i A', strtotime($l['time_out'])) : '—',
-                                        'duration'      => number_format((float)$l['duration_hours'], 2) . 'h',
-                                        'visit_status'  => $l['visit_status']  ?? '',
+                                        'source' => $l['log_source'],
+                                        'log_date' => date('d M Y', strtotime($l['log_date'])),
+                                        'day_of_week' => $l['day_of_week'] ?? '',
+                                        'week_number' => $l['week_number'] ?? '',
+                                        'full_name' => $l['full_name'],
+                                        'employee_id' => $l['employee_id'] ?? '',
+                                        'company_name' => $l['company_name'],
+                                        'company_code' => $l['company_code'] ?? '',
+                                        'pan_number' => $l['pan_number'] ?? '',
+                                        'dept_name' => $l['dept_name'] ?? '',
+                                        'branch_name' => $l['branch_name'] ?? '',
+                                        'time_in' => $l['time_in'] ? date('h:i A', strtotime($l['time_in'])) : '—',
+                                        'time_out' => $l['time_out'] ? date('h:i A', strtotime($l['time_out'])) : '—',
+                                        'duration' => number_format((float) $l['duration_hours'], 2) . 'h',
+                                        'visit_status' => $l['visit_status'] ?? '',
                                         'office_status' => $l['office_status'] ?? '',
-                                        'description'   => $desc,
-                                        'notes'         => $notes,
-                                        'created_at'    => $l['created_at'] ?? '',
+                                        'description' => $desc,
+                                        'notes' => $notes,
+                                        'created_at' => $l['created_at'] ?? '',
                                     ]), ENT_QUOTES, 'UTF-8');
-                                ?>
+                                    ?>
                                     <tr>
                                         <td>
                                             <?php if ($isOffice): ?>
-                                                <span class="badge-office" title="Office Work"><i class="fas fa-building"></i></span>
+                                                <span class="badge-office" title="Office Work"><i
+                                                        class="fas fa-building"></i></span>
                                             <?php else: ?>
-                                                <span class="badge-field"  title="Field Visit"><i class="fas fa-car"></i></span>
+                                                <span class="badge-field" title="Field Visit"><i class="fas fa-car"></i></span>
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <strong style="font-size:.82rem;"><?= date('d M Y', strtotime($l['log_date'])) ?></strong>
+                                            <strong
+                                                style="font-size:.82rem;"><?= date('d M Y', strtotime($l['log_date'])) ?></strong>
                                             <div style="font-size:.68rem;color:#9ca3af;"><?= $l['day_of_week'] ?? '' ?></div>
                                         </td>
                                         <td>
-                                            <div style="font-weight:600;font-size:.82rem;"><?= htmlspecialchars($l['full_name']) ?></div>
-                                            <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($l['employee_id'] ?? '') ?></div>
+                                            <div style="font-weight:600;font-size:.82rem;">
+                                                <?= htmlspecialchars($l['full_name']) ?>
+                                            </div>
+                                            <div style="font-size:.68rem;color:#9ca3af;">
+                                                <?= htmlspecialchars($l['employee_id'] ?? '') ?>
+                                            </div>
                                         </td>
                                         <td>
-                                            <div style="font-weight:600;font-size:.82rem;"><?= htmlspecialchars($l['company_name']) ?></div>
-                                            <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($l['company_code'] ?? '') ?></div>
+                                            <div style="font-weight:600;font-size:.82rem;">
+                                                <?= htmlspecialchars($l['company_name']) ?>
+                                            </div>
+                                            <div style="font-size:.68rem;color:#9ca3af;">
+                                                <?= htmlspecialchars($l['company_code'] ?? '') ?>
+                                            </div>
                                         </td>
                                         <td class="text-center" style="font-size:.81rem;">
-                                            <?= $l['time_in']  ? date('h:i A', strtotime($l['time_in']))  : '—' ?>
+                                            <?= $l['time_in'] ? date('h:i A', strtotime($l['time_in'])) : '—' ?>
                                         </td>
                                         <td class="text-center" style="font-size:.81rem;">
                                             <?= $l['time_out'] ? date('h:i A', strtotime($l['time_out'])) : '—' ?>
@@ -619,12 +836,24 @@ include '../../includes/header.php';
                                         </td>
                                         <td class="text-center">
                                             <?php if ($isOffice): ?>
-                                                <?php if (($l['office_status'] ?? '') === 'completed'): ?>
-                                                    <span class="badge" style="background:#d1fae5;color:#065f46;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
+                                                <?php if (($l['office_status'] ?? '') === 'not_started'): ?>
+                                                    <span class="badge"
+                                                        style="background:#fee2e2;color:#dc2626;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
+                                                        ▶️ Not Started
+                                                    </span>
+                                                <?php elseif (($l['office_status'] ?? '') === 'holding'): ?>
+                                                    <span class="badge"
+                                                        style="background:#ede9fe;color:#6d28d9;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
+                                                        ▶️ Holding
+                                                    </span>
+                                                <?php elseif (($l['office_status'] ?? '') === 'completed'): ?>
+                                                    <span class="badge"
+                                                        style="background:#d1fae5;color:#065f46;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
                                                         <i class="fas fa-check"></i> Completed
                                                     </span>
                                                 <?php else: ?>
-                                                    <span class="badge" style="background:#fef9c3;color:#92400e;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
+                                                    <span class="badge"
+                                                        style="background:#fef9c3;color:#92400e;border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;">
                                                         <i class="fas fa-spinner fa-spin"></i> WIP
                                                     </span>
                                                 <?php endif; ?>
@@ -632,12 +861,12 @@ include '../../includes/header.php';
                                                 <?= visitBadge($l['visit_status']) ?>
                                             <?php endif; ?>
                                         </td>
-                                        <td style="font-size:.77rem;color:#6b7280;max-width:220px;word-wrap:break-word;white-space:normal;">
+                                        <td
+                                            style="font-size:.77rem;color:#6b7280;max-width:220px;word-wrap:break-word;white-space:normal;">
                                             <?= htmlspecialchars(mb_substr($desc, 0, 80)) . (mb_strlen($desc) > 80 ? '…' : '') ?>
                                         </td>
                                         <td class="text-center">
-                                            <button type="button" class="btn-view-log"
-                                                data-log='<?= $modalData ?>'
+                                            <button type="button" class="btn-view-log" data-log='<?= $modalData ?>'
                                                 title="View details">
                                                 <i class="fas fa-eye"></i>
                                             </button>
@@ -648,63 +877,83 @@ include '../../includes/header.php';
                         </tbody>
                         <?php if (!empty($logs)):
                             // Compute totals from filtered result set
-                            $totHours      = 0;
-                            $totField      = 0; $totOffice    = 0;
-                            $totVisited    = 0; $totMissed    = 0; $totRescheduled = 0;
-                            $totCompleted  = 0; $totWip       = 0;
+                            $totHours = 0;
+                            $totField = 0;
+                            $totOffice = 0;
+                            $totVisited = 0;
+                            $totMissed = 0;
+                            $totRescheduled = 0;
+                            $totCompleted = 0;
+                            $totWip = 0;
+                            $totHolding = 0;
+                            $totNotStarted = 0;
                             foreach ($logs as $l) {
                                 $totHours += (float) $l['duration_hours'];
                                 if ($l['log_source'] === 'office') {
                                     $totOffice++;
-                                    if (($l['office_status'] ?? '') === 'completed') $totCompleted++;
-                                    else $totWip++;
+                                    if (($l['office_status'] ?? '') === 'completed')
+                                        $totCompleted++;
+                                    elseif (($l['office_status'] ?? '') === 'not_started')
+                                        $totNotStarted++;
+                                    elseif (($l['office_status'] ?? '') === 'holding')
+                                        $totHolding++;
+                                    else
+                                        $totWip++;
                                 } else {
                                     $totField++;
-                                    if (($l['visit_status'] ?? '') === 'visited')     $totVisited++;
-                                    elseif (($l['visit_status'] ?? '') === 'missed')  $totMissed++;
-                                    else $totRescheduled++;
+                                    if (($l['visit_status'] ?? '') === 'visited')
+                                        $totVisited++;
+                                    elseif (($l['visit_status'] ?? '') === 'missed')
+                                        $totMissed++;
+                                    else
+                                        $totRescheduled++;
                                 }
                             }
                             $totAll = count($logs);
-                        ?>
-                        <tfoot>
-                            <tr style="background:#f9fafb;border-top:2px solid #e5e7eb;">
-                                <td colspan="2" style="padding:10px 14px;font-size:.78rem;font-weight:700;color:#374151;">
-                                    <i class="fas fa-sigma me-1" style="color:#c9a84c;"></i>
-                                    Totals &nbsp;<span style="font-weight:400;color:#9ca3af;">(<?= $totAll ?> rows)</span>
-                                </td>
-                                <td colspan="2" style="padding:10px 6px;font-size:.75rem;color:#6b7280;">
-                                    <span style="margin-right:10px;">🚗 Field: <strong><?= $totField ?></strong></span>
-                                    <span>🏢 Office: <strong><?= $totOffice ?></strong></span>
-                                </td>
-                                <!-- Time In / Time Out — no meaningful total -->
-                                <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
-                                <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
-                                <!-- Total hours -->
-                                <td class="text-center" style="padding:10px 6px;">
-                                    <strong style="font-size:.88rem;color:#c9a84c;">
-                                        <?= number_format($totHours, 1) ?>h
-                                    </strong>
-                                </td>
-                                <!-- Status breakdown -->
-                                <td class="text-center" style="padding:10px 6px;font-size:.72rem;line-height:1.6;">
-                                    <?php if ($totField > 0): ?>
-                                        <div>✅ <?= $totVisited ?> &nbsp;❌ <?= $totMissed ?> &nbsp;🔄 <?= $totRescheduled ?></div>
-                                    <?php endif; ?>
-                                    <?php if ($totOffice > 0): ?>
-                                        <div>✔ <?= $totCompleted ?> done &nbsp;⏳ <?= $totWip ?> WIP</div>
-                                    <?php endif; ?>
-                                </td>
-                                <td colspan="2" style="padding:10px 6px;"></td>
-                            </tr>
-                        </tfoot>
+                            ?>
+                            <tfoot>
+                                <tr style="background:#f9fafb;border-top:2px solid #e5e7eb;">
+                                    <td colspan="2"
+                                        style="padding:10px 14px;font-size:.78rem;font-weight:700;color:#374151;">
+                                        <i class="fas fa-sigma me-1" style="color:#c9a84c;"></i>
+                                        Totals &nbsp;<span style="font-weight:400;color:#9ca3af;">(<?= $totAll ?>
+                                            rows)</span>
+                                    </td>
+                                    <td colspan="2" style="padding:10px 6px;font-size:.75rem;color:#6b7280;">
+                                        <span style="margin-right:10px;">🚗 Field: <strong><?= $totField ?></strong></span>
+                                        <span>🏢 Office: <strong><?= $totOffice ?></strong></span>
+                                    </td>
+                                    <!-- Time In / Time Out — no meaningful total -->
+                                    <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
+                                    <td class="text-center" style="padding:10px 6px;color:#9ca3af;font-size:.75rem;">—</td>
+                                    <!-- Total hours -->
+                                    <td class="text-center" style="padding:10px 6px;">
+                                        <strong style="font-size:.88rem;color:#c9a84c;">
+                                            <?= number_format($totHours, 1) ?>h
+                                        </strong>
+                                    </td>
+                                    <!-- Status breakdown -->
+                                    <td class="text-center" style="padding:10px 6px;font-size:.72rem;line-height:1.6;">
+                                        <?php if ($totField > 0): ?>
+                                            <div>✅ <?= $totVisited ?> &nbsp;❌ <?= $totMissed ?> &nbsp;🔄 <?= $totRescheduled ?>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php if ($totOffice > 0): ?>
+                                            <div>✔ <?= $totCompleted ?> done &nbsp;⏳ <?= $totWip ?> WIP &nbsp;⏸
+                                                <?= $totHolding ?> Holding &nbsp;▶️ <?= $totNotStarted ?> Not Started
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td colspan="2" style="padding:10px 6px;"></td>
+                                </tr>
+                            </tfoot>
                         <?php endif; ?>
                     </table>
                 </div>
 
                 <?php if (!empty($logs)): ?>
-                <!-- Summary bar below table -->
-                <div style="
+                    <!-- Summary bar below table -->
+                    <div style="
                     display:flex; flex-wrap:wrap; gap:10px 24px;
                     padding:12px 18px;
                     border-top:1px solid #f3f4f6;
@@ -713,32 +962,33 @@ include '../../includes/header.php';
                     font-size:.78rem; color:#374151;
                     align-items:center;
                 ">
-                    <span style="font-weight:700;color:#111827;">
-                        <i class="fas fa-table-list me-1" style="color:#c9a84c;"></i>
-                        <?= $totAll ?> record<?= $totAll != 1 ? 's' : '' ?>
-                    </span>
-                    <span style="color:#6b7280;">|</span>
-                    <span>
-                        <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
-                        <strong><?= number_format($totHours, 1) ?>h</strong> total
-                    </span>
-                    <span style="color:#6b7280;">|</span>
-                    <span>
-                        <i class="fas fa-car me-1" style="color:#1d4ed8;"></i>
-                        Field: <strong><?= $totField ?></strong>
-                        &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
-                            (✅ <?= $totVisited ?> · ❌ <?= $totMissed ?> · 🔄 <?= $totRescheduled ?>)
+                        <span style="font-weight:700;color:#111827;">
+                            <i class="fas fa-table-list me-1" style="color:#c9a84c;"></i>
+                            <?= $totAll ?> record<?= $totAll != 1 ? 's' : '' ?>
                         </span>
-                    </span>
-                    <span style="color:#6b7280;">|</span>
-                    <span>
-                        <i class="fas fa-building me-1" style="color:#be185d;"></i>
-                        Office: <strong><?= $totOffice ?></strong>
-                        &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
-                            (✔ <?= $totCompleted ?> done · ⏳ <?= $totWip ?> WIP)
+                        <span style="color:#6b7280;">|</span>
+                        <span>
+                            <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
+                            <strong><?= number_format($totHours, 1) ?>h</strong> total
                         </span>
-                    </span>
-                </div>
+                        <span style="color:#6b7280;">|</span>
+                        <span>
+                            <i class="fas fa-car me-1" style="color:#1d4ed8;"></i>
+                            Field: <strong><?= $totField ?></strong>
+                            &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
+                                (✅ <?= $totVisited ?> · ❌ <?= $totMissed ?> · 🔄 <?= $totRescheduled ?>)
+                            </span>
+                        </span>
+                        <span style="color:#6b7280;">|</span>
+                        <span>
+                            <i class="fas fa-building me-1" style="color:#be185d;"></i>
+                            Office: <strong><?= $totOffice ?></strong>
+                            &nbsp;<span style="color:#9ca3af; font-size:.7rem;">
+                                (✔ <?= $totCompleted ?> done · ⏳ <?= $totWip ?> WIP · ⏸ <?= $totHolding ?> Holding · ▶️
+                                <?= $totNotStarted ?> Not Started)
+                            </span>
+                        </span>
+                    </div>
                 <?php endif; ?>
             </div>
 
@@ -758,7 +1008,7 @@ include '../../includes/header.php';
             </div>
             <div>
                 <div class="log-modal-title" id="modalLogTitle">Log Details</div>
-                <div class="log-modal-sub"  id="modalLogSub"></div>
+                <div class="log-modal-sub" id="modalLogSub"></div>
             </div>
             <button class="log-modal-close" id="modalClose" aria-label="Close">&times;</button>
         </div>
@@ -799,179 +1049,197 @@ include '../../includes/header.php';
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 
 <script>
-document.addEventListener('DOMContentLoaded', function () {
+    document.addEventListener('DOMContentLoaded', function () {
 
-    /* ── Show/hide status dropdowns based on log_type ── */
-    const logTypeSelect     = document.querySelector('select[name="log_type"]');
-    const fieldStatusWrap   = document.getElementById('fieldStatusWrap');
-    const officeStatusWrap  = document.getElementById('officeStatusWrap');
+        /* ── Show/hide status dropdowns based on log_type ── */
+        const logTypeSelect = document.querySelector('select[name="log_type"]');
+        const fieldStatusWrap = document.getElementById('fieldStatusWrap');
+        const officeStatusWrap = document.getElementById('officeStatusWrap');
 
-    function syncStatusDropdowns() {
-        const val = logTypeSelect ? logTypeSelect.value : '';
-        if (fieldStatusWrap)  fieldStatusWrap.style.display  = (val === 'office') ? 'none' : 'flex';
-        if (officeStatusWrap) officeStatusWrap.style.display = (val === 'field')  ? 'none' : 'flex';
-    }
+        function syncStatusDropdowns() {
+            const val = logTypeSelect ? logTypeSelect.value : '';
+            if (fieldStatusWrap) fieldStatusWrap.style.display = (val === 'office') ? 'none' : 'flex';
+            if (officeStatusWrap) officeStatusWrap.style.display = (val === 'field') ? 'none' : 'flex';
+        }
 
-    if (logTypeSelect) {
-        logTypeSelect.addEventListener('change', syncStatusDropdowns);
-        syncStatusDropdowns(); // run on page load to respect current filter
-    }
+        if (logTypeSelect) {
+            logTypeSelect.addEventListener('change', syncStatusDropdowns);
+            syncStatusDropdowns(); // run on page load to respect current filter
+        }
 
-    /* ── Tom Select: Staff ── */
-    new TomSelect('#staffSelect', {
-        placeholder:      'Search by name or code…',
-        maxOptions:       100,
+        /* ── Tom Select: Staff ── */
+        new TomSelect('#staffSelect', {
+            placeholder: 'Search by name or code…',
+            maxOptions: 100,
+            allowEmptyOption: true,
+            searchField: ['text'],
+            render: {
+                option: function (data, escape) {
+                    var parts = data.text.split(' — ');
+                    var name = parts[0] ? escape(parts[0].trim()) : escape(data.text);
+                    var code = parts[1] ? parts[1].trim() : '';
+                    return '<div style="padding:6px 10px;line-height:1.4;">' +
+                        '<div style="font-weight:600;font-size:.82rem;">' + name + '</div>' +
+                        (code ? '<div style="font-size:.7rem;color:#6b7280;">Code: ' + escape(code) + '</div>' : '') +
+                        '</div>';
+                },
+                item: function (data, escape) { return '<div>' + escape(data.text) + '</div>'; }
+            }
+        });
+
+        /* ── Tom Select: Client ── */
+        new TomSelect('#clientSelect', {
+            placeholder: 'Search by name, code or PAN…',
+            maxOptions: 200,
+            allowEmptyOption: true,
+            searchField: ['text'],
+            render: {
+                option: function (data, escape) {
+                    var raw = data.text;
+                    var name = raw.split(' — ')[0].trim();
+                    var rest = raw.includes(' — ') ? raw.split(' — ').slice(1).join(' — ').trim() : '';
+                    var code = '', pan = '';
+                    if (rest) { var ps = rest.split(' | PAN: '); code = ps[0].trim(); pan = ps[1] ? ps[1].trim() : ''; }
+                    return '<div style="padding:6px 10px;line-height:1.4;">' +
+                        '<div style="font-weight:600;font-size:.82rem;">' + escape(name) + '</div>' +
+                        '<div style="font-size:.7rem;color:#6b7280;">' +
+                        (code ? '<span style="margin-right:8px;">Code: ' + escape(code) + '</span>' : '') +
+                        (pan ? '<span>PAN: ' + escape(pan) + '</span>' : '') +
+                        '</div></div>';
+                },
+                item: function (data, escape) {
+                    return '<div>' + escape(data.text.split(' — ')[0].trim()) + '</div>';
+                }
+            }
+        });
+
+        /* ── DataTable ── */
+        if ($('#logsTable tbody td').length > 1) {
+            $('#logsTable').DataTable({
+                order: [[1, 'desc']],
+                pageLength: 25,
+                language: { search: 'Search logs:' }
+            });
+        }
+
+        /* ══════════════════════════════════════════
+           LOG DETAIL MODAL
+        ══════════════════════════════════════════ */
+        const overlay = document.getElementById('logModal');
+        const icon = document.getElementById('modalIcon');
+        const title = document.getElementById('modalLogTitle');
+        const sub = document.getElementById('modalLogSub');
+        const grid = document.getElementById('modalGrid');
+        const descBox = document.getElementById('modalDesc');
+        const descWrap = document.getElementById('modalDescWrap');
+        const notesBox = document.getElementById('modalNotes');
+        const notesWrap = document.getElementById('modalNotesWrap');
+
+        function openModal(data) {
+            const isOffice = data.source === 'office';
+
+            /* Icon & type label */
+            icon.className = 'log-modal-icon ' + data.source;
+            icon.innerHTML = isOffice ? '<i class="fas fa-building"></i>' : '<i class="fas fa-car"></i>';
+
+            /* Title */
+            title.textContent = isOffice ? 'Office Work Log' : 'Field Visit Log';
+            sub.textContent = data.log_date + (data.day_of_week ? ' · ' + data.day_of_week : '')
+                + (data.week_number ? ' · Week ' + data.week_number : '');
+
+            /* Grid items */
+            const statusLabel = isOffice
+                ? (data.office_status === 'completed' ? '✔ Completed' : data.office_status === 'wip' ? '⏳ WIP' : data.office_status === 'holding' ? '⏸ Holding' : data.office_status === 'not_started' ? '▶️ Not Started' : '—')
+                : (data.visit_status
+                    ? data.visit_status.charAt(0).toUpperCase() + data.visit_status.slice(1)
+                    : '—');
+
+            const items = [
+                { label: 'Staff', val: data.full_name + (data.employee_id ? ' (' + data.employee_id + ')' : '') },
+                { label: 'Client', val: data.company_name + (data.company_code ? ' — ' + data.company_code : '') },
+                { label: 'PAN', val: data.pan_number || '—' },
+                { label: 'Department', val: data.dept_name || '—' },
+                { label: 'Branch', val: data.branch_name || '—' },
+                { label: 'Date', val: data.log_date },
+                { label: 'Time In', val: data.time_in || '—' },
+                { label: 'Time Out', val: data.time_out || '—' },
+                { label: 'Duration', val: data.duration },
+                { label: isOffice ? 'Work Status' : 'Visit Status', val: statusLabel },
+            ];
+
+            grid.innerHTML = items.map(function (item) {
+                return '<div class="log-detail-item">' +
+                    '<label>' + item.label + '</label>' +
+                    '<div class="val">' + escapeHtml(item.val) + '</div>' +
+                    '</div>';
+            }).join('');
+
+            /* Description */
+            if (data.description && data.description.trim()) {
+                descBox.textContent = data.description;
+                descWrap.style.display = '';
+            } else {
+                descWrap.style.display = 'none';
+            }
+
+            /* Notes */
+            if (data.notes && data.notes.trim()) {
+                notesBox.textContent = data.notes;
+                notesWrap.style.display = '';
+            } else {
+                notesWrap.style.display = 'none';
+            }
+
+            overlay.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal() {
+            overlay.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        /* Attach open listener to all view buttons */
+        document.querySelectorAll('.btn-view-log').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                try {
+                    var data = JSON.parse(this.getAttribute('data-log'));
+                    openModal(data);
+                } catch (e) {
+                    console.error('Failed to parse log data', e);
+                }
+            });
+        });
+
+        document.getElementById('modalClose').addEventListener('click', closeModal);
+        document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
+        overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+    });
+    new TomSelect('#branchSelect', {
+        placeholder: 'Search branch…',
+        maxOptions: 100,
         allowEmptyOption: true,
-        searchField:      ['text'],
+        searchField: ['text'],
         render: {
-            option: function(data, escape) {
+            option: function (data, escape) {
                 var parts = data.text.split(' — ');
-                var name  = parts[0] ? escape(parts[0].trim()) : escape(data.text);
-                var code  = parts[1] ? parts[1].trim() : '';
+                var name = escape(parts[0].trim());
+                var code = parts[1] ? parts[1].trim() : '';
                 return '<div style="padding:6px 10px;line-height:1.4;">' +
-                       '<div style="font-weight:600;font-size:.82rem;">' + name + '</div>' +
-                       (code ? '<div style="font-size:.7rem;color:#6b7280;">Code: ' + escape(code) + '</div>' : '') +
-                       '</div>';
+                    '<div style="font-weight:600;font-size:.82rem;">' + name + '</div>' +
+                    (code ? '<div style="font-size:.7rem;color:#6b7280;">Code: ' + escape(code) + '</div>' : '') +
+                    '</div>';
             },
-            item: function(data, escape) { return '<div>' + escape(data.text) + '</div>'; }
+            item: function (data, escape) { return '<div>' + escape(data.text.split(' — ')[0].trim()) + '</div>'; }
         }
     });
-
-    /* ── Tom Select: Client ── */
-    new TomSelect('#clientSelect', {
-        placeholder:      'Search by name, code or PAN…',
-        maxOptions:       200,
-        allowEmptyOption: true,
-        searchField:      ['text'],
-        render: {
-            option: function(data, escape) {
-                var raw      = data.text;
-                var name     = raw.split(' — ')[0].trim();
-                var rest     = raw.includes(' — ') ? raw.split(' — ').slice(1).join(' — ').trim() : '';
-                var code = '', pan = '';
-                if (rest) { var ps = rest.split(' | PAN: '); code = ps[0].trim(); pan = ps[1] ? ps[1].trim() : ''; }
-                return '<div style="padding:6px 10px;line-height:1.4;">' +
-                       '<div style="font-weight:600;font-size:.82rem;">' + escape(name) + '</div>' +
-                       '<div style="font-size:.7rem;color:#6b7280;">' +
-                           (code ? '<span style="margin-right:8px;">Code: ' + escape(code) + '</span>' : '') +
-                           (pan  ? '<span>PAN: ' + escape(pan) + '</span>' : '') +
-                       '</div></div>';
-            },
-            item: function(data, escape) {
-                return '<div>' + escape(data.text.split(' — ')[0].trim()) + '</div>';
-            }
-        }
-    });
-
-    /* ── DataTable ── */
-    if ($('#logsTable tbody td').length > 1) {
-        $('#logsTable').DataTable({
-            order:      [[1, 'desc']],
-            pageLength: 25,
-            language:   { search: 'Search logs:' }
-        });
-    }
-
-    /* ══════════════════════════════════════════
-       LOG DETAIL MODAL
-    ══════════════════════════════════════════ */
-    const overlay   = document.getElementById('logModal');
-    const icon      = document.getElementById('modalIcon');
-    const title     = document.getElementById('modalLogTitle');
-    const sub       = document.getElementById('modalLogSub');
-    const grid      = document.getElementById('modalGrid');
-    const descBox   = document.getElementById('modalDesc');
-    const descWrap  = document.getElementById('modalDescWrap');
-    const notesBox  = document.getElementById('modalNotes');
-    const notesWrap = document.getElementById('modalNotesWrap');
-
-    function openModal(data) {
-        const isOffice = data.source === 'office';
-
-        /* Icon & type label */
-        icon.className = 'log-modal-icon ' + data.source;
-        icon.innerHTML = isOffice ? '<i class="fas fa-building"></i>' : '<i class="fas fa-car"></i>';
-
-        /* Title */
-        title.textContent = isOffice ? 'Office Work Log' : 'Field Visit Log';
-        sub.textContent   = data.log_date + (data.day_of_week ? ' · ' + data.day_of_week : '')
-                          + (data.week_number ? ' · Week ' + data.week_number : '');
-
-        /* Grid items */
-        const statusLabel = isOffice
-            ? (data.office_status === 'completed' ? '✔ Completed' : data.office_status === 'wip' ? '⏳ WIP' : '—')
-            : (data.visit_status
-                ? data.visit_status.charAt(0).toUpperCase() + data.visit_status.slice(1)
-                : '—');
-
-        const items = [
-            { label: 'Staff',        val: data.full_name + (data.employee_id ? ' (' + data.employee_id + ')' : '') },
-            { label: 'Client',       val: data.company_name + (data.company_code ? ' — ' + data.company_code : '') },
-            { label: 'PAN',          val: data.pan_number  || '—' },
-            { label: 'Department',   val: data.dept_name   || '—' },
-            { label: 'Branch',       val: data.branch_name || '—' },
-            { label: 'Date',         val: data.log_date },
-            { label: 'Time In',      val: data.time_in  || '—' },
-            { label: 'Time Out',     val: data.time_out || '—' },
-            { label: 'Duration',     val: data.duration },
-            { label: isOffice ? 'Work Status' : 'Visit Status', val: statusLabel },
-        ];
-
-        grid.innerHTML = items.map(function(item) {
-            return '<div class="log-detail-item">' +
-                       '<label>' + item.label + '</label>' +
-                       '<div class="val">' + escapeHtml(item.val) + '</div>' +
-                   '</div>';
-        }).join('');
-
-        /* Description */
-        if (data.description && data.description.trim()) {
-            descBox.textContent   = data.description;
-            descWrap.style.display = '';
-        } else {
-            descWrap.style.display = 'none';
-        }
-
-        /* Notes */
-        if (data.notes && data.notes.trim()) {
-            notesBox.textContent   = data.notes;
-            notesWrap.style.display = '';
-        } else {
-            notesWrap.style.display = 'none';
-        }
-
-        overlay.classList.add('active');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeModal() {
-        overlay.classList.remove('active');
-        document.body.style.overflow = '';
-    }
-
-    /* Attach open listener to all view buttons */
-    document.querySelectorAll('.btn-view-log').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            try {
-                var data = JSON.parse(this.getAttribute('data-log'));
-                openModal(data);
-            } catch(e) {
-                console.error('Failed to parse log data', e);
-            }
-        });
-    });
-
-    document.getElementById('modalClose').addEventListener('click',    closeModal);
-    document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
-    overlay.addEventListener('click', function(e) { if (e.target === overlay) closeModal(); });
-    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeModal(); });
-
-    function escapeHtml(str) {
-        return String(str)
-            .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-            .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-});
 </script>
 
 <?php include '../../includes/footer.php'; ?>

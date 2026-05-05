@@ -58,7 +58,7 @@ $monthLabel = $monthDate->format('F Y');
 
 // log_type: '' = all, 'visit' = visit logs, 'office' = office logs
 $filterType = $_GET['log_type'] ?? '';
-$filterStatus = $_GET['status'] ?? '';   // visit: visited|missed  /  office: wip|completed
+$filterStatus = $_GET['status'] ?? '';   // visit: visited|missed  /  office: not_started|wip|holding|completed
 
 if (!in_array($filterType, ['', 'visit', 'office']))
     $filterType = '';
@@ -69,7 +69,7 @@ if ($filterType === '' || $filterType === 'visit') {
     $vWhere = ['wl.user_id = ?', 'wl.month_year = ?', 'wl.department_id = ?'];
     $vParams = [$uid, $month, $deptId];
 
-    if ($filterStatus && in_array($filterStatus, ['visited', 'missed'])) {
+    if ($filterStatus && in_array($filterStatus, ['visited', 'missed','rescheduled'])) {
         $vWhere[] = 'wl.visit_status = ?';
         $vParams[] = $filterStatus;
     }
@@ -98,7 +98,7 @@ if ($filterType === '' || $filterType === 'office') {
     $oWhere = ['owl.user_id = ?', "DATE_FORMAT(owl.log_date,'%Y-%m') = ?"];
     $oParams = [$uid, $month];
 
-    if ($filterStatus && in_array($filterStatus, ['wip', 'completed'])) {
+    if ($filterStatus && in_array($filterStatus, ['not_started', 'wip', 'holding', 'completed'])) {
         $oWhere[] = 'owl.status = ?';
         $oParams[] = $filterStatus;
     }
@@ -137,7 +137,8 @@ $vKpi = $db->prepare("
         COUNT(*) AS total,
         COALESCE(SUM(duration_hours), 0) AS hours,
         SUM(visit_status='visited') AS visited,
-        SUM(visit_status='missed')  AS missed
+        SUM(visit_status='missed')  AS missed,
+        SUM(visit_status='rescheduled') AS rescheduled
     FROM work_logs
     WHERE user_id=? AND month_year=? AND department_id=?
 ");
@@ -149,7 +150,9 @@ $oKpi = $db->prepare("
     SELECT
         COUNT(*) AS total,
         ROUND(SUM(TIME_TO_SEC(TIMEDIFF(time_out,time_in)))/3600,2) AS hours,
+        sum(status='not_started') AS not_started,
         SUM(status='wip')       AS wip,
+        SUM(status='holding')   AS holding,
         SUM(status='completed') AS completed
     FROM office_work_logs
     WHERE user_id=? AND DATE_FORMAT(log_date,'%Y-%m')=?
@@ -164,9 +167,12 @@ $totalHours = round(($vKpi['hours'] ?? 0) + ($oKpi['hours'] ?? 0), 1);
 $visitStatusMeta = [
     'visited' => ['label' => 'Visited', 'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
     'missed' => ['label' => 'Missed', 'color' => '#ef4444', 'bg' => '#fef2f2', 'icon' => 'fa-times-circle'],
+    'rescheduled' => ['label' => 'Rescheduled', 'color' => '#f59e0b', 'bg' => '#fffbeb', 'icon' => 'fa-calendar-alt'],
 ];
 $officeStatusMeta = [
+    'not_started' => ['label' => 'Not Started', 'color' => '#6b7280', 'bg' => '#f3f4f6', 'icon' => 'fa-clock'],
     'wip' => ['label' => 'WIP', 'color' => '#3b82f6', 'bg' => '#eff6ff', 'icon' => 'fa-spinner'],
+    'holding' => ['label' => 'Holding', 'color' => '#6b7280', 'bg' => '#f3f4f6', 'icon' => 'fa-pause-circle'],
     'completed' => ['label' => 'Completed', 'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
 ];
 
@@ -183,7 +189,10 @@ if ($filterType === '') {
     $statusFilters = [
         'visited' => $visitStatusMeta['visited'],
         'missed' => $visitStatusMeta['missed'],
+        'rescheduled' => $visitStatusMeta['rescheduled'],
+        'not_started' => $officeStatusMeta['not_started'],
         'wip' => $officeStatusMeta['wip'],
+        'holding' => $officeStatusMeta['holding'],
         'completed' => $officeStatusMeta['completed'],
     ];
 }

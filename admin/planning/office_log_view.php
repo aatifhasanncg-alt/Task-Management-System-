@@ -51,10 +51,12 @@ $log = $stmt->fetch();
 $month = date('Y-m', strtotime($log['log_date']));
 
 $statusMeta = [
-    'wip' => ['label' => 'WIP', 'color' => '#3b82f6', 'bg' => '#eff6ff', 'icon' => 'fa-spinner'],
-    'completed' => ['label' => 'Completed', 'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
+    'not_started' => ['label' => 'Not Started', 'color' => '#dc2626', 'bg' => '#fee2e2', 'icon' => 'fa-clock'],
+    'wip'         => ['label' => 'WIP',         'color' => '#3b82f6', 'bg' => '#eff6ff', 'icon' => 'fa-spinner'],
+    'holding'     => ['label' => 'Holding',     'color' => '#6d28d9', 'bg' => '#ede9fe', 'icon' => 'fa-pause-circle'],
+    'completed'   => ['label' => 'Completed',   'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
 ];
-$sm = $statusMeta[$log['status']] ?? ['label' => ucfirst($log['status']), 'color' => '#9ca3af', 'bg' => '#f9fafb', 'icon' => 'fa-circle'];
+$sm = $statusMeta[$log['status']] ?? ['label' => ucfirst($log['status'] ?? '—'), 'color' => '#9ca3af', 'bg' => '#f9fafb', 'icon' => 'fa-circle'];
 
 $pageTitle = 'View Office Log';
 include '../../includes/header.php';

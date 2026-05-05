@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $timeOut    = $_POST['time_out']    ?: null;
     $description = trim($_POST['description'] ?? '');
     $notes      = trim($_POST['notes']  ?? '') ?: null;
-    $status     = in_array($_POST['status'] ?? '', ['wip','completed']) ? $_POST['status'] : 'wip';
+    $status     = in_array($_POST['status'] ?? '', ['not_started', 'wip', 'holding', 'completed']) ? $_POST['status'] : 'wip';
 
     if (!$clientId)   $errors[] = 'Please select a client.';
     if (!$logDate)    $errors[] = 'Log date is required.';
@@ -75,7 +75,7 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_staff.php'; ?>
+    <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">
@@ -226,12 +226,30 @@ include '../../includes/header.php';
                             <div style="padding:14px 16px;">
                                 <div style="display:flex;flex-direction:column;gap:8px;">
 
+                                    <!-- Not Started -->
                                     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;
-                                                  border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
-                                                  transition:.15s;" id="statusWip">
+                                                border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
+                                                transition:.15s;" id="statusNotStarted">
+                                        <input type="radio" name="status" value="not_started"
+                                            <?= ($_POST['status'] ?? 'not_started') === 'not_started' ? 'checked' : '' ?>
+                                            onchange="updateStatusCards()" style="display:none;">
+                                        <div style="width:34px;height:34px;border-radius:8px;background:#fee2e2;
+                                                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-clock" style="color:#dc2626;font-size:.85rem;"></i>
+                                        </div>
+                                        <div>
+                                            <div style="font-size:.82rem;font-weight:700;color:#374151;">Not Started</div>
+                                            <div style="font-size:.68rem;color:#9ca3af;">Work not started</div>
+                                        </div>
+                                    </label>
+
+                                    <!-- WIP -->
+                                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;
+                                                border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
+                                                transition:.15s;" id="statusWip">
                                         <input type="radio" name="status" value="wip"
-                                               <?= ($_POST['status'] ?? 'wip') === 'wip' ? 'checked' : '' ?>
-                                               onchange="updateStatusCards()" style="display:none;">
+                                            <?= ($_POST['status'] ?? 'not_started') === 'wip' ? 'checked' : '' ?>
+                                            onchange="updateStatusCards()" style="display:none;">
                                         <div style="width:34px;height:34px;border-radius:8px;background:#eff6ff;
                                                     display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-spinner" style="color:#3b82f6;font-size:.85rem;"></i>
@@ -242,12 +260,30 @@ include '../../includes/header.php';
                                         </div>
                                     </label>
 
+                                    <!-- Holding -->
                                     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;
-                                                  border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
-                                                  transition:.15s;" id="statusCompleted">
+                                                border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
+                                                transition:.15s;" id="statusHolding">
+                                        <input type="radio" name="status" value="holding"
+                                            <?= ($_POST['status'] ?? 'not_started') === 'holding' ? 'checked' : '' ?>
+                                            onchange="updateStatusCards()" style="display:none;">
+                                        <div style="width:34px;height:34px;border-radius:8px;background:#ede9fe;
+                                                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-pause-circle" style="color:#6d28d9;font-size:.85rem;"></i>
+                                        </div>
+                                        <div>
+                                            <div style="font-size:.82rem;font-weight:700;color:#374151;">Holding</div>
+                                            <div style="font-size:.68rem;color:#9ca3af;">Work on hold</div>
+                                        </div>
+                                    </label>
+
+                                    <!-- Completed -->
+                                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;
+                                                border:2px solid #e5e7eb;border-radius:10px;padding:10px 12px;
+                                                transition:.15s;" id="statusCompleted">
                                         <input type="radio" name="status" value="completed"
-                                               <?= ($_POST['status'] ?? '') === 'completed' ? 'checked' : '' ?>
-                                               onchange="updateStatusCards()" style="display:none;">
+                                            <?= ($_POST['status'] ?? 'not_started') === 'completed' ? 'checked' : '' ?>
+                                            onchange="updateStatusCards()" style="display:none;">
                                         <div style="width:34px;height:34px;border-radius:8px;background:#f0fdf4;
                                                     display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-check-circle" style="color:#10b981;font-size:.85rem;"></i>
@@ -315,12 +351,22 @@ function calcDuration() {
 }
 
 function updateStatusCards() {
-    const wip  = document.querySelector('[name="status"][value="wip"]');
-    const comp = document.querySelector('[name="status"][value="completed"]');
-    document.getElementById('statusWip').style.borderColor       = wip.checked  ? '#3b82f6' : '#e5e7eb';
-    document.getElementById('statusCompleted').style.borderColor = comp.checked ? '#10b981' : '#e5e7eb';
-    document.getElementById('statusWip').style.background        = wip.checked  ? '#eff6ff' : '#fff';
-    document.getElementById('statusCompleted').style.background  = comp.checked ? '#f0fdf4' : '#fff';
+    const notStarted = document.querySelector('[name="status"][value="not_started"]');
+    const wip        = document.querySelector('[name="status"][value="wip"]');
+    const holding    = document.querySelector('[name="status"][value="holding"]');
+    const comp       = document.querySelector('[name="status"][value="completed"]');
+
+    // border colors per status
+    document.getElementById('statusNotStarted').style.borderColor = notStarted.checked ? '#dc2626' : '#e5e7eb';
+    document.getElementById('statusWip').style.borderColor        = wip.checked        ? '#3b82f6' : '#e5e7eb';
+    document.getElementById('statusHolding').style.borderColor    = holding.checked    ? '#6d28d9' : '#e5e7eb';
+    document.getElementById('statusCompleted').style.borderColor  = comp.checked       ? '#10b981' : '#e5e7eb';
+
+    // background colors per status
+    document.getElementById('statusNotStarted').style.background  = notStarted.checked ? '#fee2e2' : '#fff';
+    document.getElementById('statusWip').style.background         = wip.checked        ? '#eff6ff' : '#fff';
+    document.getElementById('statusHolding').style.background     = holding.checked    ? '#ede9fe' : '#fff';
+    document.getElementById('statusCompleted').style.background   = comp.checked       ? '#f0fdf4' : '#fff';
 }
 
 calcDuration();
