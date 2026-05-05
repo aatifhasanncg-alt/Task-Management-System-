@@ -53,10 +53,10 @@ $planStmt = $db->prepare("
     LEFT JOIN branches b ON b.id = wp.branch_id
     WHERE wp.id=? AND wp.department_id=?
 ");
-$planStmt->execute([$planId, (int) $user['department_id']]);
+$planStmt->execute([$planId, $deptId]);
 $plan = $planStmt->fetch();
 if (!$plan) {
-    header('Location: ../plan_list.php');
+    header('Location: plan_list.php');
     exit;
 }
 

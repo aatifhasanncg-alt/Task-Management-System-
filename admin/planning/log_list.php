@@ -1,6 +1,6 @@
 <?php
 /**
- * consulting/log_list.php — Admin: All Visit Logs
+ * consulting/log_list.php — Admin: All Visit & Office Logs
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
@@ -10,18 +10,18 @@ requireAdmin();
 
 $db   = getDB();
 $user = currentUser();
-$uid  = (int)$user['id'];
+$uid  = (int) $user['id'];
 
-$deptId   = (int)$user['department_id'];
+// ── Department resolution ──────────────────────────────────────────────────
+$deptId   = (int) $user['department_id'];
+$branchId = (int) $user['branch_id'];
 
-$branchId = (int)$user['branch_id'];
-// ── UDA consulting dept detection ─────────────────────────────
 $__deptMetaQ = $db->prepare("SELECT dept_code, dept_name FROM departments WHERE id = ?");
 $__deptMetaQ->execute([$user['department_id']]);
-$__deptMeta = $__deptMetaQ->fetch(PDO::FETCH_ASSOC);
-$__primaryCode = $__deptMeta['dept_code'] ?? '';
+$__deptMeta      = $__deptMetaQ->fetch(PDO::FETCH_ASSOC);
+$__primaryCode   = $__deptMeta['dept_code'] ?? '';
 $__isConsPrimary = ($__primaryCode === 'CON' || stripos($__deptMeta['dept_name'] ?? '', 'consult') !== false);
-$__isCoreAdmin = ($__primaryCode === 'CORE');
+$__isCoreAdmin   = ($__primaryCode === 'CORE');
 
 $__udaQ = $db->prepare("
     SELECT d.id, d.dept_code FROM user_department_assignments uda
@@ -34,19 +34,27 @@ $__udaCons = $__udaQ->fetch(PDO::FETCH_ASSOC);
 
 if ($__isConsPrimary) {
     $deptId = (int) $user['department_id'];
-} elseif ($__isCoreAdmin && $__udaCons) {
-    $deptId = (int) $__udaCons['id'];
 } elseif ($__udaCons) {
     $deptId = (int) $__udaCons['id'];
 }
-// $branchId stays unchanged — always use user's actual branch
-$now        = new DateTime();
-$month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
-$monthLabel = $monthDate->format('F Y');
 
+// ── Filters ────────────────────────────────────────────────────────────────
+$now         = new DateTime();
+$month       = preg_match('/^\d{4}-\d{2}$/', $_GET['month'] ?? '') ? $_GET['month'] : $now->format('Y-m');
+$monthDate   = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthLabel  = $monthDate->format('F Y');
+
+$staffFilter    = (int) ($_GET['staff_id']    ?? 0);
+$statusFilter   = in_array($_GET['visit_status'] ?? '', ['visited','missed','rescheduled','wip','completed',''])
+                  ? ($_GET['visit_status'] ?? '') : '';
+$clientFilter   = (int) ($_GET['client_id']   ?? 0);
+$dateFromFilter = $_GET['date_from'] ?? '';
+$dateToFilter   = $_GET['date_to']   ?? '';
+$typeFilter     = in_array($_GET['log_type'] ?? '', ['visit','office','']) ? ($_GET['log_type'] ?? '') : '';
+
+// ── Scope ─────────────────────────────────────────────────────────────────
 $currentRole = $_SESSION['role'] ?? ($user['role'] ?? '');
-$isAdmin = in_array($currentRole, ['admin', 'executive', 'superadmin']);
+$isAdmin     = in_array($currentRole, ['admin', 'executive', 'superadmin']);
 
 if ($isAdmin) {
     $scopeRows = $db->query("
@@ -70,409 +78,556 @@ if ($isAdmin) {
 }
 $inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
 
-// Filters
-$staffFilter  = (int)($_GET['staff_id']  ?? 0);
-$statusFilter = $_GET['visit_status']    ?? '';
+// ── WHERE clauses ─────────────────────────────────────────────────────────
+$whereVisit  = "wl.month_year = ? AND wl.department_id = ? AND wl.user_id IN ({$inList})";
+$whereOffice = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND owl.department_id = ? AND owl.user_id IN ({$inList})";
+$whereKpi    = "wl.month_year = ? AND wl.department_id = ? AND wl.user_id IN ({$inList})";
 
-
-$params = [];
-
-$where = "wl.month_year=? AND wl.department_id=? AND wl.user_id IN ({$inList})";
-$params[] = $month;
-$params[] = $deptId;
+$paramsVisit  = [$month, $deptId];
+$paramsOffice = [$month, $deptId];
+$paramsKpi    = [$month, $deptId];
 
 if ($staffFilter) {
-    $where .= " AND wl.user_id=?";
-    $params[] = $staffFilter;
-}
-
-if ($statusFilter) {
-    $where .= " AND wl.visit_status=?";
-    $params[] = $statusFilter;
-}
-$typeFilter = $_GET['log_type'] ?? ''; // visit | office | all
-
-$whereVisit = "wl.month_year = ?";
-$whereOffice = "DATE_FORMAT(owl.log_date,'%Y-%m') = ?";
-
-$paramsVisit = [$month];
-$paramsOffice = [$month];
-
-if ($staffFilter) {
-    $whereVisit .= " AND wl.user_id = ?";
+    $whereVisit  .= " AND wl.user_id = ?";
     $whereOffice .= " AND owl.user_id = ?";
-    $paramsVisit[] = $staffFilter;
+    $whereKpi    .= " AND wl.user_id = ?";
+    $paramsVisit[]  = $staffFilter;
     $paramsOffice[] = $staffFilter;
+    $paramsKpi[]    = $staffFilter;
 }
 
-if ($statusFilter) {
-    $whereVisit .= " AND wl.visit_status = ?";
-    $paramsVisit[] = $statusFilter;
-
-    // map visit-status to office-status safely
-    if (in_array($statusFilter, ['wip','completed'])) {
+if ($statusFilter !== '') {
+    if (in_array($statusFilter, ['visited', 'missed', 'rescheduled'])) {
+        $whereVisit  .= " AND wl.visit_status = ?";
+        $whereOffice .= " AND 1=0";
+        $whereKpi    .= " AND wl.visit_status = ?";
+        $paramsVisit[] = $statusFilter;
+        $paramsKpi[]   = $statusFilter;
+    } elseif (in_array($statusFilter, ['wip', 'completed'])) {
         $whereOffice .= " AND owl.status = ?";
+        $whereVisit  .= " AND 1=0";
         $paramsOffice[] = $statusFilter;
     }
 }
 
+if ($clientFilter) {
+    $whereVisit  .= " AND wl.client_id = ?";
+    $whereOffice .= " AND owl.client_id = ?";
+    $paramsVisit[]  = $clientFilter;
+    $paramsOffice[] = $clientFilter;
+}
+if ($dateFromFilter) {
+    $whereVisit  .= " AND wl.log_date >= ?";
+    $whereOffice .= " AND owl.log_date >= ?";
+    $paramsVisit[]  = $dateFromFilter;
+    $paramsOffice[] = $dateFromFilter;
+}
+if ($dateToFilter) {
+    $whereVisit  .= " AND wl.log_date <= ?";
+    $whereOffice .= " AND owl.log_date <= ?";
+    $paramsVisit[]  = $dateToFilter;
+    $paramsOffice[] = $dateToFilter;
+}
 if ($typeFilter === 'visit') {
-    $officePart = "SELECT NULL WHERE 1=0"; // disable office
+    $whereOffice .= " AND 1=0";
 } elseif ($typeFilter === 'office') {
-    $visitPart = "SELECT NULL WHERE 1=0"; // disable visit
+    $whereVisit .= " AND 1=0";
 }
 
+// ── Main query ─────────────────────────────────────────────────────────────
 $stmt = $db->prepare("
 (
-    SELECT 
-        wl.id, wl.user_id, wl.log_date, wl.time_in, wl.time_out,
-        wl.duration_hours,
-        wl.visit_status AS status,
-        wl.work_description AS description,
-        c.company_name, c.company_code,
-        u.full_name AS staff_name,
-        u.employee_id,
-        'VISIT' AS log_type,
-        wl.day_of_week
+    SELECT wl.id, wl.client_id, wl.user_id, wl.log_date, wl.time_in, wl.time_out,
+           wl.duration_hours,
+           wl.visit_status    AS status,
+           wl.work_description AS description,
+           c.company_name, c.company_code,
+           u.full_name AS staff_name, u.employee_id,
+           'VISIT' AS log_type, wl.day_of_week
     FROM work_logs wl
     LEFT JOIN companies c ON c.id = wl.client_id
-    LEFT JOIN users u ON u.id = wl.user_id
-    WHERE $whereVisit
+    LEFT JOIN users     u ON u.id = wl.user_id
+    WHERE {$whereVisit}
 )
-
 UNION ALL
-
 (
-    SELECT 
-        owl.id, owl.user_id, owl.log_date, owl.time_in, owl.time_out,
-        ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in))/3600,2),
-        owl.status,
-        owl.description,
-        c.company_name, c.company_code,
-        u.full_name AS staff_name,
-        u.employee_id,
-        'OFFICE',
-        NULL
+    SELECT owl.id, owl.client_id, owl.user_id, owl.log_date, owl.time_in, owl.time_out,
+           ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2),
+           owl.status, owl.description,
+           c.company_name, c.company_code,
+           u.full_name AS staff_name, u.employee_id,
+           'OFFICE' AS log_type, NULL AS day_of_week
     FROM office_work_logs owl
     LEFT JOIN companies c ON c.id = owl.client_id
-    LEFT JOIN users u ON u.id = owl.user_id
-    WHERE $whereOffice
+    LEFT JOIN users     u ON u.id = owl.user_id
+    WHERE {$whereOffice}
 )
-
 ORDER BY log_date DESC, time_in DESC
 ");
-
-$stmt->execute([$month, $month]);
+$stmt->execute(array_merge($paramsVisit, $paramsOffice));
 $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Staff list for filter
+// ── Derived data ───────────────────────────────────────────────────────────
+$clientNames = [];
+foreach ($logs as $l) {
+    if (!empty($l['client_id'])) $clientNames[$l['client_id']] = $l['company_name'] ?? '—';
+}
+asort($clientNames);
+
 $st1 = $db->prepare("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE u.is_active = 1
-      AND (
-          u.department_id = ?
-          OR uda.department_id = ?
-      )
+    WHERE u.is_active = 1 AND (u.department_id = ? OR uda.department_id = ?)
     ORDER BY u.full_name
 ");
 $st1->execute([$deptId, $deptId]);
 $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
-// KPIs
-$stmtKpi = $db->prepare("
-    SELECT
-        COUNT(*) AS total_logs,
-        COALESCE(SUM(duration_hours),0) AS total_hours,
-        COUNT(DISTINCT client_id) AS unique_clients,
-        SUM(visit_status='visited') AS visited,
-        SUM(visit_status='missed') AS missed,
-        SUM(visit_status='rescheduled') AS rescheduled
-    FROM work_logs wl
-    WHERE {$where}
-");
 
-$stmtKpi->execute($params);
-$kpi = $stmtKpi->fetch();
+$stmtKpi = $db->prepare("
+    SELECT COUNT(*) AS total_visit_logs,
+           COALESCE(SUM(duration_hours),0) AS total_hours,
+           COUNT(DISTINCT client_id)       AS unique_clients,
+           SUM(visit_status='visited')     AS visited,
+           SUM(visit_status='missed')      AS missed,
+           SUM(visit_status='rescheduled') AS rescheduled
+    FROM work_logs wl WHERE {$whereKpi}
+");
+$stmtKpi->execute($paramsKpi);
+$kpi = $stmtKpi->fetch(PDO::FETCH_ASSOC);
+
+$totalLogs  = count($logs);
+$visitCount = array_sum(array_map(fn($l) => $l['log_type'] === 'VISIT' ? 1 : 0, $logs));
+$totalHours = array_sum(array_column($logs, 'duration_hours'));
+$hasFilters = $clientFilter || $dateFromFilter || $dateToFilter || $staffFilter || $statusFilter || $typeFilter;
+
 $pageTitle = 'All Visit Logs';
 include '../../includes/header.php';
 
-function vstBadge($s): string {
-    $s = $s ?? 'unknown';
-
+function vstBadge(string $s): string {
     $map = [
-        'visited'     => ['#ecfdf5','#10b981','fa-check-circle','Visited'],
-        'missed'      => ['#fef2f2','#ef4444','fa-times-circle','Missed'],
-        'rescheduled' => ['#fffbeb','#f59e0b','fa-redo','Rescheduled'],
-        'wip'         => ['#eff6ff','#3b82f6','fa-spinner','WIP'],
-        'completed'   => ['#f0fdf4','#10b981','fa-check','Completed'],
-        'unknown'     => ['#f3f4f6','#9ca3af','fa-circle','—'],
+        'visited'     => ['#ecfdf5', '#059669', 'fa-check-circle',  'Visited'],
+        'missed'      => ['#fef2f2', '#dc2626', 'fa-times-circle',  'Missed'],
+        'rescheduled' => ['#fffbeb', '#d97706', 'fa-redo-alt',      'Rescheduled'],
+        'wip'         => ['#eff6ff', '#2563eb', 'fa-circle-notch',  'WIP'],
+        'completed'   => ['#f0fdf4', '#16a34a', 'fa-check-double',  'Completed'],
     ];
-
-    [$bg,$col,$ico,$lbl] = $map[$s] ?? $map['unknown'];
-
-    return "<span style='background:$bg;color:$col;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;font-weight:600;display:inline-flex;align-items:center;gap:.3rem;'>
-        <i class='fas $ico'></i>$lbl
-    </span>";
+    [$bg, $col, $ico, $lbl] = $map[$s] ?? ['#f3f4f6', '#6b7280', 'fa-circle', ucfirst($s ?: '—')];
+    return "<span class='vst-badge' style='background:{$bg};color:{$col};'><i class='fas {$ico}'></i>{$lbl}</span>";
 }
+
+function qstr(array $overrides, array $base): string {
+    $p = array_merge($base, $overrides);
+    return '?' . http_build_query(array_filter($p, fn($v) => $v !== '' && $v !== 0 && $v !== null));
+}
+
+$baseQ = [
+    'month'        => $month,
+    'log_type'     => $typeFilter,
+    'staff_id'     => $staffFilter ?: '',
+    'visit_status' => $statusFilter,
+    'client_id'    => $clientFilter ?: '',
+    'date_from'    => $dateFromFilter,
+    'date_to'      => $dateToFilter,
+];
 ?>
 <link rel="stylesheet" href="consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/datatables.custom.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&display=swap" rel="stylesheet">
 
 <style>
-.type-toggle {
-    display:flex;
-    gap:6px;
-    background:#f3f4f6;
-    padding:4px;
-    border-radius:10px;
+/* ── Shared design tokens ─────────────────────────────────────────────── */
+:root {
+    --gold:    #c9a84c;
+    --gold-lt: #fefce8;
+    --ink:     #0f172a;
+    --muted:   #64748b;
+    --border:  #e2e8f0;
+    --surface: #ffffff;
+    --hover:   #f8fafc;
+    --radius:  12px;
+    --shadow:  0 1px 4px rgba(15,23,42,.06), 0 4px 16px rgba(15,23,42,.04);
 }
-.type-toggle a{
-    padding:.35rem .8rem;
-    font-size:.75rem;
-    border-radius:8px;
-    text-decoration:none;
-    font-weight:700;
-    color:#6b7280;
-}
-.type-toggle a.active{
-    background:#fff;
-    color:#1f2937;
-    box-shadow:0 2px 6px rgba(0,0,0,.06);
-}
+body { font-family: 'DM Sans', sans-serif; }
 
-.log-badge{
-    font-size:.7rem;
-    font-weight:700;
-    padding:.2rem .5rem;
-    border-radius:6px;
+/* ── Hero ────────────────────────────────────────────────────────────── */
+.ll-hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #0f3460 100%);
+    border-radius: 16px;
+    padding: 1.6rem 2rem;
+    color: #fff;
+    margin-bottom: 1.25rem;
+    position: relative;
+    overflow: hidden;
 }
-.log-visit{background:#ecfdf5;color:#10b981;}
-.log-office{background:#eff6ff;color:#3b82f6;}
+.ll-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
+    pointer-events: none;
+}
+.ll-hero-inner { position: relative; z-index: 1; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; }
+.ll-hero-badge {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: rgba(201,168,76,.18); border: 1px solid rgba(201,168,76,.35);
+    color: #fbbf24; font-size: .68rem; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; padding: .22rem .65rem; border-radius: 99px; margin-bottom: .55rem;
+}
+.ll-hero h4 { font-size: 1.4rem; font-weight: 800; margin: 0 0 .25rem; color: #fff; letter-spacing: -.02em; }
+.ll-hero-meta { font-size: .8rem; color: #94a3b8; margin: 0; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.ll-hero-meta i { color: #fbbf24; }
+.ll-hero-meta .dot { color: #475569; }
+.hero-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-start; }
+.hero-btn {
+    display: inline-flex; align-items: center; gap: .4rem;
+    padding: .38rem .85rem; font-size: .74rem; font-weight: 600;
+    border-radius: 9px; border: 1.5px solid rgba(255,255,255,.15);
+    background: rgba(255,255,255,.07); color: #e2e8f0;
+    text-decoration: none; transition: background .15s, border-color .15s; white-space: nowrap;
+}
+.hero-btn:hover { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.28); color: #fff; }
+
+/* ── KPI grid ────────────────────────────────────────────────────────── */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: .7rem; margin-bottom: 1.1rem; }
+.kpi-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: .95rem 1.05rem; display: flex; align-items: center; gap: .8rem;
+    box-shadow: var(--shadow); transition: transform .15s, box-shadow .15s; cursor: default;
+}
+.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(15,23,42,.09); }
+.kpi-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: .9rem; }
+.kpi-val  { font-size: 1.35rem; font-weight: 800; color: var(--ink); line-height: 1; }
+.kpi-lbl  { font-size: .65rem; color: var(--muted); margin-top: .18rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+
+/* ── Filter panel ────────────────────────────────────────────────────── */
+.filter-panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: .85rem 1.1rem; margin-bottom: 1.1rem; box-shadow: var(--shadow);
+}
+.filter-row { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; }
+.filter-section-label { font-size: .68rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+.filter-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; margin: 0 .1rem; }
+
+.type-toggle { display: flex; background: #f1f5f9; border-radius: 9px; padding: 3px; gap: 3px; }
+.type-toggle a {
+    padding: .28rem .7rem; font-size: .72rem; font-weight: 700; border-radius: 7px;
+    text-decoration: none; color: var(--muted); transition: all .15s; white-space: nowrap;
+}
+.type-toggle a.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+
+.status-pill {
+    font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 99px;
+    text-decoration: none; border: 1.5px solid var(--border); background: var(--surface);
+    color: var(--muted); transition: all .15s; white-space: nowrap;
+}
+.status-pill:hover { opacity: .85; text-decoration: none; }
+
+.ff-input {
+    font-size: .77rem; padding: .28rem .65rem; border: 1.5px solid var(--border);
+    border-radius: 8px; background: var(--surface); color: var(--ink); height: 33px;
+    outline: none; transition: border-color .15s; font-family: inherit;
+}
+.ff-input:focus { border-color: var(--gold); }
+.ff-input.is-active { border-color: var(--gold); background: var(--gold-lt); }
+
+.filter-count { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; background: var(--gold); color: #fff; border-radius: 99px; font-size: .6rem; font-weight: 800; }
+.clear-btn { font-size: .71rem; font-weight: 700; color: #dc2626; text-decoration: none; display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: 6px; transition: background .15s; }
+.clear-btn:hover { background: #fef2f2; text-decoration: none; }
+
+/* ── Table wrap ──────────────────────────────────────────────────────── */
+.log-table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.log-table-head { display: flex; align-items: center; justify-content: space-between; padding: .9rem 1.2rem; border-bottom: 1px solid var(--border); gap: .75rem; flex-wrap: wrap; }
+.log-table-head h5 { font-size: .92rem; font-weight: 700; color: var(--ink); margin: 0; }
+
+table.ll-tbl { width: 100%; border-collapse: collapse; }
+table.ll-tbl thead tr { background: #f8fafc; border-bottom: 1px solid var(--border); }
+table.ll-tbl th { padding: .6rem .85rem; font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); white-space: nowrap; }
+table.ll-tbl td { padding: .65rem .85rem; font-size: .79rem; color: var(--ink); border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+table.ll-tbl tbody tr:last-child td { border-bottom: none; }
+table.ll-tbl tbody tr:hover td { background: var(--hover); }
+table.ll-tbl tfoot tr td { background: #f8fafc; border-top: 2px solid var(--border); font-weight: 700; }
+
+.type-badge { font-size: .66rem; font-weight: 700; padding: .16rem .5rem; border-radius: 6px; display: inline-flex; align-items: center; gap: .28rem; }
+.type-visit  { background: #dbeafe; color: #1d4ed8; }
+.type-office { background: #fef3c7; color: #92400e; }
+
+.vst-badge { font-size: .67rem; font-weight: 700; padding: .16rem .52rem; border-radius: 99px; display: inline-flex; align-items: center; gap: .28rem; white-space: nowrap; }
+.vst-badge i { font-size: .58rem; }
+
+.hrs-good { color: #16a34a; font-weight: 700; }
+.hrs-warn { color: #d97706; font-weight: 700; }
+.hrs-low  { color: #dc2626; font-weight: 700; }
+
+.act-btn { display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 27px; border-radius: 7px; border: 1px solid; text-decoration: none; font-size: .73rem; transition: opacity .15s, transform .1s; }
+.act-btn:hover { opacity: .78; transform: scale(1.06); }
+
+.empty-state { text-align: center; padding: 3.5rem 1rem; color: var(--muted); }
+.empty-state i { font-size: 2.2rem; opacity: .2; display: block; margin-bottom: .7rem; }
+.empty-state h6 { font-size: .92rem; font-weight: 600; color: var(--ink); margin-bottom: .35rem; }
+.empty-state p  { font-size: .78rem; margin: 0; }
+.filtered-tag { font-size: .7rem; font-weight: 700; color: var(--gold); background: var(--gold-lt); padding: .18rem .55rem; border-radius: 6px; }
+
+@media (max-width: 768px) {
+    .ll-hero { padding: 1.1rem 1.2rem; }
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    table.ll-tbl th:nth-child(6), table.ll-tbl td:nth-child(6),
+    table.ll-tbl th:nth-child(7), table.ll-tbl td:nth-child(7),
+    table.ll-tbl th:nth-child(10), table.ll-tbl td:nth-child(10) { display: none; }
+}
 </style>
+
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
-        <div style="padding:1.5rem 0;">
+        <div style="padding:1.5rem 1rem 2rem;">
 
-            <!-- ── Hero ──────────────────────────────────────────────────── -->
-            <div class="page-hero mb-4">
-                <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+            <!-- ── Hero ─────────────────────────────────────────────────── -->
+            <div class="ll-hero mb-4">
+                <div class="ll-hero-inner">
                     <div>
-                        <div class="page-hero-badge"><i class="fas fa-history"></i> Logs</div>
-                        <h4>All Visit Logs</h4>
-                        <p>
-                            <?= htmlspecialchars($user['full_name']) ?> ·
-                            Department view
-                            · <?= $monthLabel ?>
+                        <div class="ll-hero-badge">
+                            <i class="fas fa-history"></i> Consulting &nbsp;·&nbsp; Logs
+                        </div>
+                        <h4>All Visit &amp; Office Logs</h4>
+                        <p class="ll-hero-meta">
+                            <i class="fas fa-user-circle"></i>
+                            <?= htmlspecialchars($user['full_name']) ?>
+                            <span class="dot">·</span>
+                            <i class="fas fa-calendar-alt"></i>
+                            <?= $monthLabel ?>
+                            <span class="dot">·</span>
+                            <i class="fas fa-list-ul"></i>
+                            <?= $totalLogs ?> record<?= $totalLogs !== 1 ? 's' : '' ?>
                         </p>
                     </div>
-                    <div class="d-flex gap-2 flex-wrap align-items-center">
-                        <a href="index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-home me-1"></i> Dashboard
+                    <div class="hero-actions">
+                        <a href="office_log_list.php?month=<?= $month ?>" class="hero-btn">
+                            <i class="fas fa-building"></i> Office Logs
+                        </a>
+                        <a href="index.php?month=<?= $month ?>" class="hero-btn">
+                            <i class="fas fa-home"></i> Dashboard
                         </a>
                         <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>&visit_status=<?= urlencode($statusFilter) ?>"
-                            class="btn btn-outline-secondary btn-sm">
-                                <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
-                            </a>
-                            <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>&visit_status=<?= urlencode($statusFilter) ?>"
-                            class="btn btn-outline-secondary btn-sm">
-                                <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
-                            </a>
+                           class="hero-btn">
+                            <i class="fas fa-file-pdf" style="color:#f87171;"></i> PDF
+                        </a>
+                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&staff_id=<?= $staffFilter ?>&visit_status=<?= urlencode($statusFilter) ?>"
+                           class="hero-btn">
+                            <i class="fas fa-file-excel" style="color:#4ade80;"></i> Excel
+                        </a>
                     </div>
                 </div>
             </div>
 
-            <!-- ── Filter Bar ────────────────────────────────────────────── -->
-            <div class="card-mis mb-4">
-                <div class="card-mis-body p-0" style="padding:1rem!important;">
-                    <div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-end;">
-                        <div>
-                            <label style="display:block;font-size:.75rem;font-weight:700;color:#9ca3af;margin-bottom:.35rem;">Month</label>
-                            <input type="month" class="form-control form-control-sm" style="width:155px;" value="<?= $month ?>"
-                                   onchange="applyFilter()">
-                        </div>
-                        <div>
-                            <label style="display:block;font-size:.75rem;font-weight:700;color:#9ca3af;margin-bottom:.35rem;">Staff</label>
-                            <select id="fStaff" class="form-control form-control-sm" style="width:180px;" onchange="applyFilter()">
-                                <option value="">All Staff</option>
-                                <?php foreach ($deptStaff as $s): ?>
-                                <option value="<?= $s['id'] ?>" <?= $staffFilter == $s['id'] ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($s['full_name']) ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display:block;font-size:.75rem;font-weight:700;color:#9ca3af;margin-bottom:.35rem;">Status</label>
-                            <select id="fStatus" class="form-control form-control-sm" style="width:150px;" onchange="applyFilter()">
-                                <option value="">All Status</option>
-                                <option value="visited"     <?= $statusFilter==='visited'     ? 'selected' : '' ?>>✅ Visited</option>
-                                <option value="missed"      <?= $statusFilter==='missed'      ? 'selected' : '' ?>>❌ Missed</option>
-                                <option value="rescheduled" <?= $statusFilter==='rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled</option>
-                            </select>
-                        </div>
-                        <div class="type-toggle">
-    <a href="?month=<?= $month ?>" class="<?= $typeFilter==''?'active':'' ?>">All</a>
-    <a href="?month=<?= $month ?>&log_type=visit" class="<?= $typeFilter=='visit'?'active':'' ?>">Visit</a>
-    <a href="?month=<?= $month ?>&log_type=office" class="<?= $typeFilter=='office'?'active':'' ?>">Office</a>
-</div>
-                        <button class="btn btn-outline-secondary btn-sm" onclick="clearFilter()">
-                            <i class="fas fa-times me-1"></i> Clear
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ── KPI Cards ─────────────────────────────────────────── -->
-            <div class="row g-3 mb-4">
+            <!-- ── KPI Cards ─────────────────────────────────────────────── -->
+            <div class="kpi-grid">
                 <?php
-                $kpiCards = [
-                    ['fa-list',           '#3b82f6','#eff6ff', 'Total Logs',       (int)($kpi['total_logs'] ?? 0)],
-                    ['fa-clock',          '#c9a84c','#fefce8', 'Total Hours',      number_format((float)($kpi['total_hours'] ?? 0), 1) . 'h'],
-                    ['fa-building',       '#8b5cf6','#f5f3ff', 'Clients',          (int)($kpi['unique_clients'] ?? 0)],
-                    ['fa-check-circle',   '#10b981','#ecfdf5', 'Visited',          (int)($kpi['visited'] ?? 0)],
-                    ['fa-times-circle',   '#ef4444','#fef2f2', 'Missed',           (int)($kpi['missed'] ?? 0)],
-                    ['fa-redo',           '#f59e0b','#fffbeb', 'Rescheduled',      (int)($kpi['rescheduled'] ?? 0)],
+                $kpiDefs = [
+                    ['fa-layer-group', '#2563eb', '#dbeafe', 'Total Logs',   $totalLogs],
+                    ['fa-car',         '#0891b2', '#cffafe', 'Visit Logs',   $visitCount],
+                    ['fa-building',    '#92400e', '#fef3c7', 'Office Logs',  $totalLogs - $visitCount],
+                    ['fa-clock',       '#b45309', '#fefce8', 'Total Hours',  number_format($totalHours, 1) . 'h'],
+                    ['fa-briefcase',   '#7c3aed', '#ede9fe', 'Clients',      count($clientNames)],
+                    ['fa-check-circle','#059669', '#ecfdf5', 'Visited',      (int)($kpi['visited'] ?? 0)],
+                    ['fa-times-circle','#dc2626', '#fef2f2', 'Missed',       (int)($kpi['missed'] ?? 0)],
+                    ['fa-redo-alt',    '#d97706', '#fffbeb', 'Rescheduled',  (int)($kpi['rescheduled'] ?? 0)],
                 ];
-                foreach ($kpiCards as [$icon, $col, $bg, $lbl, $val]):
-                ?>
-                <div class="col-6 col-md-2">
-                    <div style="background:#fff;border-radius:12px;border:1px solid #f3f4f6;
-                                padding:1rem 1.1rem;display:flex;align-items:center;gap:.8rem;
-                                box-shadow:0 1px 3px rgba(0,0,0,.04);">
-                        <div style="width:40px;height:40px;border-radius:10px;background:<?= $bg ?>;
-                                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                            <i class="fas <?= $icon ?>" style="color:<?= $col ?>;font-size:.95rem;"></i>
-                        </div>
-                        <div>
-                            <div style="font-size:1.35rem;font-weight:800;color:#1f2937;line-height:1.1;"><?= $val ?></div>
-                            <div style="font-size:.7rem;color:#9ca3af;margin-top:.1rem;"><?= $lbl ?></div>
-                        </div>
+                foreach ($kpiDefs as [$ico, $col, $bg, $lbl, $val]): ?>
+                    <div class="kpi-card">
+                        <div class="kpi-icon" style="background:<?= $bg ?>;color:<?= $col ?>;"><i class="fas <?= $ico ?>"></i></div>
+                        <div><div class="kpi-val"><?= $val ?></div><div class="kpi-lbl"><?= $lbl ?></div></div>
                     </div>
-                </div>
                 <?php endforeach; ?>
             </div>
 
-            <!-- ── Table ────────────────────────────────────────────────── -->
-            <div class="card-mis">
-                <div class="card-mis-header">
-                    <h5><i class="fas fa-table me-2 text-warning"></i>Logs — <?= $monthLabel ?></h5>
-                    <span style="font-size:.78rem;color:#9ca3af;"><?= count($logs) ?> records</span>
-                </div>
-                <div class="card-mis-body p-0">
-                <?php if (empty($logs)): ?>
-                <div class="empty-state p-4">
-                    <i class="fas fa-history"></i>
-                    <h6>No logs found</h6>
-                    <p>Try adjusting your filters.</p>
-                </div>
-                <?php else: ?>
-                <div class="table-responsive">
-                <table class="table-mis" id="logsTable" style="width:100%;">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Type</th>
-                            <th>Staff</th>
-                            <th>Client</th>
-                            <th class="text-center">Time In</th>
-                            <th class="text-center">Time Out</th>
-                            <th class="text-center">Hours</th>
-                            <th>Status</th>
-                            <th>Description</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ($logs as $l): ?>
-                    <tr>
-                        <td>
-                            <div style="font-weight:600;white-space:nowrap;font-size:.83rem;"><?= date('d M Y', strtotime($l['log_date'])) ?></div>
-                            <div style="font-size:.68rem;color:#9ca3af;"><?= $l['day_of_week'] ?? '—' ?? '—' ?></div>
-                        </td>
-                        <td>
-    <?php if ($l['log_type'] === 'OFFICE'): ?>
-        <span style="background:#fef3c7;color:#92400e;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;">
-            Office
-        </span>
-    <?php else: ?>
-        <span style="background:#dbeafe;color:#1d4ed8;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;">
-            Visit
-        </span>
-    <?php endif; ?>
-</td>
-                        <td>
-                            <div style="font-weight:500;font-size:.82rem;"><?= htmlspecialchars($l['staff_name'] ?? '—') ?></div>
-                            <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($l['employee_id'] ?? '') ?></div>
-                        </td>
-                        <td>
-                            <div style="font-weight:500;font-size:.82rem;"><?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 22, '…')) ?></div>
-                            <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($l['company_code'] ?? '') ?></div>
-                        </td>
-                        <td class="text-center" style="font-size:.78rem;color:#6b7280;"><?= $l['time_in'] ? date('g:i A', strtotime($l['time_in'])) : '—' ?></td>
-                        <td class="text-center" style="font-size:.78rem;color:#6b7280;"><?= $l['time_out'] ? date('g:i A', strtotime($l['time_out'])) : '—' ?></td>
-                        <td class="text-center">
-                            <strong style="color:<?= (float)$l['duration_hours'] >= 4 ? '#10b981' : ((float)$l['duration_hours'] >= 2 ? '#f59e0b' : '#ef4444') ?>;font-weight:700;"><?= number_format((float)$l['duration_hours'],1) ?>h</strong>
-                        </td>
-                        <td><?= vstBadge($l['status'] ?? 'unknown') ?></td>
-                        <td style="font-size:.75rem;color:#6b7280;max-width:200px;">
-                            <?= htmlspecialchars(mb_strimwidth($l['work_description'] ?? '', 0, 60, '…')) ?>
-                        </td>
-                        <td>
-    <div style="display:flex;gap:6px;align-items:center;justify-content:center;">
+            <!-- ── Filter Panel ───────────────────────────────────────────── -->
+            <?php
+            $activeFilterCount = (int)($staffFilter > 0) + (int)($statusFilter !== '') + (int)($clientFilter > 0)
+                               + (int)($dateFromFilter !== '') + (int)($dateToFilter !== '') + (int)($typeFilter !== '');
+            ?>
+            <div class="filter-panel">
+                <div class="filter-row">
+                    <span class="filter-section-label">
+                        <i class="fas fa-filter me-1"></i>Filter
+                        <?php if ($activeFilterCount): ?>
+                            <span class="filter-count ms-1"><?= $activeFilterCount ?></span>
+                        <?php endif; ?>
+                    </span>
 
-        <!-- VIEW -->
-        <?php if (($l['log_type'] ?? '') === 'OFFICE'): ?>
-            <a href="office_log_view.php?id=<?= $l['id'] ?>"
-               class="cn-btn cn-btn-sm"
-               title="View"
-               style="background:#ecfeff;border:1px solid #a5f3fc;color:#0e7490;">
-                <i class="fas fa-eye"></i>
-            </a>
-        <?php else: ?>
-            <a href="log_view.php?id=<?= $l['id'] ?>"
-               class="cn-btn cn-btn-sm"
-               title="View"
-               style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;">
-                <i class="fas fa-eye"></i>
-            </a>
-        <?php endif; ?>
+                    <input type="month" id="fMonth" class="ff-input" style="width:148px;" value="<?= $month ?>" onchange="applyFilter()">
 
+                    <div class="filter-divider"></div>
 
-        <!-- EDIT (only owner) -->
-        <?php if (($l['user_id'] ?? 0) == $uid): ?>
+                    <!-- Type toggle -->
+                    <div class="type-toggle">
+                        <a href="<?= qstr(['log_type' => ''],       $baseQ) ?>" class="<?= $typeFilter === ''       ? 'active' : '' ?>"><i class="fas fa-th-list me-1"></i>All</a>
+                        <a href="<?= qstr(['log_type' => 'visit'],   $baseQ) ?>" class="<?= $typeFilter === 'visit'  ? 'active' : '' ?>"><i class="fas fa-car me-1"></i>Visit</a>
+                        <a href="<?= qstr(['log_type' => 'office'],  $baseQ) ?>" class="<?= $typeFilter === 'office' ? 'active' : '' ?>"><i class="fas fa-building me-1"></i>Office</a>
+                    </div>
 
-            <?php if (($l['log_type'] ?? '') === 'OFFICE'): ?>
-                <a href="office_log_edit.php?id=<?= $l['id'] ?>"
-                   class="cn-btn cn-btn-sm"
-                   title="Edit"
-                   style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
-                    <i class="fas fa-pencil-alt"></i>
-                </a>
-            <?php else: ?>
-                <a href="log_edit.php?id=<?= $l['id'] ?>"
-                   class="cn-btn cn-btn-sm"
-                   title="Edit"
-                   style="background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;">
-                    <i class="fas fa-pencil-alt"></i>
-                </a>
-            <?php endif; ?>
+                    <div class="filter-divider"></div>
 
-        <?php endif; ?>
+                    <!-- Staff -->
+                    <select id="fStaff" class="ff-input <?= $staffFilter ? 'is-active' : '' ?>" style="width:170px;" onchange="applyFilter()">
+                        <option value="">All Staff</option>
+                        <?php foreach ($deptStaff as $s): ?>
+                            <option value="<?= $s['id'] ?>" <?= $staffFilter == $s['id'] ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($s['full_name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
 
-    </div>
-</td>
-                        </tr>
+                    <div class="filter-divider"></div>
+
+                    <!-- Status pills -->
+                    <span class="filter-section-label">Status:</span>
+                    <?php
+                    $statusPills = [
+                        ''            => ['All',           '#c9a84c', '#fffbeb', '#e2e8f0'],
+                        'visited'     => ['✓ Visited',     '#059669', '#ecfdf5', '#059669'],
+                        'missed'      => ['✗ Missed',      '#dc2626', '#fef2f2', '#dc2626'],
+                        'rescheduled' => ['↺ Rescheduled', '#d97706', '#fffbeb', '#d97706'],
+                        'wip'         => ['◷ WIP',         '#2563eb', '#eff6ff', '#2563eb'],
+                        'completed'   => ['✓✓ Completed',  '#16a34a', '#f0fdf4', '#16a34a'],
+                    ];
+                    foreach ($statusPills as $sKey => [$sLabel, $sColor, $sBg, $sBorder]):
+                        $isAct = ($statusFilter === $sKey);
+                    ?>
+                        <a href="<?= qstr(['visit_status' => $sKey], $baseQ) ?>" class="status-pill"
+                           style="<?= $isAct ? "border-color:{$sBorder};background:{$sBg};color:{$sColor};" : '' ?>">
+                            <?= $sLabel ?>
+                        </a>
                     <?php endforeach; ?>
-                    </tbody>
-                </table>
+
+                    <div class="filter-divider"></div>
+
+                    <!-- Client -->
+                    <?php if (!empty($clientNames)): ?>
+                        <select id="fClient" class="ff-input <?= $clientFilter ? 'is-active' : '' ?>" style="width:170px;" onchange="applyFilter()">
+                            <option value="">All Clients</option>
+                            <?php foreach ($clientNames as $cid => $cname): ?>
+                                <option value="<?= $cid ?>" <?= $clientFilter == $cid ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($cname) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php endif; ?>
+
+                    <!-- Date range -->
+                    <input type="date" id="fDateFrom" class="ff-input <?= $dateFromFilter ? 'is-active' : '' ?>"
+                           value="<?= htmlspecialchars($dateFromFilter) ?>" onchange="applyFilter()" title="From" style="width:138px;">
+                    <span style="font-size:.75rem;color:var(--muted);">→</span>
+                    <input type="date" id="fDateTo" class="ff-input <?= $dateToFilter ? 'is-active' : '' ?>"
+                           value="<?= htmlspecialchars($dateToFilter) ?>" onchange="applyFilter()" title="To" style="width:138px;">
+
+                    <?php if ($hasFilters): ?>
+                        <a href="?month=<?= $month ?>" class="clear-btn">
+                            <i class="fas fa-times-circle"></i> Clear
+                        </a>
+                    <?php endif; ?>
                 </div>
+            </div>
+
+            <!-- ── Table ─────────────────────────────────────────────────── -->
+            <div class="log-table-wrap">
+                <div class="log-table-head">
+                    <h5><i class="fas fa-table me-2" style="color:var(--gold);"></i>Logs — <?= $monthLabel ?></h5>
+                    <div style="display:flex;align-items:center;gap:.65rem;">
+                        <?php if ($hasFilters): ?><span class="filtered-tag"><i class="fas fa-filter me-1"></i>Filtered</span><?php endif; ?>
+                        <span style="font-size:.74rem;color:var(--muted);"><?= $totalLogs ?> records · <?= number_format($totalHours,1) ?>h</span>
+                    </div>
+                </div>
+
+                <?php if (empty($logs)): ?>
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <h6>No logs found</h6>
+                        <p>Try adjusting your filters or selecting a different month.</p>
+                        <?php if ($hasFilters): ?>
+                            <a href="?month=<?= $month ?>" class="clear-btn" style="justify-content:center;margin-top:.7rem;">
+                                <i class="fas fa-times-circle"></i> Clear all filters
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="ll-tbl" id="logsTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th><th>Date</th><th>Type</th><th>Staff</th><th>Client</th>
+                                    <th class="text-center">Time In</th><th class="text-center">Time Out</th>
+                                    <th class="text-center">Hours</th><th>Status</th><th>Description</th>
+                                    <th class="text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($logs as $i => $l):
+                                    $hrs = (float) $l['duration_hours'];
+                                    $hrsClass = $hrs >= 4 ? 'hrs-good' : ($hrs >= 2 ? 'hrs-warn' : 'hrs-low');
+                                    $descFull  = $l['description'] ?? '';
+                                    $descShort = mb_strimwidth($descFull, 0, 55, '…');
+                                ?>
+                                <tr>
+                                    <td style="color:var(--muted);font-size:.68rem;"><?= $i+1 ?></td>
+                                    <td>
+                                        <div style="font-weight:600;white-space:nowrap;"><?= date('d M Y', strtotime($l['log_date'])) ?></div>
+                                        <?php if ($l['day_of_week']): ?><div style="font-size:.65rem;color:var(--muted);"><?= $l['day_of_week'] ?></div><?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($l['log_type'] === 'OFFICE'): ?>
+                                            <span class="type-badge type-office"><i class="fas fa-building"></i>Office</span>
+                                        <?php else: ?>
+                                            <span class="type-badge type-visit"><i class="fas fa-car"></i>Visit</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <div style="font-weight:600;"><?= htmlspecialchars($l['staff_name'] ?? '—') ?></div>
+                                        <div style="font-size:.65rem;color:var(--muted);"><?= htmlspecialchars($l['employee_id'] ?? '') ?></div>
+                                    </td>
+                                    <td>
+                                        <div style="font-weight:500;"><?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 24, '…')) ?></div>
+                                        <div style="font-size:.65rem;color:var(--muted);"><?= htmlspecialchars($l['company_code'] ?? '') ?></div>
+                                    </td>
+                                    <td class="text-center" style="color:var(--muted);"><?= $l['time_in']  ? date('g:i A', strtotime($l['time_in']))  : '—' ?></td>
+                                    <td class="text-center" style="color:var(--muted);"><?= $l['time_out'] ? date('g:i A', strtotime($l['time_out'])) : '—' ?></td>
+                                    <td class="text-center"><span class="<?= $hrsClass ?>"><?= number_format($hrs,1) ?>h</span></td>
+                                    <td><?= vstBadge($l['status'] ?? '') ?></td>
+                                    <td style="max-width:185px;color:var(--muted);" title="<?= htmlspecialchars($descFull) ?>"><?= htmlspecialchars($descShort) ?></td>
+                                    <td>
+                                        <div style="display:flex;gap:5px;justify-content:center;">
+                                            <?php if ($l['log_type'] === 'OFFICE'): ?>
+                                                <a href="office_log_view.php?id=<?= $l['id'] ?>" class="act-btn" title="View" style="background:#ecfeff;border-color:#a5f3fc;color:#0e7490;"><i class="fas fa-eye"></i></a>
+                                                <?php if ((int)$l['user_id'] === $uid): ?>
+                                                    <a href="office_log_edit.php?id=<?= $l['id'] ?>" class="act-btn" title="Edit" style="background:#fefce8;border-color:#fde68a;color:#92400e;"><i class="fas fa-pencil-alt"></i></a>
+                                                <?php endif; ?>
+                                            <?php else: ?>
+                                                <a href="log_view.php?id=<?= $l['id'] ?>" class="act-btn" title="View" style="background:#f0fdf4;border-color:#bbf7d0;color:#166534;"><i class="fas fa-eye"></i></a>
+                                                <?php if ((int)$l['user_id'] === $uid): ?>
+                                                    <a href="log_edit.php?id=<?= $l['id'] ?>" class="act-btn" title="Edit" style="background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;"><i class="fas fa-pencil-alt"></i></a>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <td colspan="7" style="font-size:.77rem;color:var(--muted);">
+                                        <?= $totalLogs ?> records &nbsp;·&nbsp; <?= $visitCount ?> visit &nbsp;·&nbsp; <?= $totalLogs - $visitCount ?> office
+                                    </td>
+                                    <td class="text-center"><span class="hrs-good"><?= number_format($totalHours,1) ?>h</span></td>
+                                    <td colspan="3"></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
                 <?php endif; ?>
-                </div>
             </div>
 
         </div>
@@ -482,32 +637,41 @@ function vstBadge($s): string {
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
-$(document).ready(function() {
-    if ($('#logsTable tbody tr').length > 0)
-        $('#logsTable').DataTable({ order: [[0,'desc']], pageLength: 25 });
+$(function () {
+    if ($('#logsTable tbody tr').length > 10) {
+        $('#logsTable').DataTable({
+            pageLength: 25,
+            order: [],
+            columnDefs: [{ orderable: false, targets: [0, 10] }],
+            dom: '<"ll-dt-top"lf>rt<"ll-dt-bot"ip>',
+            language: {
+                search: '', searchPlaceholder: 'Quick search…',
+                lengthMenu: 'Show _MENU_ rows',
+                info: '_START_–_END_ of _TOTAL_',
+                paginate: { previous: '‹', next: '›' }
+            }
+        });
+    }
 });
 
-function applyFilter(){
-    const m = document.querySelector('input[type=month]').value;
-    const s = document.getElementById('fStaff').value;
-    const st = document.getElementById('fStatus').value;
-
-    let url = '?month=' + m;
-
-    const typeActive = document.querySelector('.type-toggle a.active');
-    if (typeActive) {
-        const href = typeActive.getAttribute('href');
-        const type = new URLSearchParams(href.split('?')[1]).get('log_type');
-        if (type) url += '&log_type=' + type;
-    }
-
-    if (s) url += '&staff_id=' + s;
-    if (st) url += '&visit_status=' + st;
-
-    location.href = url;
-}
-function clearFilter() {
-    location.href = '?month=<?= $month ?>';
+function applyFilter() {
+    const m  = document.getElementById('fMonth').value;
+    const s  = document.getElementById('fStaff')?.value  ?? '';
+    const cl = document.getElementById('fClient')?.value ?? '';
+    const df = document.getElementById('fDateFrom')?.value ?? '';
+    const dt = document.getElementById('fDateTo')?.value   ?? '';
+    const cur = new URLSearchParams(window.location.search);
+    const type   = cur.get('log_type')     ?? '';
+    const status = cur.get('visit_status') ?? '';
+    const p = new URLSearchParams();
+    p.set('month', m);
+    if (type)   p.set('log_type',     type);
+    if (s)      p.set('staff_id',     s);
+    if (status) p.set('visit_status', status);
+    if (cl)     p.set('client_id',    cl);
+    if (df)     p.set('date_from',    df);
+    if (dt)     p.set('date_to',      dt);
+    location.href = '?' + p.toString();
 }
 </script>
 <?php include '../../includes/footer.php'; ?>

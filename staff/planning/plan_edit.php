@@ -162,80 +162,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // ── Supervisor Notifications ───────────────────────────────────────
             try {
-                $branchId = (int) $user['branch_id'];
+                require_once '../../config/notify.php';
+
+                $branchId  = (int) $user['branch_id'];
                 $staffName = $user['full_name'] ?? ('User #' . $uid);
-
-                // Format week range
                 $weekRange = date('d M', strtotime($plan['week_start_date']))
-                    . ' – '
-                    . date('d M Y', strtotime($plan['week_end_date']));
+                        . ' – '
+                        . date('d M Y', strtotime($plan['week_end_date']));
 
-                // Count entries inserted
                 $entryCount = count(array_filter($entries, fn($e) => !empty($e['client_id'])));
-
-                // Calculate total planned hours
                 $totalHours = 0;
                 foreach ($entries as $e) {
                     if (!empty($e['time_in']) && !empty($e['time_out'])) {
                         $diff = (strtotime($e['time_out']) - strtotime($e['time_in'])) / 3600;
-                        if ($diff > 0)
-                            $totalHours += $diff;
+                        if ($diff > 0) $totalHours += $diff;
                     }
                 }
                 $totalHours = round($totalHours, 2);
 
                 $planUrl = APP_URL . '/admin/planning/plan_view.php?id=' . $planId;
 
-                // Find supervisors / admins in same branch
                 $supStmt = $db->prepare("
-        SELECT u.id, u.full_name, u.email
-        FROM users u
-        JOIN roles r ON r.id = u.role_id
-        WHERE u.branch_id = ?
-          AND r.role_name = 'admin'
-          AND u.is_active = 1
-    ");
+                    SELECT u.id FROM users u
+                    JOIN roles r ON r.id = u.role_id
+                    WHERE u.branch_id = ? AND r.role_name = 'admin' AND u.is_active = 1
+                ");
                 $supStmt->execute([$branchId]);
                 $supervisors = $supStmt->fetchAll();
 
                 foreach ($supervisors as $sup) {
+                    $notifMsg  = "{$staffName} edited their work plan for Week {$plan['week_number']} ({$weekRange}).\n";
+                    $notifMsg .= "Entries: {$entryCount} clients · Total planned: {$totalHours} hrs";
+                    if ($remarks) $notifMsg .= "\nRemarks: {$remarks}";
 
-                    // ── 1. In-app notification ─────────────────────────────────
-                    $notifMsg = "{$staffName} edited their work plan for Week {$plan['week_number']} "
-                        . "({$weekRange}) with {$entryCount} visit entries ({$totalHours} hrs planned).";
-
-                    $notifStmt = $db->prepare("
-            INSERT INTO notifications
-                (user_id, type, title, message, link, is_read, created_at)
-            VALUES
-                (?, 'system', 'Work Plan Edited', ?, ?, 0, NOW())
-        ");
-                    $notifStmt->execute([$sup['id'], $notifMsg, $planUrl]);
-
-                    // ── 2. Email notification ──────────────────────────────────
-                    if (!empty($sup['email'])) {
-                        sendPlanEditEmail($sup, [
-                            'staff_name' => $staffName,
-                            'month_label' => $monthLabel,
-                            'week_number' => $plan['week_number'],
-                            'week_range' => $weekRange,
-                            'entry_count' => $entryCount,
-                            'total_hours' => $totalHours,
-                            'remarks' => $remarks ?: '—',
-                            'plan_url' => $planUrl,
-                        ]);
-                    }
+                    notify(
+                        (int) $sup['id'],
+                        'Work Plan Edited',
+                        $notifMsg,
+                        'system',
+                        $planUrl,
+                        true,
+                        ['template' => 'generic']
+                    );
                 }
-
             } catch (Exception $notifEx) {
-                // Notification failure must never break the main flow
                 error_log('Plan edit notification error: ' . $notifEx->getMessage());
             }
             // ── End Notifications ──────────────────────────────────────────────
 
-            setFlash('success', 'Plan updated successfully!');
-            header('Location: plan_list.php?month=' . $month);
-            exit;
             setFlash('success', 'Plan updated successfully!');
             header('Location: plan_list.php?month=' . $month);
             exit;

@@ -70,7 +70,8 @@ $monthLabel = $monthDate->format('F Y');
 // ── Handle approve/reject POST ────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
-
+    require_once '../../config/notify.php'; 
+    require_once '../../config/mailer.php';
     $planId = (int) ($_POST['plan_id'] ?? 0);
     $action = $_POST['action'] ?? '';
     $remarks = trim($_POST['remarks'] ?? '');
@@ -134,17 +135,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $staffUserId,
                         "Work Plan " . ucfirst($newStatus),
                         $message,
-                        'work_plan',   // 🔥 FIX: use existing working type
+                        'system',
                         $link,
                         true,
-                        [
-                            'template' => 'work_plan_status', // optional custom template
-                            'plan' => [
-                                'id' => $planId,
-                                'week' => $weekNumber,
-                                'work_plan' => $newStatus
-                            ]
-                        ]
+                        ['template' => 'generic']  // ← change from 'work_plan_status' to 'generic'
                     );
                 }
             } catch (Exception $ex) {
