@@ -29,7 +29,18 @@ $planStmt = $db->prepare("
 $planStmt->execute([$planId]);
 $plan = $planStmt->fetch(PDO::FETCH_ASSOC);
 if (!$plan) { setFlash('error', 'Plan not found.'); header('Location: plan_list.php'); exit; }
-
+// ── Can the logged-in user edit this plan? ─────────────────────
+// Only if they are managed_by for the plan owner in users OR uda
+$canEditStmt = $db->prepare("
+    SELECT 1 FROM users
+    WHERE id = ? AND managed_by = ?
+    UNION
+    SELECT 1 FROM user_department_assignments
+    WHERE user_id = ? AND managed_by = ?
+    LIMIT 1
+");
+$canEditStmt->execute([$plan['user_id'], $uid, $plan['user_id'], $uid]);
+$canEdit = ($plan['user_id'] === $uid) || (bool)$canEditStmt->fetch();
 // ── UDA consulting dept detection ─────────────────────────────
 $deptId = (int)$user['department_id'];
 $branchId = (int)$user['branch_id'];
@@ -112,14 +123,14 @@ if ($isAdmin) {
         FROM users u
         LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
         WHERE u.is_active = 1
-          AND (
-              u.department_id = ?
-              OR uda.department_id = ?
-          )
           AND u.id != ?
+          AND (
+              u.managed_by = ?
+              OR uda.managed_by = ?
+          )
         ORDER BY u.full_name
     ");
-    $st1->execute([$deptId, $deptId, $uid]);
+    $st1->execute([$uid, $uid, $uid]);
     $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -332,7 +343,7 @@ include '../../includes/header.php';
             </div>
             <?php endif; ?>
 
-            <form method="POST" id="planForm">
+            <form method="POST" id="planForm" <?= !$canEdit ? 'onsubmit="return false;"' : '' ?>>
                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
 
                 <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
@@ -414,11 +425,27 @@ include '../../includes/header.php';
                         <!-- Entries card -->
                         <div class="card-mis mb-4">
                             <div class="card-mis-header d-flex justify-content-between align-items-center">
-                                <h5><i class="fas fa-list-check text-warning me-2"></i>Client Visit Entries</h5>
-                                <button type="button" class="btn btn-gold btn-sm" onclick="addEntry()">
-                                    <i class="fas fa-plus me-1"></i> Add Entry
-                                </button>
-                            </div>
+                            <h5><i class="fas fa-list-check text-warning me-2"></i>Client Visit Entries</h5>
+                            <?php if ($canEdit): ?>
+                            <button type="button" class="btn btn-gold btn-sm" onclick="addEntry()">
+                                <i class="fas fa-plus me-1"></i> Add Entry
+                            </button>
+                            <?php endif; ?>
+                        </div>
+                        <!-- Occupied time hint -->
+                        <?php if (!empty($existingEntries)): ?>
+                        <div style="padding:6px 18px 0;display:flex;flex-wrap:wrap;gap:6px;">
+                            <?php foreach ($existingEntries as $oe): ?>
+                            <?php if ($oe['planned_time_in'] && $oe['planned_time_out']): ?>
+                            <span style="font-size:.7rem;background:#fef3c7;color:#92400e;border-radius:6px;padding:3px 8px;font-weight:600;">
+                                <i class="fas fa-clock me-1"></i>
+                                <?= htmlspecialchars($oe['company_name'] ?? '') ?>:
+                                <?= date('h:i A', strtotime($oe['planned_time_in'])) ?> – <?= date('h:i A', strtotime($oe['planned_time_out'])) ?>
+                            </span>
+                            <?php endif; ?>
+                            <?php endforeach; ?>
+                        </div>
+                        <?php endif; ?>
 
                             <div id="entriesContainer"></div>
 
@@ -463,10 +490,11 @@ include '../../includes/header.php';
                         <div class="cn-panel" style="margin-bottom:14px;">
                             <div class="cn-panel-hd">
                                 <span class="cn-panel-title">
-                                    <i class="fas fa-save me-2" style="color:var(--gold)"></i>Save Changes
+                                    <i class="fas fa-save me-2" style="color:var(--gold)"></i><?= $canEdit ? 'Save Changes' : 'View Only' ?>
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
+                                <?php if ($canEdit): ?>
                                 <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
                                     <i class="fas fa-save"></i> Update Plan
                                 </button>
@@ -477,11 +505,16 @@ include '../../includes/header.php';
                                 <?php if ($plan['status'] === 'draft' || $plan['status'] === 'rejected'): ?>
                                 <hr style="margin:4px 0;border-color:var(--cn4);">
                                 <a href="plan_approvals.php?action=submit&id=<?= $planId ?>"
-                                   class="cn-btn" style="justify-content:center;background:#3b82f6;color:#fff;"
-                                   onclick="return confirm('Save changes and submit for approval?')">
+                                class="cn-btn" style="justify-content:center;background:#3b82f6;color:#fff;"
+                                onclick="return confirm('Save changes and submit for approval?')">
                                     <i class="fas fa-paper-plane"></i> Save &amp; Submit
                                 </a>
                                 <?php endif; ?>
+                                <?php endif; // canEdit ?>
+                                <a href="plan_list.php?month=<?= $month ?>"
+                                class="cn-btn cn-btn-out" style="justify-content:center;">
+                                    <i class="fas fa-times"></i> <?= $canEdit ? 'Cancel' : 'Back' ?>
+                                </a>
                             </div>
                         </div>
 
@@ -760,5 +793,10 @@ existingEntries.forEach(e => addEntry(e));
 // Restore week info on load
 const ws = document.getElementById('weekSelect');
 if (ws && ws.value) onWeekChange(ws);
+// Disable all inputs if view-only
+<?php if (!$canEdit): ?>
+document.querySelectorAll('#planForm input, #planForm select, #planForm textarea, #planForm button[type="submit"]')
+    .forEach(el => { el.disabled = true; el.style.pointerEvents = 'none'; el.style.opacity = '.65'; });
+<?php endif; ?>
 </script>
 <?php include '../../includes/footer.php'; ?>

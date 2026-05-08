@@ -59,7 +59,27 @@ if (!$plan) {
     header('Location: plan_list.php');
     exit;
 }
-
+// ── Access check: only show if login user is managed_by of plan owner ──
+$accessStmt = $db->prepare("
+    SELECT 1 FROM work_plans wp
+    WHERE wp.id = ?
+      AND (
+          wp.user_id = ?
+          OR wp.user_id IN (
+              SELECT id FROM users WHERE managed_by = ?
+          )
+          OR wp.user_id IN (
+              SELECT user_id FROM user_department_assignments WHERE managed_by = ?
+          )
+      )
+    LIMIT 1
+");
+$accessStmt->execute([$planId, $uid, $uid, $uid]);
+if (!$accessStmt->fetch()) {
+    setFlash('error', 'You do not have permission to view this plan.');
+    header('Location: plan_list.php');
+    exit;
+}
 $entries = $db->prepare("
     SELECT wpe.*, c.company_name, c.company_code,
            u.full_name AS assigned_name

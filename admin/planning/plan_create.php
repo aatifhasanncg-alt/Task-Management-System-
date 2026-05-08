@@ -88,15 +88,15 @@ if ($isAdmin) {
         FROM users u
         LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
         WHERE u.is_active = 1
-          AND (
-              u.department_id = ?
-              OR uda.department_id = ?
-          )
           AND u.id != ?
+          AND (
+              u.managed_by = ?
+              OR uda.managed_by = ?
+          )
         ORDER BY u.full_name
     ");
-    $st1->execute([$deptId, $deptId, $uid]);
-$deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
+    $st1->execute([$uid, $uid, $uid]);
+    $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 }
 // ── POST ──────────────────────────────────────────────────────
 $errors  = [];

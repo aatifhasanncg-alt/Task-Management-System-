@@ -34,7 +34,7 @@ $allAdmins = $db->query("
     SELECT u.id, u.full_name, u.employee_id, b.branch_name FROM users u
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN branches b ON b.id = u.branch_id
-    WHERE r.role_name='admin' AND u.is_active=1
+    WHERE r.role_name IN('admin','executive') AND u.is_active=1
     ORDER BY u.full_name
 ")->fetchAll();
 

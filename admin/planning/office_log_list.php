@@ -55,7 +55,25 @@ $currentRole = $_SESSION['role'] ?? ($user['role'] ?? '');
 $isAdmin = in_array($currentRole, ['admin', 'executive', 'superadmin']);
 
 if ($isAdmin) {
-    $scopeRows = $db->query("
+    // Users where logged-in user is set as managed_by in `users` table
+    $managedUsersQ = $db->prepare("
+        SELECT id FROM users
+        WHERE is_active = 1
+          AND managed_by = ?
+    ");
+    $managedUsersQ->execute([$uid]);
+    $managedUserIds = $managedUsersQ->fetchAll(PDO::FETCH_COLUMN);
+
+    // Users where logged-in user is set as managed_by in `user_department_assignments`
+    $udaManagedQ = $db->prepare("
+        SELECT DISTINCT uda.user_id FROM user_department_assignments uda
+        WHERE uda.managed_by = ?
+    ");
+    $udaManagedQ->execute([$uid]);
+    $udaManagedIds = $udaManagedQ->fetchAll(PDO::FETCH_COLUMN);
+
+    // Also include CON dept users (original scope) merged with managed users
+    $conScopeQ = $db->query("
         SELECT DISTINCT u.id FROM users u
         WHERE u.is_active = 1
           AND (
@@ -70,13 +88,22 @@ if ($isAdmin) {
               )
           )
     ")->fetchAll(PDO::FETCH_COLUMN);
-    $scopeIds = array_unique(array_merge([$uid], $scopeRows));
+
+    // Intersect: CON users who are also managed by the logged-in user
+    // (if logged-in user manages anyone, restrict to those; otherwise fall back to full CON scope)
+    $allManagedIds = array_unique(array_merge($managedUserIds, $udaManagedIds));
+
+    if (!empty($allManagedIds)) {
+        // Only show logs for CON users that this admin actually manages
+        $scopeIds = array_unique(array_merge([$uid], array_intersect($conScopeQ, $allManagedIds)));
+    } else {
+        // Fallback: no managed_by rows found — show all CON dept users
+        $scopeIds = array_unique(array_merge([$uid], $conScopeQ));
+    }
 } else {
     $scopeIds = [$uid];
 }
 $inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
-
-// ── WHERE ──────────────────────────────────────────────────────────────────
 // ── WHERE ──────────────────────────────────────────────────────────────────
 $where = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND owl.user_id IN ({$inList})";
 $params = [$month];
@@ -142,10 +169,27 @@ $st1 = $db->prepare("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE u.is_active = 1 AND (u.department_id = ? OR uda.department_id = ?)
+    WHERE u.is_active = 1
+      AND (
+            u.id = ?
+            OR u.managed_by = ?
+            OR uda.managed_by = ?
+          )
+      AND (
+            u.department_id = ?
+            OR uda.department_id = ?
+          )
     ORDER BY u.full_name
 ");
-$st1->execute([$deptId, $deptId]);
+
+$st1->execute([
+    $uid,
+    $uid,
+    $uid,
+    $deptId,
+    $deptId
+]);
+
 $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 
 // ── KPIs ───────────────────────────────────────────────────────────────────

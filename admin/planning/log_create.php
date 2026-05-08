@@ -75,7 +75,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $visitStatus = $_POST['visit_status'] ?? 'visited';
     $workDesc = trim($_POST['work_description'] ?? '');
     $planEntryId = (int) ($_POST['plan_entry_id'] ?? 0) ?: null;
+    $supervisorId = (isset($_POST['supervisor_id']) && $_POST['supervisor_id'] !== '')
+        ? (int) $_POST['supervisor_id']
+        : null;
 
+    // fallback to managed_by from DB (NOT session)
+    if (!$supervisorId) {
+        $mb = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+        $mb->execute([$uid]);
+        $supervisorId = (int) $mb->fetchColumn();
+    }
     if (!$clientId)
         $errors[] = 'Please select a client.';
     if (!$logDate)
@@ -98,14 +107,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$errors) {
         $ins = $db->prepare("
             INSERT INTO work_logs
-            (user_id, client_id, plan_entry_id, department_id, branch_id,
+            (user_id, client_id, supervisor_id, plan_entry_id, department_id, branch_id,
              log_date, day_of_week, week_number, month_year,
              time_in, time_out, duration_hours, work_description, visit_status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $ins->execute([
             $uid,
             $clientId,
+            $supervisorId,
             $planEntryId,
             $deptId,
             $branchId,

@@ -138,31 +138,40 @@ if ($typeFilter === 'visit') {
 $stmt = $db->prepare("
 (
     SELECT wl.id, wl.client_id, wl.user_id, wl.log_date, wl.time_in, wl.time_out,
-           wl.duration_hours,
-           wl.visit_status    AS status,
-           wl.work_description AS description,
-           c.company_name, c.company_code,
-           u.full_name AS staff_name, u.employee_id,
-           d.dept_name AS department_name,
-           'VISIT' AS log_type, wl.day_of_week
+       wl.duration_hours,
+       wl.visit_status AS status,
+       wl.work_description AS description,
+       c.company_name, c.company_code,
+       u.full_name AS staff_name, u.employee_id,
+       su.full_name AS supervisor_name,
+       d.dept_name AS department_name,
+       'VISIT' AS log_type, wl.day_of_week
     FROM work_logs wl
     LEFT JOIN companies c ON c.id = wl.client_id
     LEFT JOIN users u ON u.id = wl.user_id
+    LEFT JOIN users su ON su.id = wl.supervisor_id
     LEFT JOIN user_department_assignments uda 
         ON uda.user_id = u.id
     LEFT JOIN departments d 
         ON d.id = uda.department_id
     WHERE {$whereVisit}
+        AND (
+                u.id = ?
+                OR wl.supervisor_id = ?
+                OR u.managed_by = ?
+                OR uda.managed_by = ?
+            )
 )
 UNION ALL
 (
     SELECT owl.id, owl.client_id, owl.user_id, owl.log_date, owl.time_in, owl.time_out,
-           ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2),
-           owl.status, owl.description,
-           c.company_name, c.company_code,
-           u.full_name AS staff_name, u.employee_id,
-           d.dept_name AS department_name,
-           'OFFICE' AS log_type, NULL AS day_of_week
+       ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2),
+       owl.status, owl.description,
+       c.company_name, c.company_code,
+       u.full_name AS staff_name, u.employee_id,
+       NULL AS supervisor_name,
+       d.dept_name AS department_name,
+       'OFFICE' AS log_type, NULL AS day_of_week
     FROM office_work_logs owl
     LEFT JOIN companies c ON c.id = owl.client_id
     LEFT JOIN users u ON u.id = owl.user_id
@@ -171,10 +180,20 @@ UNION ALL
     LEFT JOIN departments d 
         ON d.id = uda.department_id
     WHERE {$whereOffice}
+      AND (
+            u.id = ?
+            OR u.managed_by = ?
+            OR uda.managed_by = ?
+          )
 )
 ORDER BY log_date DESC, time_in DESC
 ");
-$stmt->execute(array_merge($paramsVisit, $paramsOffice));
+$stmt->execute(array_merge(
+    $paramsVisit,
+    [$uid, $uid, $uid,$uid],
+    $paramsOffice,
+    [$uid, $uid, $uid]
+));
 $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Derived data ───────────────────────────────────────────────────────────
@@ -191,11 +210,29 @@ $st1 = $db->prepare("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE u.is_active = 1 AND (u.department_id = ? OR uda.department_id = ?)
+    WHERE u.is_active = 1
+      AND (
+            u.id = ?
+            OR u.managed_by = ?
+            OR uda.managed_by = ?
+          )
+      AND (
+            u.department_id = ?
+            OR uda.department_id = ?
+          )
     ORDER BY u.full_name
 ");
-$st1->execute([$deptId, $deptId]);
+
+$st1->execute([
+    $uid,
+    $uid,
+    $uid,
+    $deptId,
+    $deptId
+]);
+
 $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
+
 
 $stmtKpi = $db->prepare("
     SELECT COUNT(*) AS total_visit_logs,
@@ -975,6 +1012,7 @@ $baseQ = [
                                     <th>Date</th>
                                     <th>Type</th>
                                     <th>Staff</th>
+                                    <th>Supervisor</th>
                                     <th>Client</th>
                                     <th class="text-center">Time In</th>
                                     <th class="text-center">Time Out</th>
@@ -1014,6 +1052,11 @@ $baseQ = [
                                                 <?= htmlspecialchars($l['employee_id'] ?? '') ?>
                                             </div>
                                         </td>
+                                        <td>
+    <div style="font-weight:600;">
+        <?= htmlspecialchars($l['supervisor_name'] ?? $user['full_name']) ?>
+    </div>
+</td>
                                         <td>
                                             <div style="font-weight:500;">
                                                 <?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 24, '…')) ?>
