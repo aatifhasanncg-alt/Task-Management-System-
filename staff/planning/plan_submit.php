@@ -6,6 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
+require_once '../../config/notify.php';
 requireAnyRole();
 
 $db   = getDB();
@@ -19,9 +20,10 @@ verifyCsrf();
 $planId = (int)($_POST['plan_id'] ?? 0);
 
 $stmt = $db->prepare("
-    SELECT * FROM work_plans WHERE id=? AND user_id=? AND department_id=?
+    SELECT * FROM work_plans 
+    WHERE id=? AND user_id=?
 ");
-$stmt->execute([$planId, $uid, (int)$user['department_id']]);
+$stmt->execute([$planId, $uid]);
 $plan = $stmt->fetch();
 
 if (!$plan || !in_array($plan['status'], ['draft', 'rejected'])) {
@@ -34,21 +36,10 @@ $upd = $db->prepare("UPDATE work_plans SET status='submitted', updated_at=NOW() 
 $upd->execute([$planId]);
 
 // Notify supervisor/admin
-$adminStmt = $db->prepare("
-    SELECT u.id FROM users u
-    JOIN roles r ON r.id = u.role_id
-    WHERE r.role_name = 'admin'
-      AND u.department_id = ?
-      AND u.branch_id = ?
-      AND u.is_active = 1
-    LIMIT 5
-");
-$adminStmt->execute([(int)$user['department_id'], (int)$user['branch_id']]);
-$admins = $adminStmt->fetchAll();
-
-foreach ($admins as $admin) {
+// Notify only the manager (managed_by)
+if (!empty($user['managed_by'])) {
     notify(
-        $admin['id'],
+        (int)$user['managed_by'],
         'Work Plan Submitted',
         $user['full_name'] . ' submitted a work plan for Week ' . $plan['week_number'] . ' for your approval.',
         'task',

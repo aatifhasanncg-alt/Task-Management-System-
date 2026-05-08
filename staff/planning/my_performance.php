@@ -122,7 +122,58 @@ $datePerf = $db->query("
     GROUP BY wl.log_date, wl.day_of_week
     ORDER BY wl.log_date ASC
 ")->fetchAll();
+// ── OFFICE LOG KPIs ───────────────────────────────────────────────────────────
+$officeKpi = $db->query("
+    SELECT
+        COUNT(*) AS total,
+        COALESCE(ROUND(SUM(TIME_TO_SEC(TIMEDIFF(time_out,time_in)))/3600,2),0) AS hours,
+        SUM(status='completed')   AS completed,
+        SUM(status='wip')         AS wip,
+        SUM(status='holding')     AS holding,
+        SUM(status='not_started') AS not_started,
+        COUNT(DISTINCT client_id) AS unique_clients
+    FROM office_work_logs
+    WHERE user_id={$uid} AND DATE_FORMAT(log_date,'%Y-%m')='{$month}'
+")->fetch(PDO::FETCH_ASSOC) ?: [];
+// fetchRow doesn't exist — use fetch
+$officeKpi = $db->query("
+    SELECT
+        COUNT(*) AS total,
+        COALESCE(ROUND(SUM(TIME_TO_SEC(TIMEDIFF(time_out,time_in)))/3600,2),0) AS hours,
+        SUM(status='completed')   AS completed,
+        SUM(status='wip')         AS wip,
+        SUM(status='holding')     AS holding,
+        SUM(status='not_started') AS not_started,
+        COUNT(DISTINCT client_id) AS unique_clients
+    FROM office_work_logs
+    WHERE user_id={$uid} AND DATE_FORMAT(log_date,'%Y-%m')='{$month}'
+")->fetch(PDO::FETCH_ASSOC) ?: [];
 
+$officeTotal     = (int)($officeKpi['total']       ?? 0);
+$officeHours     = (float)($officeKpi['hours']     ?? 0);
+$officeCompleted = (int)($officeKpi['completed']   ?? 0);
+$officeWip       = (int)($officeKpi['wip']         ?? 0);
+$officeHolding   = (int)($officeKpi['holding']     ?? 0);
+$officeNotStarted= (int)($officeKpi['not_started'] ?? 0);
+
+// ── OFFICE CLIENT-WISE ────────────────────────────────────────────────────────
+$officeClientPerf = $db->query("
+    SELECT
+        c.id AS client_id,
+        c.company_name, c.company_code,
+        COUNT(owl.id)                                          AS total_logs,
+        SUM(owl.status='completed')                            AS completed,
+        SUM(owl.status='wip')                                  AS wip,
+        COALESCE(ROUND(SUM(TIME_TO_SEC(TIMEDIFF(owl.time_out,owl.time_in)))/3600,2),0) AS actual_hours,
+        MIN(owl.log_date) AS first_log,
+        MAX(owl.log_date) AS last_log
+    FROM office_work_logs owl
+    LEFT JOIN companies c ON c.id = owl.client_id
+    WHERE owl.user_id = {$uid}
+      AND DATE_FORMAT(owl.log_date,'%Y-%m') = '{$month}'
+    GROUP BY c.id, c.company_name, c.company_code
+    ORDER BY actual_hours DESC
+")->fetchAll();
 // ── MONTHLY TREND (last 6 months) ─────────────────────────────────────────────
 $trendRows = $db->query("
     SELECT
@@ -168,6 +219,19 @@ if ($isAdmin) {
 $chartLabels = array_column($trendRows, 'month_year');
 $chartHours  = array_map(fn($r) => (float)$r['actual_hours'], $trendRows);
 $chartLogs   = array_map(fn($r) => (int)$r['total_logs'],     $trendRows);
+
+// Office hours per month for chart
+$officeMonthlyRows = $db->query("
+    SELECT DATE_FORMAT(log_date,'%Y-%m') AS month_year,
+           COALESCE(ROUND(SUM(TIME_TO_SEC(TIMEDIFF(time_out,time_in)))/3600,2),0) AS office_hours
+    FROM office_work_logs
+    WHERE user_id={$uid} AND department_id={$deptId}
+    GROUP BY month_year
+    ORDER BY month_year DESC
+    LIMIT 6
+")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+$chartOfficeHours = array_map(fn($l) => (float)($officeMonthlyRows[$l] ?? 0), $chartLabels);
 
 $pageTitle = 'Performance Dashboard';
 include '../../includes/header.php';
@@ -248,6 +312,14 @@ include '../../includes/header.php';
                     <div class="kpi-icon"><i class="fas fa-redo" style="color:#f59e0b;"></i></div>
                     <div class="kpi-val"><?= $rescheduled ?></div>
                     <div class="kpi-label">Rescheduled</div>
+                </div>
+                <div class="kpi-tile" style="--kpi-color:#3b82f6;">
+                    <div class="kpi-icon"><i class="fas fa-building" style="color:#3b82f6;"></i></div>
+                    <div class="kpi-val"><?= $officeTotal ?></div>
+                    <div class="kpi-label">Office Logs</div>
+                    <div class="kpi-delta" style="color:#9ca3af;font-size:.68rem;">
+                        <?= number_format($officeHours,1) ?>h · <?= $officeCompleted ?> done
+                    </div>
                 </div>
                 <?php $effColor = $efficiency >= 80 ? '#10b981' : ($efficiency >= 50 ? '#f59e0b' : '#ef4444'); ?>
                 <div class="kpi-tile" style="--kpi-color:<?= $effColor ?>;">
@@ -457,7 +529,78 @@ include '../../includes/header.php';
                 </div>
                 <?php endif; ?>
             </div>
-
+<!-- ── Office Client-wise ── -->
+            <?php if (!empty($officeClientPerf)): ?>
+            <div class="card-mis mb-4">
+                <div class="card-mis-header">
+                    <h5><i class="fas fa-building text-warning me-2"></i>Office Work — Client-wise — <?= $monthLabel ?></h5>
+                    <span style="font-size:.78rem;color:#9ca3af;"><?= count($officeClientPerf) ?> clients</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table-mis w-100">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Client</th>
+                                <th class="text-center">Logs</th>
+                                <th class="text-center">Completed</th>
+                                <th class="text-center">WIP</th>
+                                <th class="text-center">Hours</th>
+                                <th>First</th>
+                                <th>Last</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($officeClientPerf as $i => $op): ?>
+                        <tr>
+                            <td style="color:#9ca3af;font-size:.75rem;"><?= $i+1 ?></td>
+                            <td>
+                                <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($op['company_name']??'—') ?></div>
+                                <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($op['company_code']??'') ?></div>
+                            </td>
+                            <td class="text-center"><strong><?= $op['total_logs'] ?></strong></td>
+                            <td class="text-center">
+                                <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;">
+                                    <?= $op['completed'] ?>
+                                </span>
+                            </td>
+                            <td class="text-center">
+                                <?php if ($op['wip'] > 0): ?>
+                                <span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;">
+                                    <?= $op['wip'] ?>
+                                </span>
+                                <?php else: ?>
+                                <span style="color:#d1d5db;">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="text-center">
+                                <strong style="color:#8b5cf6;"><?= number_format((float)$op['actual_hours'],1) ?>h</strong>
+                            </td>
+                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                <?= $op['first_log'] ? date('d M',strtotime($op['first_log'])) : '—' ?>
+                            </td>
+                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                <?= $op['last_log'] ? date('d M',strtotime($op['last_log'])) : '—' ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr style="background:#f9fafb;font-weight:700;">
+                                <td colspan="2" style="padding:10px 14px;font-size:.82rem;">
+                                    <i class="fas fa-calculator me-1 text-warning"></i>TOTAL
+                                </td>
+                                <td class="text-center"><?= $officeTotal ?></td>
+                                <td class="text-center" style="color:#15803d;"><?= $officeCompleted ?></td>
+                                <td class="text-center" style="color:#1d4ed8;"><?= $officeWip ?></td>
+                                <td class="text-center" style="color:#8b5cf6;"><?= number_format($officeHours,1) ?>h</td>
+                                <td colspan="2"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+            <?php endif; ?>
             <!-- ── Date-wise Performance ── -->
             <div class="card-mis mb-4">
                 <div class="card-mis-header">
@@ -693,9 +836,10 @@ include '../../includes/header.php';
 </div><!-- /app-wrapper -->
 
 <script>
-const chartLabels = <?= json_encode($chartLabels) ?>;
-const chartHours  = <?= json_encode($chartHours) ?>;
-const chartLogs   = <?= json_encode($chartLogs) ?>;
+const chartLabels      = <?= json_encode($chartLabels) ?>;
+const chartHours       = <?= json_encode($chartHours) ?>;
+const chartOfficeHours = <?= json_encode($chartOfficeHours) ?>;
+const chartLogs        = <?= json_encode($chartLogs) ?>;
 
 new Chart(document.getElementById('trendChart'), {
     type: 'bar',
@@ -703,12 +847,23 @@ new Chart(document.getElementById('trendChart'), {
         labels: chartLabels,
         datasets: [
             {
-                label: 'Actual Hours',
+                label: 'Visit Hours',
                 data: chartHours,
-                backgroundColor: 'rgba(201,168,76,0.7)',
+                backgroundColor: 'rgba(201,168,76,0.8)',
                 borderColor: '#c9a84c',
                 borderWidth: 1.5,
                 borderRadius: 5,
+                stack: 'hours',
+                yAxisID: 'y'
+            },
+            {
+                label: 'Office Hours',
+                data: chartOfficeHours,
+                backgroundColor: 'rgba(139,92,246,0.8)',
+                borderColor: '#8b5cf6',
+                borderWidth: 1.5,
+                borderRadius: 5,
+                stack: 'hours',
                 yAxisID: 'y'
             },
             {
@@ -722,6 +877,7 @@ new Chart(document.getElementById('trendChart'), {
                 pointHoverRadius: 6,
                 tension: 0.3,
                 fill: false,
+                stack: undefined,
                 yAxisID: 'y1'
             }
         ]
@@ -732,10 +888,12 @@ new Chart(document.getElementById('trendChart'), {
         interaction: { mode: 'index', intersect: false },
         scales: {
             x: {
+                stacked: true,
                 ticks: { color: '#4b5563', font: { size: 11 } },
                 grid: { display: false }
             },
             y: {
+                stacked: true,
                 position: 'left',
                 beginAtZero: true,
                 ticks: { color: '#c9a84c', font: { size: 11 }, callback: v => v + 'h' },

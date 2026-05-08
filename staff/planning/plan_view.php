@@ -34,9 +34,12 @@ if (!$plan) {
 }
 
 $entries = $db->prepare("
-    SELECT wpe.*, c.company_name, c.company_code
+    SELECT wpe.*, c.company_name, c.company_code,
+           sv.full_name AS supervisor_name,
+           sv.employee_id AS supervisor_emp_id
     FROM work_plan_entries wpe
-    LEFT JOIN companies c ON c.id = wpe.client_id
+    LEFT JOIN companies c  ON c.id  = wpe.client_id
+    LEFT JOIN users     sv ON sv.id = wpe.supervisor_id
     WHERE wpe.plan_id=?
     ORDER BY wpe.plan_date ASC, wpe.planned_time_in ASC
 ");
@@ -151,6 +154,7 @@ include '../../includes/header.php';
                                                 <th>Time In</th>
                                                 <th>Time Out</th>
                                                 <th class="text-center">Hours</th>
+                                                <th>Supervisor</th>
                                                 <th>Notes</th>
                                             </tr>
                                         </thead>
@@ -172,6 +176,20 @@ include '../../includes/header.php';
                                                     <td class="text-center">
                                                         <strong
                                                             style="color:#c9a84c;"><?= number_format((float) $e['planned_hours'], 1) ?>h</strong>
+                                                    </td>
+                                                    <td style="font-size:.77rem;">
+                                                        <?php if (!empty($e['supervisor_name'])): ?>
+                                                            <div style="font-weight:600;color:#374151;">
+                                                                <?= htmlspecialchars($e['supervisor_name']) ?>
+                                                            </div>
+                                                            <?php if (!empty($e['supervisor_emp_id'])): ?>
+                                                            <div style="font-size:.69rem;color:#9ca3af;">
+                                                                <?= htmlspecialchars($e['supervisor_emp_id']) ?>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                        <?php else: ?>
+                                                            <span style="color:#d1d5db;">—</span>
+                                                        <?php endif; ?>
                                                     </td>
                                                     <td style="font-size:.77rem;color:#6b7280;">
                                                         <?= htmlspecialchars($e['notes'] ?? '—') ?></td>

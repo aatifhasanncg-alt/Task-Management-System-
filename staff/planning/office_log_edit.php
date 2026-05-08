@@ -78,33 +78,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $clientStmt->execute([$clientId]);
             $clientName = $clientStmt->fetchColumn() ?: '—';
 
-            $supStmt = $db->prepare("
-                SELECT u.id FROM users u
-                JOIN roles r ON r.id = u.role_id
-                WHERE u.branch_id = (SELECT branch_id FROM users WHERE id = ?)
-                AND r.role_name = 'admin'
-                AND u.is_active = 1
-            ");
-            $supStmt->execute([$uid]);
-            $supervisors = $supStmt->fetchAll();
-
-            $staffName  = $user['full_name'] ?? ('User #' . $uid);
-            $logDateFmt = date('d M Y', strtotime($logDate));
-            $logUrl = APP_URL . '/admin/planning/office_log_view.php?id=' . $logId;
-
-            $tin  = !empty($timeIn)  ? date('h:i A', strtotime($timeIn))  : '—';
-            $tout = !empty($timeOut) ? date('h:i A', strtotime($timeOut)) : '—';
-            $statusLabel = $status === 'completed' ? 'Completed' : ($status === 'not_started' ? 'Not Started' : ($status === 'holding' ? 'Holding' : 'WIP'));
-
-            foreach ($supervisors as $sup) {
-                $notifMsg  = "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\n";
-                $notifMsg .= "Status: {$statusLabel} · Time: {$tin} – {$tout}\n";
-                $notifMsg .= "Description: " . ($description ?: '—');
-
+            // Notify only the manager (managed_by)
+            if (!empty($user['managed_by'])) {
                 notify(
-                    (int) $sup['id'],
+                    (int)$user['managed_by'],
                     'Office Work Log Edited',
-                    $notifMsg,
+                    "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\nStatus: {$statusLabel} · Time: {$tin} – {$tout}\nDescription: " . ($description ?: '—'),
                     'system',
                     $logUrl,
                     true,

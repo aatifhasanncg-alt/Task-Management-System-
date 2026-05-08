@@ -195,122 +195,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $tin, $tout, $hrs, trim($e['notes'] ?? ''),
                 ]);
             }
+            notify(
+                    $planUserId,
+                    'Work Plan Created for You',
+                    $user['full_name'] . ' created a work plan for you — Week ' . $weekNum . ', ' . $monthLabel,
+                    'task',
+                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    true,
+                    [
+                        'template' => 'work_plan',
+                        'week' => $weekNum,
+                        'month' => $monthLabel
+                    ]
+                );
+            logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
+            // ── Auto-approve if admin creates plan for themselves ──────────
+            if ($isAdmin && $planUserId === $uid) {
+                $db->prepare("
+                    UPDATE work_plans 
+                    SET status='approved', approved_by=?, approved_at=NOW()
+                    WHERE id=?
+                ")->execute([$uid, $planId]);
+            }
 
-            // Notify supervisor if admin created for staff
-            if ($isAdmin && $planUserId !== $uid) {
-                // Notify the staff member
-                try {
-                    notify(
+            $db->commit();
+
+            // ── Notifications ──────────────────────────────────────────────
+            try {
+                if ($isAdmin && $planUserId !== $uid) {
+                    // Admin created plan FOR a staff member — notify that staff
+                    $db->prepare("
+                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                        VALUES (?, 'task', 'Work Plan Created for You', ?, ?, 0, NOW())
+                    ")->execute([
                         $planUserId,
-                        'Work Plan Created for You',
                         $user['full_name'] . ' created a work plan for you — Week ' . $weekNum . ', ' . $monthLabel,
-                        'task',
                         APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
-                        true, []
-                    );
-                } catch (Exception $e2) {}
-            } elseif (!empty($user['managed_by'])) {
-                // Staff notifies their supervisor
-                try {
-                    notify(
-                        (int)$user['managed_by'],
-                        'New Work Plan Submitted',
-                        $user['full_name'] . ' created a work plan for Week ' . $weekNum . ', ' . $monthLabel,
-                        'task',
-                        APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-                        true, []
-                    );
-                } catch (Exception $e2) {}
+                    ]);
+
+                    // Also notify the staff member's supervisor (managed_by) if different from creator
+                    $staffRow = $db->prepare("SELECT managed_by, full_name FROM users WHERE id=?");
+                    $staffRow->execute([$planUserId]);
+                    $staffData = $staffRow->fetch();
+
+                    if (!empty($staffData['managed_by']) && $staffData['managed_by'] != $uid) {
+                        $db->prepare("
+                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                            VALUES (?, 'task', 'Work Plan Created', ?, ?, 0, NOW())
+                        ")->execute([
+                            (int) $staffData['managed_by'],
+                            $user['full_name'] . ' created a plan for ' . ($staffData['full_name'] ?? 'a staff member')
+                                . ' — Week ' . $weekNum . ', ' . $monthLabel,
+                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
+                        ]);
+                    }
+
+                } elseif ($isAdmin && $planUserId === $uid) {
+                    // Admin created plan for themselves (auto-approved) — notify branch admins/executives
+                    $supStmt = $db->prepare("
+                        SELECT u.id FROM users u
+                        JOIN roles r ON r.id = u.role_id
+                        WHERE u.branch_id = ?
+                        AND r.role_name ='admin'
+                        AND u.is_active = 1
+                        AND u.id != ?
+                    ");
+                    $supStmt->execute([$branchId, $uid]);
+                    foreach ($supStmt->fetchAll() as $sup) {
+                        $db->prepare("
+                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                            VALUES (?, 'task', 'Work Plan Submitted', ?, ?, 0, NOW())
+                        ")->execute([
+                            $sup['id'],
+                            $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' (auto-approved)',
+                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
+                        ]);
+                    }
+
+                } else {
+                    // Staff created plan for themselves — notify their supervisor (managed_by)
+                    if (!empty($user['managed_by'])) {
+                        $db->prepare("
+                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                            VALUES (?, 'task', 'New Work Plan Submitted', ?, ?, 0, NOW())
+                        ")->execute([
+                            (int) $user['managed_by'],
+                            $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' — awaiting approval',
+                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
+                        ]);
+                    }
+                }
+
+            } catch (Exception $notifEx) {
+                error_log('Plan create notification error: ' . $notifEx->getMessage());
             }
 
             logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
-            $db->commit();
-
-// ── Auto-approve if admin creates plan for themselves ──────────
-if ($isAdmin && $planUserId === $uid) {
-    $db->prepare("
-        UPDATE work_plans SET status='approved', approved_by=?, approved_at=NOW()
-        WHERE id=?
-    ")->execute([$uid, $planId]);
-}
-
-// ── Notifications ──────────────────────────────────────────────
-try {
-    if ($isAdmin && $planUserId !== $uid) {
-        // Admin created plan FOR a staff member — notify that staff
-        $db->prepare("
-            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-            VALUES (?, 'task', 'Work Plan Created for You', ?, ?, 0, NOW())
-        ")->execute([
-            $planUserId,
-            $user['full_name'] . ' created a work plan for you — Week ' . $weekNum . ', ' . $monthLabel,
-            APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
-        ]);
-
-        // Also notify the staff member's supervisor (managed_by) if different from creator
-        $staffRow = $db->prepare("SELECT managed_by, full_name FROM users WHERE id=?");
-        $staffRow->execute([$planUserId]);
-        $staffData = $staffRow->fetch();
-
-        if (!empty($staffData['managed_by']) && $staffData['managed_by'] != $uid) {
-            $db->prepare("
-                INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                VALUES (?, 'task', 'Work Plan Created', ?, ?, 0, NOW())
-            ")->execute([
-                (int) $staffData['managed_by'],
-                $user['full_name'] . ' created a plan for ' . ($staffData['full_name'] ?? 'a staff member')
-                    . ' — Week ' . $weekNum . ', ' . $monthLabel,
-                APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-            ]);
-        }
-
-    } elseif ($isAdmin && $planUserId === $uid) {
-        // Admin created plan for themselves (auto-approved) — notify branch admins/executives
-        $supStmt = $db->prepare("
-            SELECT u.id FROM users u
-            JOIN roles r ON r.id = u.role_id
-            WHERE u.branch_id = ?
-              AND r.role_name ='admin'
-              AND u.is_active = 1
-              AND u.id != ?
-        ");
-        $supStmt->execute([$branchId, $uid]);
-        foreach ($supStmt->fetchAll() as $sup) {
-            $db->prepare("
-                INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                VALUES (?, 'task', 'Work Plan Submitted', ?, ?, 0, NOW())
-            ")->execute([
-                $sup['id'],
-                $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' (auto-approved)',
-                APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-            ]);
-        }
-
-    } else {
-        // Staff created plan for themselves — notify their supervisor (managed_by)
-        if (!empty($user['managed_by'])) {
-            $db->prepare("
-                INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                VALUES (?, 'task', 'New Work Plan Submitted', ?, ?, 0, NOW())
-            ")->execute([
-                (int) $user['managed_by'],
-                $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' — awaiting approval',
-                APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-            ]);
-        }
-    }
-
-} catch (Exception $notifEx) {
-    error_log('Plan create notification error: ' . $notifEx->getMessage());
-}
-
-logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
-setFlash('success', 'Work plan created successfully!');
-header('Location: ' . APP_URL . '/admin/planning/plan_list.php?month=' . $month);
-exit;
             setFlash('success', 'Work plan created successfully!');
             header('Location: ' . APP_URL . '/admin/planning/plan_list.php?month=' . $month);
             exit;
+        
 
         } catch (Exception $e) {
             $db->rollBack();

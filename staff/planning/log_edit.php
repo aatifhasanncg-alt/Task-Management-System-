@@ -35,6 +35,41 @@ $companies = $db->prepare("SELECT id, company_name, company_code, pan_number FRO
 $companies->execute([]);
 $companies = $companies->fetchAll();
 
+// Supervisors from CON dept
+$supervisors = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    INNER JOIN (
+        SELECT u2.id FROM users u2
+        LEFT JOIN departments dp ON dp.id = u2.department_id
+        WHERE dp.dept_code = 'CON' AND u2.is_active = 1
+        UNION
+        SELECT uda2.user_id FROM user_department_assignments uda2
+        JOIN departments du ON du.id = uda2.department_id
+        WHERE du.dept_code = 'CON'
+    ) AS con_users ON con_users.id = u.id
+    WHERE u.is_active = 1
+    ORDER BY u.full_name
+");
+$supervisors->execute();
+$supervisors = $supervisors->fetchAll();
+
+// Default supervisor: UDA managed_by first, fallback to users.managed_by
+$managedByStmt = $db->prepare("
+    SELECT uda.managed_by FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ? AND d.dept_code = 'CON'
+      AND uda.managed_by IS NOT NULL
+    LIMIT 1
+");
+$managedByStmt->execute([$uid]);
+$defaultSupervisor = $managedByStmt->fetchColumn();
+if (!$defaultSupervisor) {
+    $mbStmt = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+    $mbStmt->execute([$uid]);
+    $defaultSupervisor = $mbStmt->fetchColumn();
+}
+
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -46,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $timeOut = $_POST['time_out'] ?: null;
     $visitStatus = $_POST['visit_status'] ?? 'visited';
     $workDesc = trim($_POST['work_description'] ?? '');
-
+    $supervisorId = (int) ($_POST['supervisor_id'] ?? 0) ?: null;
     if (!$clientId)
         $errors[] = 'Please select a client.';
     if (!$logDate)
@@ -70,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             UPDATE work_logs SET
               client_id=?, log_date=?, day_of_week=?, week_number=?, month_year=?,
               time_in=?, time_out=?, duration_hours=?,
-              work_description=?, visit_status=?, updated_at=NOW()
+              work_description=?, visit_status=?, supervisor_id=?, updated_at=NOW()
             WHERE id=? AND user_id=?
         ");
         $upd->execute([
@@ -84,6 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $durHours,
             $workDesc,
             $visitStatus,
+            $supervisorId,
             $logId,
             $uid
         ]);
@@ -94,30 +130,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $clientName = $clientStmt->fetchColumn() ?: '—';
 
         // ── Find supervisors for this branch ───────────────────────────────
-        $supStmt = $db->prepare("
-            SELECT u.id, u.full_name, u.email
-            FROM users u JOIN roles r ON r.id = u.role_id
-            WHERE u.branch_id = ? AND r.role_name = 'admin' AND u.is_active = 1
-        ");
-        $supStmt->execute([$branchId]);
-        $supervisors = $supStmt->fetchAll();
-
-        $staffName  = $user['full_name'] ?? ('User #' . $uid);
-        $logDateFmt = date('d M Y', strtotime($logDate));
-        $logUrl = APP_URL . '/admin/planning/log_view.php?id=' . $logId;
-
-        $statusLabels  = ['visited' => 'Visited', 'missed' => 'Missed', 'rescheduled' => 'Rescheduled'];
-        $statusLabel   = $statusLabels[$visitStatus] ?? $visitStatus;
-        $durationText  = $durHours > 0 ? $durHours . ' hrs' : '—';
-
-        require_once '../../config/notify.php';   // ← ADD THIS (if not already auto-loaded)
-
-        foreach ($supervisors as $sup) {
-            $notifMsg = "{$staffName} edited a visit log for {$clientName} on {$logDateFmt} ({$statusLabel}).";
+        // Notify only the manager (managed_by)
+        if (!empty($user['managed_by'])) {
+            $logDateFmt = date('d M Y', strtotime($logDate));
+            $statusLabel = ucfirst($visitStatus);
+            $logUrl = APP_URL . '/admin/planning/log_view.php?id=' . $logId;
             notify(
-                (int) $sup['id'],
+                (int)$user['managed_by'],
                 'Visit Log Edited',
-                $notifMsg,
+                "{$user['full_name']} edited a visit log for {$clientName} on {$logDateFmt} ({$statusLabel}).",
                 'system',
                 $logUrl,
                 true,
@@ -135,12 +156,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ── Pre-fill from existing log or POST ────────────────────────────────────────
 $f = [
-    'client_id' => $_POST['client_id'] ?? $log['client_id'],
-    'log_date' => $_POST['log_date'] ?? $log['log_date'],
-    'time_in' => $_POST['time_in'] ?? ($log['time_in'] ? substr($log['time_in'], 0, 5) : ''),
-    'time_out' => $_POST['time_out'] ?? ($log['time_out'] ? substr($log['time_out'], 0, 5) : ''),
-    'visit_status' => $_POST['visit_status'] ?? $log['visit_status'],
-    'work_description' => $_POST['work_description'] ?? $log['work_description'],
+    'client_id'        => $_POST['client_id']        ?? $log['client_id'],
+    'log_date'         => $_POST['log_date']          ?? $log['log_date'],
+    'time_in'          => $_POST['time_in']           ?? ($log['time_in']  ? substr($log['time_in'],  0, 5) : ''),
+    'time_out'         => $_POST['time_out']          ?? ($log['time_out'] ? substr($log['time_out'], 0, 5) : ''),
+    'visit_status'     => $_POST['visit_status']      ?? $log['visit_status'],
+    'work_description' => $_POST['work_description']  ?? $log['work_description'],
+    'supervisor_id'    => $_POST['supervisor_id']     ?? $log['supervisor_id'],
 ];
 
 $pageTitle = 'Edit Log';
@@ -258,6 +280,26 @@ include '../../includes/header.php';
                                         </select>
                                     </div>
 
+                                    <div class="col-md-6">
+                                        <label class="cn-label">Supervisor <span style="font-size:.7rem;color:#9ca3af;">(Consulting dept only)</span></label>
+                                        <select name="supervisor_id" id="supervisorSelect" class="cn-input">
+                                            <option value="">— None —</option>
+                                            <?php foreach ($supervisors as $sv):
+                                                $label = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
+                                                $selected = '';
+                                                if (isset($_POST['supervisor_id'])) {
+                                                    $selected = ($_POST['supervisor_id'] == $sv['id']) ? 'selected' : '';
+                                                } else {
+                                                    $selected = ($f['supervisor_id'] == $sv['id']) ? 'selected' : '';
+                                                }
+                                            ?>
+                                                <option value="<?= $sv['id'] ?>" <?= $selected ?>>
+                                                    <?= htmlspecialchars($label) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+
                                     <div class="col-12">
                                         <label class="cn-label">Work Description</label>
                                         <textarea name="work_description" class="cn-input" rows="3"
@@ -334,7 +376,13 @@ include '../../includes/header.php';
         placeholder: 'Search by name, code or PAN...',
         maxOptions: 500,
         allowEmptyOption: true,
-        searchField: ['text']   // searches full option text including PAN
+        searchField: ['text']
+    });
+
+    new TomSelect('#supervisorSelect', {
+        placeholder: 'Search supervisor...',
+        allowEmptyOption: true,
+        searchField: ['text']
     });
 
     function calcDuration() {

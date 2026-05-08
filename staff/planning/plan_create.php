@@ -59,7 +59,48 @@ $companies = $db->prepare("
 ");
 $companies->execute([]);
 $companies = $companies->fetchAll();
+// Supervisors from CON dept (primary or UDA)
+$supervisors = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    INNER JOIN (
+        SELECT u2.id
+        FROM users u2
+        LEFT JOIN departments dp ON dp.id = u2.department_id
+        WHERE dp.dept_code = 'CON'
+          AND u2.is_active = 1
 
+        UNION
+
+        SELECT uda2.user_id
+        FROM user_department_assignments uda2
+        JOIN departments du ON du.id = uda2.department_id
+        WHERE du.dept_code = 'CON'
+    ) AS con_users ON con_users.id = u.id
+    WHERE u.is_active = 1
+    ORDER BY u.full_name
+");
+$supervisors->execute();
+$supervisors = $supervisors->fetchAll();
+
+// Default supervisor: UDA managed_by first, fallback to users.managed_by
+$managedByStmt = $db->prepare("
+    SELECT uda.managed_by
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+      AND d.dept_code = 'CON'
+      AND uda.managed_by IS NOT NULL
+    LIMIT 1
+");
+$managedByStmt->execute([$uid]);
+$defaultSupervisor = $managedByStmt->fetchColumn();
+
+if (!$defaultSupervisor) {
+    $mbStmt = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+    $mbStmt->execute([$uid]);
+    $defaultSupervisor = $mbStmt->fetchColumn();
+}
 $errors = [];
 $success = false;
 
@@ -103,9 +144,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $insE = $db->prepare("
                 INSERT INTO work_plan_entries
-                (plan_id, client_id, client_code, assigned_to, plan_date,
-                 day_of_week, planned_time_in, planned_time_out, planned_hours, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                (plan_id, client_id, client_code, assigned_to, supervisor_id, plan_date,
+                day_of_week, planned_time_in, planned_time_out, planned_hours, notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ");
 
             foreach ($entries as $e) {
@@ -125,8 +166,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $cc = '';
                 foreach ($companies as $c) { if ($c['id'] == $cid) { $cc = $c['company_code']; break; } }
 
+                $supId = (int)($e['supervisor_id'] ?? 0) ?: null;
                 $insE->execute([
-                    $planId, $cid, $cc, $uid, $pdate,
+                    $planId, $cid, $cc, $uid, $supId, $pdate,
                     $dow, $tin, $tout, $hrs, trim($e['notes'] ?? '')
                 ]);
             }
@@ -167,6 +209,17 @@ include '../../includes/header.php';
 .entry-row:last-child { border-bottom:none; }
 .required-star { color:#ef4444; }
 .hrs-pill { background:#f9fafb; border-radius:6px; padding:5px 10px; font-size:.77rem; color:#9ca3af; }
+
+/* Fix TomSelect dropdown clipping inside panels/cards */
+.cn-panel,
+.card-mis,
+#entriesContainer {
+    overflow: visible !important;
+}
+.ts-dropdown {
+    z-index: 9999 !important;
+    position: absolute !important;
+}
 </style>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_staff.php'; ?>
@@ -346,7 +399,7 @@ include '../../includes/header.php';
 </div>
 
 <!-- Entry Template (hidden) -->
-<template id="entryTemplate">
+<div id="entryTemplate" style="display:none;">
 <div class="entry-row" data-index="__IDX__">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <span style="font-size:.82rem;font-weight:600;color:#c9a84c;">
@@ -384,11 +437,25 @@ include '../../includes/header.php';
             <input type="time" name="entries[__IDX__][time_out]" class="cn-input time-out">
         </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;">
         <div>
             <label class="cn-label">Notes</label>
             <input type="text" name="entries[__IDX__][notes]" class="cn-input"
                    placeholder="Purpose of visit…">
+        </div>
+        <div>
+            <label class="cn-label">Supervisor</label>
+            <select name="entries[__IDX__][supervisor_id]" class="cn-input supervisor-select">
+                <option value="">— None —</option>
+                <?php foreach ($supervisors as $sv):
+                    $label = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
+                ?>
+                <option value="<?= $sv['id'] ?>"
+                    data-default="<?= $defaultSupervisor == $sv['id'] ? '1' : '0' ?>">
+                    <?= htmlspecialchars($label) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div class="hrs-pill">
             <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
@@ -396,7 +463,7 @@ include '../../includes/header.php';
         </div>
     </div>
 </div>
-</template>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
@@ -426,7 +493,7 @@ function addEntry() {
     const html = tpl.replaceAll('__IDX__', entryIdx);
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
-    const row = wrap.firstElementChild;
+    const row = wrap.querySelector('.entry-row');
 
     // Date constraints
     const ws = weekStartEl.value, we = weekEndEl.value;
@@ -434,12 +501,23 @@ function addEntry() {
     if (ws) dateEl.min = ws;
     if (we) dateEl.max = we;
 
-    // TomSelect
+    // TomSelect — client
     new TomSelect(row.querySelector('.client-select'), {
         placeholder: 'Search by name, code or PAN…',
         maxOptions: 500,
         searchField: ['text']
     });
+
+    // TomSelect — supervisor with default
+    const supSelect = row.querySelector('.supervisor-select');
+    const supTs = new TomSelect(supSelect, {
+        placeholder: 'Search supervisor…',
+        allowEmptyOption: true,
+        searchField: ['text']
+    });
+    // Set default to managed_by
+    const defaultOpt = supSelect.querySelector('option[data-default="1"]');
+    if (defaultOpt) supTs.setValue(defaultOpt.value);
 
     // Time calc
     row.querySelectorAll('.time-in,.time-out').forEach(t =>

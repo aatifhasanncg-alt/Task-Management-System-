@@ -8,216 +8,177 @@ require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 requireAnyRole();
 
-$db   = getDB();
+$db = getDB();
 $user = currentUser();
-$uid  = (int)$user['id'];
+$uid = (int) $user['id'];
 
-
-$branchId = (int)$user['branch_id'];
-$deptId   = (int)$user['department_id'];
+$branchId = (int) $user['branch_id'];
 $selectedBranch = $_GET['branch'] ?? 'all';
 
-$branchFilterSQL = '';
-if ($selectedBranch !== 'all') {
-    $branchFilterSQL = "AND branch_id=".(int)$selectedBranch;
-}
+$branchFilterSQL   = $selectedBranch !== 'all' ? "AND wl.branch_id  = " . (int)$selectedBranch : '';
+$branchFilterSQLWP = $selectedBranch !== 'all' ? "AND wp.branch_id  = " . (int)$selectedBranch : '';
+$branchFilterSQLU  = $selectedBranch !== 'all' ? "AND u.branch_id   = " . (int)$selectedBranch : '';
+$branchFilterSQLCO = $selectedBranch !== 'all' ? "AND owl.branch_id = " . (int)$selectedBranch : '';
+
 $now        = new DateTime();
 $month      = $_GET['month'] ?? $now->format('Y-m');
 $monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
+$monthEnd   = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');
 
-// ── BRANCH-WIDE KPIs ────────────────────────────────────────────
-$totalLogs = (int)$db->query("
-    SELECT COUNT(*) FROM work_logs
-    WHERE 1=1 $branchFilterSQL AND month_year='{$month}'
-")->fetchColumn();
+/* ── FIELD KPIs ── */
+$totalLogs    = (int)$db->query("SELECT COUNT(*) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}'")->fetchColumn();
+$totalHours   = (float)$db->query("SELECT COALESCE(SUM(wl.duration_hours),0) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}'")->fetchColumn();
+$totalClients = (int)$db->query("SELECT COUNT(DISTINCT wl.client_id) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}'")->fetchColumn();
 
-$totalHours = (float)$db->query("
-    SELECT COALESCE(SUM(duration_hours),0) FROM work_logs
-    WHERE 1=1 $branchFilterSQL AND month_year='{$month}'
-")->fetchColumn();
-
-$totalClients = (int)$db->query("
-    SELECT COUNT(DISTINCT client_id) FROM work_logs
-    WHERE 1=1 $branchFilterSQL AND month_year='{$month}'
-")->fetchColumn();
-
-// NEW
 $activeStaff = (int)$db->query("
-    SELECT COUNT(DISTINCT wl.user_id)
-    FROM work_logs wl
-    WHERE wl.month_year = '{$month}'
-      $branchFilterSQL
+    SELECT COUNT(DISTINCT wl.user_id) FROM work_logs wl
+    WHERE wl.month_year='{$month}' {$branchFilterSQL}
       AND wl.user_id IN (
-          -- Primary department on users table
-          SELECT u.id FROM users u
-          JOIN departments d ON d.id = u.department_id AND d.dept_code = 'CON'
-          WHERE u.is_active = 1
+          SELECT u.id FROM users u JOIN departments d ON d.id=u.department_id AND d.dept_code='CON' WHERE u.is_active=1
           UNION
-          -- Secondary/multi department assignments
-          SELECT uda.user_id FROM user_department_assignments uda
-          JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
-      )
-")->fetchColumn();
+          SELECT uda.user_id FROM user_department_assignments uda JOIN departments d ON d.id=uda.department_id AND d.dept_code='CON'
+      )")->fetchColumn();
 
-$visitedCnt     = (int)$db->query("SELECT COUNT(*) FROM work_logs WHERE 1=1 $branchFilterSQL AND month_year='{$month}' AND visit_status='visited'")->fetchColumn();
-$missedCnt      = (int)$db->query("SELECT COUNT(*) FROM work_logs WHERE 1=1 $branchFilterSQL AND month_year='{$month}' AND visit_status='missed'")->fetchColumn();
-$rescheduledCnt = (int)$db->query("SELECT COUNT(*) FROM work_logs WHERE 1=1 $branchFilterSQL AND month_year='{$month}' AND visit_status='rescheduled'")->fetchColumn();
+$visitedCnt     = (int)$db->query("SELECT COUNT(*) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}' AND wl.visit_status='visited'")->fetchColumn();
+$missedCnt      = (int)$db->query("SELECT COUNT(*) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}' AND wl.visit_status='missed'")->fetchColumn();
+$rescheduledCnt = (int)$db->query("SELECT COUNT(*) FROM work_logs wl WHERE 1=1 {$branchFilterSQL} AND wl.month_year='{$month}' AND wl.visit_status='rescheduled'")->fetchColumn();
 
-$pendingApprovals = (int)$db->query("
-    SELECT COUNT(*) FROM work_plans
-    WHERE 1=1 $branchFilterSQL AND status='submitted'
-")->fetchColumn();
+$pendingApprovals = (int)$db->query("SELECT COUNT(*) FROM work_plans wp WHERE 1=1 {$branchFilterSQLWP} AND wp.status='submitted'")->fetchColumn();
 
-// Branch planned hours this month
 $plannedHours = (float)$db->query("
     SELECT COALESCE(SUM(wpe.planned_hours),0)
-    FROM work_plan_entries wpe
-    JOIN work_plans wp ON wp.id=wpe.plan_id
-    WHERE 1=1 $branchFilterSQL AND wp.plan_month='{$monthStart}'
-")->fetchColumn();
+    FROM work_plan_entries wpe JOIN work_plans wp ON wp.id=wpe.plan_id
+    WHERE 1=1 {$branchFilterSQLWP} AND wp.plan_month='{$monthStart}'")->fetchColumn();
 
-$rawEff   = $plannedHours > 0 ? round(($totalHours / $plannedHours) * 100) : 0;
+$rawEff    = $plannedHours > 0 ? round(($totalHours / $plannedHours) * 100) : 0;
 $efficiency = min($rawEff, 100);
 
-// ── STAFF PERFORMANCE TABLE ─────────────────────────────────────
+/* ── OFFICE KPIs ── */
+$officeLogCount  = (int)$db->query("SELECT COUNT(*) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'")->fetchColumn();
+$officeCompleted = (int)$db->query("SELECT COUNT(*) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND owl.status='completed'")->fetchColumn();
+$officeWip       = (int)$db->query("SELECT COUNT(*) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND owl.status='wip'")->fetchColumn();
+$officeHolding   = (int)$db->query("SELECT COUNT(*) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND owl.status='holding'")->fetchColumn();
+$officeNotStart  = (int)$db->query("SELECT COUNT(*) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND owl.status='not_started'")->fetchColumn();
+$officeClients   = (int)$db->query("SELECT COUNT(DISTINCT owl.client_id) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'")->fetchColumn();
+$officeHours     = (float)$db->query("SELECT COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60),0) FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'")->fetchColumn();
+
+/* ── STAFF PERFORMANCE ── */
 $staffPerf = $db->query("
     SELECT u.id, u.full_name, u.employee_id,
-           COUNT(wl.id)                          AS log_count,
-           COALESCE(SUM(wl.duration_hours),0)    AS actual_hours,
-           SUM(wl.visit_status='visited')        AS visited,
-           SUM(wl.visit_status='missed')         AS missed,
-           SUM(wl.visit_status='rescheduled')    AS rescheduled,
-           COUNT(DISTINCT wl.client_id)          AS unique_clients
+           COUNT(wl.id) AS log_count,
+           COALESCE(SUM(wl.duration_hours),0) AS actual_hours,
+           SUM(wl.visit_status='visited') AS visited,
+           SUM(wl.visit_status='missed')  AS missed,
+           COUNT(DISTINCT wl.client_id)   AS unique_clients
     FROM users u
-    LEFT JOIN work_logs wl
-           ON wl.user_id = u.id
-           AND wl.month_year = '{$month}'
-           AND wl.branch_id = {$branchId}
-    WHERE u.is_active = 1
-      $branchFilterSQL
+    LEFT JOIN work_logs wl ON wl.user_id=u.id AND wl.month_year='{$month}' AND wl.branch_id={$branchId}
+    WHERE u.is_active=1 {$branchFilterSQLU}
       AND u.id IN (
-          SELECT u2.id FROM users u2
-          JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
-          WHERE u2.is_active = 1
-          UNION
-          SELECT uda.user_id FROM user_department_assignments uda
-          JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+          SELECT u2.id FROM users u2 JOIN departments d ON d.id=u2.department_id AND d.dept_code='CON' WHERE u2.is_active=1
+          UNION SELECT uda.user_id FROM user_department_assignments uda JOIN departments d ON d.id=uda.department_id AND d.dept_code='CON'
       )
-    GROUP BY u.id, u.full_name, u.employee_id
-    ORDER BY actual_hours DESC
-")->fetchAll();
+    GROUP BY u.id ORDER BY actual_hours DESC")->fetchAll();
 
-// planned hours per staff
 $staffPlanned = $db->query("
     SELECT wpe.assigned_to, COALESCE(SUM(wpe.planned_hours),0) AS planned
-    FROM work_plan_entries wpe
-    JOIN work_plans wp ON wp.id = wpe.plan_id
-    WHERE wp.plan_month = '{$monthStart}'
-      $branchFilterSQL
+    FROM work_plan_entries wpe JOIN work_plans wp ON wp.id=wpe.plan_id
+    WHERE wp.plan_month='{$monthStart}' {$branchFilterSQLWP}
       AND wpe.assigned_to IN (
-          SELECT u.id FROM users u
-          JOIN departments d ON d.id = u.department_id AND d.dept_code = 'CON'
-          WHERE u.is_active = 1
-          UNION
-          SELECT uda.user_id FROM user_department_assignments uda
-          JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+          SELECT u.id FROM users u JOIN departments d ON d.id=u.department_id AND d.dept_code='CON' WHERE u.is_active=1
+          UNION SELECT uda.user_id FROM user_department_assignments uda JOIN departments d ON d.id=uda.department_id AND d.dept_code='CON'
       )
-    GROUP BY wpe.assigned_to
-")->fetchAll(PDO::FETCH_KEY_PAIR);
+    GROUP BY wpe.assigned_to")->fetchAll(PDO::FETCH_KEY_PAIR);
 
-// ── CLIENT VISIT SUMMARY ─────────────────────────────────────────
+/* ── CLIENT SUMMARY ── */
 $clientSummary = $db->query("
     SELECT c.id, c.company_name, c.company_code,
-           COUNT(wl.id)                       AS total_visits,
-           COUNT(DISTINCT wl.user_id)         AS staff_count,
+           COUNT(wl.id) AS total_visits,
            COALESCE(SUM(wl.duration_hours),0) AS total_hours,
-           SUM(wl.visit_status='visited')     AS visited,
-           SUM(wl.visit_status='missed')      AS missed,
-           MAX(wl.log_date)                   AS last_visit
+           SUM(wl.visit_status='visited') AS visited,
+           SUM(wl.visit_status='missed')  AS missed,
+           MAX(wl.log_date) AS last_visit
     FROM companies c
     LEFT JOIN work_logs wl ON wl.client_id=c.id AND wl.month_year='{$month}' AND wl.branch_id={$branchId}
     WHERE c.branch_id={$branchId} AND c.is_active=1
-    GROUP BY c.id
-    ORDER BY total_visits DESC
-    LIMIT 10
-")->fetchAll();
+    GROUP BY c.id ORDER BY total_visits DESC LIMIT 10")->fetchAll();
 
-// Staff who visited each client
-$clientStaff = $db->query("
-    SELECT wl.client_id, u.full_name, COUNT(*) cnt
-    FROM work_logs wl
-    JOIN users u ON u.id=wl.user_id
-    WHERE wl.month_year='{$month}' AND wl.branch_id={$branchId}
-    GROUP BY wl.client_id, u.id
-")->fetchAll();
-$csMap = [];
-foreach ($clientStaff as $cs) {
-    $csMap[$cs['client_id']][] = $cs['full_name'];
-}
+/* ── OFFICE LOGS TABLE ── */
+$officeLogs = $db->query("
+    SELECT owl.*, u.full_name, u.employee_id AS emp_id, c.company_name, c.company_code, d.dept_name
+    FROM office_work_logs owl
+    JOIN users u ON u.id=owl.user_id
+    JOIN companies c ON c.id=owl.client_id
+    JOIN departments d ON d.id=owl.department_id
+    WHERE 1=1 {$branchFilterSQLCO} AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'
+    ORDER BY owl.log_date DESC, owl.time_in DESC LIMIT 15")->fetchAll();
 
-// ── PENDING APPROVAL QUEUE ───────────────────────────────────────
+/* ── PENDING APPROVALS ── */
 $pendingPlans = $db->query("
-    SELECT wp.*, u.full_name, u.employee_id,
-           COUNT(wpe.id) entry_count,
-           COALESCE(SUM(wpe.planned_hours),0) planned_hours
-    FROM work_plans wp
-    JOIN users u ON u.id=wp.user_id
+    SELECT wp.*, u.full_name, u.employee_id, COUNT(wpe.id) entry_count, COALESCE(SUM(wpe.planned_hours),0) planned_hours
+    FROM work_plans wp JOIN users u ON u.id=wp.user_id
     LEFT JOIN work_plan_entries wpe ON wpe.plan_id=wp.id
     WHERE wp.branch_id={$branchId} AND wp.status='submitted'
-    GROUP BY wp.id
-    ORDER BY wp.created_at ASC
-    LIMIT 8
-")->fetchAll();
+    GROUP BY wp.id ORDER BY wp.created_at ASC LIMIT 8")->fetchAll();
 
-// ── MONTHLY TREND (last 6 months) ────────────────────────────────
+/* ── 6-MONTH TREND ── */
 $trend = $db->query("
-    SELECT month_year,
-           COUNT(*) AS logs,
-           COALESCE(SUM(duration_hours),0) AS hours,
-           SUM(visit_status='visited') AS visited,
-           SUM(visit_status='missed')  AS missed
-    FROM work_logs
-    WHERE 1=1 $branchFilterSQL
-    GROUP BY month_year
-    ORDER BY month_year DESC
-    LIMIT 6
-")->fetchAll();
+    SELECT wl.month_year, COUNT(*) AS logs, COALESCE(SUM(wl.duration_hours),0) AS hours,
+           SUM(wl.visit_status='visited') AS visited, SUM(wl.visit_status='missed') AS missed
+    FROM work_logs wl WHERE 1=1 {$branchFilterSQL}
+    GROUP BY wl.month_year ORDER BY wl.month_year DESC LIMIT 6")->fetchAll();
 $trend = array_reverse($trend);
 
-// ── UNVISITED CLIENTS (0 logs this month) ───────────────────────
-$unvisited = $db->query("
-    SELECT c.company_name, c.company_code
-    FROM companies c
-    WHERE 1=1 $branchFilterSQL AND c.is_active=1
-      AND c.id NOT IN (
-          SELECT DISTINCT client_id FROM work_logs
-          WHERE month_year='{$month}' $branchFilterSQL
-      )
-    LIMIT 8
-")->fetchAll();
+$officeTrend = $db->query("
+    SELECT DATE_FORMAT(owl.log_date,'%Y-%m') AS month_year,
+           COUNT(*) AS logs,
+           COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60),0) AS hours
+    FROM office_work_logs owl WHERE 1=1 {$branchFilterSQLCO}
+    GROUP BY DATE_FORMAT(owl.log_date,'%Y-%m') ORDER BY month_year DESC LIMIT 6")->fetchAll(PDO::FETCH_ASSOC);
+$officeTrend = array_reverse($officeTrend);
 
-// ── STAFF WITH NO LOGS ───────────────────────────────────────────
+/* ── ALERTS ── */
 $noLogStaff = $db->query("
-    SELECT DISTINCT u.full_name, u.employee_id
-    FROM users u
-    WHERE u.is_active = 1
-      $branchFilterSQL
+    SELECT DISTINCT u.full_name, u.employee_id FROM users u
+    WHERE u.is_active=1 {$branchFilterSQLU}
       AND u.id IN (
-          SELECT u2.id FROM users u2
-          JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
-          WHERE u2.is_active = 1
-          UNION
-          SELECT uda.user_id FROM user_department_assignments uda
-          JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
+          SELECT u2.id FROM users u2 JOIN departments d ON d.id=u2.department_id AND d.dept_code='CON' WHERE u2.is_active=1
+          UNION SELECT uda.user_id FROM user_department_assignments uda JOIN departments d ON d.id=uda.department_id AND d.dept_code='CON'
       )
-      AND u.id NOT IN (
-          SELECT DISTINCT user_id FROM work_logs
-          WHERE month_year = '{$month}'
-            $branchFilterSQL
-      )
-")->fetchAll();
+      AND u.id NOT IN (SELECT DISTINCT wl.user_id FROM work_logs wl WHERE wl.month_year='{$month}' {$branchFilterSQL})")->fetchAll();
+
+$unvisited = $db->query("
+    SELECT c.company_name, c.company_code FROM companies c
+    WHERE c.branch_id={$branchId} AND c.is_active=1
+      AND c.id NOT IN (SELECT DISTINCT wl.client_id FROM work_logs wl WHERE wl.month_year='{$month}' AND wl.branch_id={$branchId})
+    LIMIT 8")->fetchAll();
+
+/* ── BUILD JS DATA ARRAYS ── */
+$trendLabels     = json_encode(array_map(fn($t) => date('M', strtotime($t['month_year'].'-01')), $trend));
+$trendFieldHours = json_encode(array_map(fn($t) => round((float)$t['hours'], 1), $trend));
+$trendFieldVisit = json_encode(array_map(fn($t) => (int)$t['visited'], $trend));
+$trendFieldMiss  = json_encode(array_map(fn($t) => (int)$t['missed'], $trend));
+
+$trendOfficeMapped = [];
+foreach ($trend as $t) {
+    $found = array_filter($officeTrend, fn($o) => $o['month_year'] === $t['month_year']);
+    $trendOfficeMapped[] = $found ? round((float)array_values($found)[0]['hours'], 1) : 0;
+}
+$trendOfficeHours = json_encode($trendOfficeMapped);
+
+$clientNames  = json_encode(array_map(fn($c) => mb_strimwidth($c['company_name'], 0, 18, '…'), $clientSummary));
+$clientVisits = json_encode(array_map(fn($c) => (int)$c['visited'], $clientSummary));
+$clientMissed = json_encode(array_map(fn($c) => (int)$c['missed'], $clientSummary));
+$clientHours  = json_encode(array_map(fn($c) => round((float)$c['total_hours'], 1), $clientSummary));
+
+$staffNames      = json_encode(array_map(fn($s) => explode(' ', $s['full_name'])[0], $staffPerf));
+$staffHours      = json_encode(array_map(fn($s) => round((float)$s['actual_hours'], 1), $staffPerf));
+$staffPlannedArr = json_encode(array_map(fn($s) => round((float)($staffPlanned[$s['id']] ?? 0), 1), $staffPerf));
+$staffVisited    = json_encode(array_map(fn($s) => (int)$s['visited'], $staffPerf));
+$staffMissed     = json_encode(array_map(fn($s) => (int)$s['missed'], $staffPerf));
+
+$branches = $db->query("SELECT id, branch_name FROM branches ORDER BY branch_name")->fetchAll();
 
 $pageTitle = 'Executive Dashboard';
 include '../../includes/header.php';
@@ -225,34 +186,261 @@ include '../../includes/header.php';
 <link rel="stylesheet" href="../../../staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
 <style>
-.exec-section-title {
-    font-size:.78rem;font-weight:700;color:#9ca3af;
-    text-transform:uppercase;letter-spacing:.06em;
-    margin:0 0 12px 0;
+/* ═══════════════════════════════════════════
+   EXECUTIVE DASHBOARD — LAYOUT RESET
+   Key fix: override .main-content so it
+   doesn't fight with the sidebar width,
+   and use padding-based layout instead of
+   relying on the outer grid to size panels.
+═══════════════════════════════════════════ */
+
+:root {
+    --gold:#c9a84c; --gold-lt:#fdf6e3;
+    --blue:#378ADD; --blue-lt:#E6F1FB;
+    --green:#1D9E75; --green-lt:#E1F5EE; --green-dk:#0F6E56;
+    --red:#E24B4A;   --red-lt:#FCEBEB;   --red-dk:#A32D2D;
+    --amber:#BA7517; --amber-lt:#FAEEDA;
+    --purple:#7F77DD; --purple-lt:#EEEDFE;
+    --gray-50:#f9fafb; --gray-100:#f3f4f6; --gray-200:#e5e7eb;
+    --gray-400:#9ca3af; --gray-600:#6b7280; --gray-800:#1f2937;
+    --radius-sm:6px; --radius-md:10px; --radius-lg:14px;
+    --shadow-sm:0 1px 3px rgba(0,0,0,.06);
 }
-.staff-eff-bar {
-    height:5px;border-radius:99px;background:#f1f5f9;overflow:hidden;margin-top:4px;
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ── Critical layout fix ── */
+.db-wrap {
+    padding: 0 0 2.5rem;
+    font-family: 'DM Sans', sans-serif;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
 }
-.staff-eff-fill { height:100%;border-radius:99px; }
-.alert-chip {
-    display:inline-flex;align-items:center;gap:5px;
-    padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:600;
+
+/* Ensure main-content doesn't overflow the viewport */
+.main-content {
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    width: 100% !important;
 }
-.trend-bar-wrap { display:flex;align-items:flex-end;gap:6px;height:60px; }
-.trend-bar { flex:1;border-radius:4px 4px 0 0;min-width:24px;position:relative;cursor:pointer; }
-.trend-label { font-size:.65rem;color:#9ca3af;text-align:center;margin-top:4px; }
+
+/* ── Section divider ── */
+.sec-div {
+    display:flex; align-items:center; gap:10px;
+    margin:1.75rem 0 1.1rem;
+}
+.sec-div::before, .sec-div::after {
+    content:''; flex:1; height:1px; background:var(--gray-200);
+}
+.sec-div-label {
+    display:flex; align-items:center; gap:6px;
+    font-size:11px; font-weight:600; color:var(--gray-600);
+    text-transform:uppercase; letter-spacing:.07em; white-space:nowrap;
+}
+
+/* ── KPI grid ── */
+.kpi-grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap:8px; margin-bottom:1.25rem;
+}
+.kpi-tile {
+    background:#fff; border:1px solid var(--gray-200);
+    border-radius:var(--radius-md); padding:12px 14px;
+    position:relative; overflow:hidden; transition:box-shadow .2s;
+    min-width:0;
+}
+.kpi-tile:hover { box-shadow:var(--shadow-sm); }
+.kpi-tile-accent {
+    position:absolute; top:0; left:0; width:3px; height:100%;
+    border-radius:3px 0 0 3px;
+}
+.kpi-icon  { font-size:15px; margin-bottom:6px; opacity:.85; }
+.kpi-val   { font-size:21px; font-weight:600; color:var(--gray-800); line-height:1; font-family:'DM Mono',monospace; }
+.kpi-lbl   { font-size:11px; color:var(--gray-400); margin-top:4px; font-weight:500; }
+.kpi-sub   { font-size:10px; color:var(--gray-400); margin-top:2px; }
+
+/* ── Panel ── */
+.panel {
+    background:#fff; border:1px solid var(--gray-200);
+    border-radius:var(--radius-lg); overflow:hidden;
+    box-shadow:var(--shadow-sm); min-width:0;
+}
+.panel-hd {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; border-bottom:1px solid var(--gray-100);
+}
+.panel-title {
+    font-size:12.5px; font-weight:600; color:var(--gray-800);
+    display:flex; align-items:center; gap:7px;
+}
+.panel-sub { font-size:11px; color:var(--gray-400); }
+
+/* ── THE KEY GRID FIX ──
+   Use margin-bottom on each grid wrapper instead of on .panel
+   so panels inside grids don't add extra space.
+   All children get min-width:0 to allow shrinking.
+── */
+.db-grid-3 {
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap:14px;
+    margin-bottom:1.25rem;
+    width:100%;
+}
+.db-grid-2 {
+    display:grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap:14px;
+    margin-bottom:1.25rem;
+    width:100%;
+}
+.db-grid-main {
+    display:grid;
+    grid-template-columns: 1fr 320px;
+    gap:14px;
+    margin-bottom:1.25rem;
+    width:100%;
+}
+.db-grid-3 > *,
+.db-grid-2 > *,
+.db-grid-main > * {
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* ── Chart wrapper ── */
+.chart-box {
+    position:relative;
+    width:100%;
+}
+.chart-box canvas {
+    display:block !important;
+    width:100% !important;
+}
+
+/* ── Bar rows ── */
+.bar-row { display:flex; align-items:center; gap:8px; margin-bottom:9px; font-size:12px; }
+.bar-lbl { flex-shrink:0; font-size:11px; font-weight:500; color:var(--gray-600); width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bar-track { flex:1; min-width:0; height:7px; background:var(--gray-100); border-radius:99px; overflow:hidden; }
+.bar-fill  { height:100%; border-radius:99px; transition:width .5s cubic-bezier(.4,0,.2,1); }
+.bar-val   { flex-shrink:0; width:40px; text-align:right; font-weight:600; color:var(--gray-800); font-family:'DM Mono',monospace; font-size:11px; }
+
+/* ── Legend ── */
+.legend-row {
+    display:flex; flex-wrap:wrap; gap:12px;
+    padding:8px 16px 12px; font-size:11px; color:var(--gray-600);
+}
+.leg-item { display:flex; align-items:center; gap:5px; }
+.leg-dot  { width:8px; height:8px; border-radius:2px; flex-shrink:0; }
+
+/* ── Visit status donut panel inner ── */
+.donut-wrap {
+    padding:14px 16px;
+    display:flex;
+    align-items:center;
+    gap:14px;
+    flex-wrap:nowrap;
+}
+.donut-canvas-wrap {
+    position:relative;
+    flex-shrink:0;
+    width:90px;
+    height:90px;
+}
+.donut-legend {
+    flex:1;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+}
+.donut-leg-row {
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:11px;
+    min-width:0;
+}
+.donut-center {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    pointer-events:none;
+}
+
+/* ── Pills ── */
+.pill { display:inline-block; font-size:10px; font-weight:600; padding:2px 7px; border-radius:99px; letter-spacing:.02em; flex-shrink:0; }
+.pill-v { background:var(--green-lt); color:var(--green-dk); }
+.pill-m { background:var(--red-lt);   color:var(--red-dk);   }
+.pill-a { background:var(--amber-lt); color:var(--amber);    }
+.pill-b { background:var(--blue-lt);  color:#185FA5;         }
+.pill-g { background:var(--gray-100); color:var(--gray-600); }
+.pill-p { background:var(--purple-lt);color:#534AB7;         }
+
+/* ── Staff list ── */
+.staff-item {
+    display:flex; align-items:center; gap:10px; padding:9px 0;
+    border-bottom:1px solid var(--gray-100);
+}
+.staff-item:last-child { border-bottom:none; }
+.avatar {
+    width:32px; height:32px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:10px; font-weight:600; flex-shrink:0; font-family:'DM Mono',monospace;
+}
+.eff-bar { height:3px; border-radius:99px; background:var(--gray-100); margin-top:4px; width:64px; overflow:hidden; }
+.eff-fill { height:100%; border-radius:99px; transition:width .5s; }
+
+/* ── Alert items ── */
+.alert-item {
+    display:flex; align-items:center; gap:8px; padding:7px 10px;
+    border-radius:var(--radius-sm); margin-bottom:5px; font-size:12px; font-weight:500;
+}
+
+/* ── Office logs table ── */
+.ol-table { width:100%; border-collapse:collapse; font-size:12px; }
+.ol-table th {
+    padding:9px 12px; background:var(--gray-50); color:var(--gray-600);
+    font-weight:600; font-size:11px; text-align:left;
+    border-bottom:1px solid var(--gray-200);
+}
+.ol-table td {
+    padding:9px 12px; border-bottom:1px solid var(--gray-100);
+    color:var(--gray-800); vertical-align:middle;
+}
+.ol-table tr:last-child td { border-bottom:none; }
+.ol-table tr:hover td { background:var(--gray-50); }
+
+/* ── Pending plan card ── */
+.pend-card {
+    background:var(--gray-50); border-radius:var(--radius-md);
+    padding:10px 12px; border-left:3px solid var(--blue); margin-bottom:8px;
+}
+.pend-card:last-child { margin-bottom:0; }
+
+/* ── Responsive ── */
+@media (max-width: 1100px) {
+    .db-grid-3 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 900px) {
+    .db-grid-3, .db-grid-2, .db-grid-main { grid-template-columns: 1fr; }
+}
 </style>
 
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
-        <div class="cn-wrap">
+        <div class="cn-wrap db-wrap">
 
             <?= flashHtml() ?>
 
-            <!-- PAGE HERO -->
+            <!-- ══ PAGE HERO ══ -->
             <div class="page-hero mb-4">
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
                     <div>
@@ -262,10 +450,19 @@ include '../../includes/header.php';
                     </div>
                     <div class="d-flex gap-2 flex-wrap align-items-center">
                         <input type="month" class="form-control form-control-sm" style="width:155px;"
-                            value="<?= $month ?>" onchange="location='?month='+this.value">
+                            value="<?= $month ?>" onchange="location='?month='+this.value+'&branch=<?= $selectedBranch ?>'">
+                        <select class="form-control form-control-sm" style="width:170px;"
+                            onchange="location='?month=<?= $month ?>&branch='+this.value">
+                            <option value="all" <?= $selectedBranch==='all'?'selected':'' ?>>All Branches</option>
+                            <?php foreach ($branches as $b): ?>
+                            <option value="<?= $b['id'] ?>" <?= $selectedBranch==$b['id']?'selected':'' ?>>
+                                <?= htmlspecialchars($b['branch_name']) ?>
+                            </option>
+                            <?php endforeach; ?>
+                        </select>
                         <?php if ($pendingApprovals > 0): ?>
                         <a href="plans.php?status=submitted&month=<?= $month ?>" class="btn btn-sm btn-warning">
-                            <i class="fas fa-bell me-1"></i> <?= $pendingApprovals ?> Pending
+                            <i class="fas fa-bell me-1"></i><?= $pendingApprovals ?> Pending
                         </a>
                         <?php endif; ?>
                         <a href="create_plan.php" class="btn btn-sm btn-gold">
@@ -275,337 +472,602 @@ include '../../includes/header.php';
                             <i class="fas fa-chart-bar me-1"></i> Reports
                         </a>
                     </div>
-                    <select class="form-control form-control-sm" style="width:170px;"
-    onchange="location='?month=<?= $month ?>&branch='+this.value">
-
-    <option value="all" <?= $selectedBranch=='all'?'selected':'' ?>>All Branches</option>
-
-    <?php
-    $branches = $db->query("SELECT id, branch_name FROM branches ORDER BY branch_name")->fetchAll();
-    foreach ($branches as $b):
-    ?>
-        <option value="<?= $b['id'] ?>" <?= $selectedBranch==$b['id']?'selected':'' ?>>
-            <?= htmlspecialchars($b['branch_name']) ?>
-        </option>
-    <?php endforeach; ?>
-</select>
                 </div>
             </div>
 
-            <!-- KPI ROW -->
-            <div class="kpi-row mb-4">
-                <div class="kpi-tile" style="--kpi-color:#3b82f6;">
-                    <div class="kpi-icon"><i class="fas fa-users" style="color:#3b82f6;"></i></div>
-                    <div class="kpi-val"><?= $activeStaff ?></div>
-                    <div class="kpi-label">Active Staff</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#8b5cf6;">
-                    <div class="kpi-icon"><i class="fas fa-clipboard-list" style="color:#8b5cf6;"></i></div>
-                    <div class="kpi-val"><?= $totalLogs ?></div>
-                    <div class="kpi-label">Total Logs</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#c9a84c;">
-                    <div class="kpi-icon"><i class="fas fa-clock" style="color:#c9a84c;"></i></div>
-                    <div class="kpi-val"><?= number_format($totalHours,1) ?>h</div>
-                    <div class="kpi-label">Hours Logged</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#0ea5e9;">
-                    <div class="kpi-icon"><i class="fas fa-building" style="color:#0ea5e9;"></i></div>
-                    <div class="kpi-val"><?= $totalClients ?></div>
-                    <div class="kpi-label">Clients Reached</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#10b981;">
-                    <div class="kpi-icon"><i class="fas fa-check-circle" style="color:#10b981;"></i></div>
-                    <div class="kpi-val"><?= $visitedCnt ?></div>
-                    <div class="kpi-label">Visited</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#ef4444;">
-                    <div class="kpi-icon"><i class="fas fa-times-circle" style="color:#ef4444;"></i></div>
-                    <div class="kpi-val"><?= $missedCnt ?></div>
-                    <div class="kpi-label">Missed</div>
-                </div>
-                <div class="kpi-tile" style="--kpi-color:#f59e0b;">
-                    <div class="kpi-icon"><i class="fas fa-bell" style="color:#f59e0b;"></i></div>
-                    <div class="kpi-val"><?= $pendingApprovals ?></div>
-                    <div class="kpi-label">Pending Approval</div>
-                </div>
-                <?php $ec = $rawEff >= 80 ? '#10b981' : ($rawEff >= 50 ? '#f59e0b' : '#ef4444'); ?>
-                <div class="kpi-tile" style="--kpi-color:<?= $ec ?>;">
-                    <div class="kpi-icon"><i class="fas fa-tachometer-alt" style="color:<?= $ec ?>;"></i></div>
-                    <div class="kpi-val" style="color:<?= $ec ?>;"><?= $efficiency ?>%</div>
-                    <div class="kpi-label">Team Efficiency</div>
-                    <div class="kpi-delta" style="color:#9ca3af;font-size:.68rem;"><?= number_format($plannedHours,1) ?>h planned</div>
-                </div>
+            <!-- ══════════ SECTION 1 — FIELD VISITS ══════════ -->
+            <div class="sec-div">
+                <span class="sec-div-label">
+                    <i class="fas fa-car" style="color:var(--gold)"></i> Field visit overview
+                </span>
             </div>
 
-            <!-- ROW 1: Progress + Trend -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+            <?php
+            $effColor = $rawEff >= 80 ? 'var(--green)' : ($rawEff >= 50 ? 'var(--amber)' : 'var(--red)');
+            $fieldKpis = [
+                ['icon'=>'fa-users',         'val'=>$activeStaff,                    'lbl'=>'Active Staff',     'color'=>'var(--blue)'],
+                ['icon'=>'fa-clipboard-list', 'val'=>number_format($totalLogs),        'lbl'=>'Field Logs',       'color'=>'var(--purple)'],
+                ['icon'=>'fa-clock',          'val'=>number_format($totalHours,1).'h', 'lbl'=>'Field Hours',      'color'=>'var(--gold)'],
+                ['icon'=>'fa-building',       'val'=>$totalClients,                    'lbl'=>'Clients Reached',  'color'=>'#0ea5e9'],
+                ['icon'=>'fa-check-circle',   'val'=>$visitedCnt,                      'lbl'=>'Visited',          'color'=>'var(--green)'],
+                ['icon'=>'fa-times-circle',   'val'=>$missedCnt,                       'lbl'=>'Missed',           'color'=>'var(--red)'],
+                ['icon'=>'fa-calendar-alt',   'val'=>$rescheduledCnt,                  'lbl'=>'Rescheduled',      'color'=>'var(--amber)'],
+                ['icon'=>'fa-bell',           'val'=>$pendingApprovals,                'lbl'=>'Pending Approval', 'color'=>'#f59e0b'],
+                ['icon'=>'fa-tachometer-alt', 'val'=>$efficiency.'%',                  'lbl'=>'Team Efficiency',  'color'=>$effColor, 'sub'=>number_format($plannedHours,1).'h planned'],
+            ];
+            ?>
+            <div class="kpi-grid mb-3">
+                <?php foreach ($fieldKpis as $k): ?>
+                <div class="kpi-tile">
+                    <div class="kpi-tile-accent" style="background:<?= $k['color'] ?>"></div>
+                    <div class="kpi-icon"><i class="fas <?= $k['icon'] ?>" style="color:<?= $k['color'] ?>"></i></div>
+                    <div class="kpi-val" style="color:<?= $k['color'] ?>"><?= $k['val'] ?></div>
+                    <div class="kpi-lbl"><?= $k['lbl'] ?></div>
+                    <?php if (!empty($k['sub'])): ?><div class="kpi-sub"><?= $k['sub'] ?></div><?php endif; ?>
+                </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- 3-col row: Visit Status Donut | Planned vs Actual | Monthly Trend -->
+            <div class="db-grid-3">
+
+                <!-- Visit Status Donut -->
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-chart-pie" style="color:var(--gold)"></i> Visit Status</span>
+                        <span class="panel-sub"><?= $monthLabel ?></span>
+                    </div>
+                    <div class="donut-wrap">
+                        <div class="donut-canvas-wrap">
+                            <canvas id="donutChart" width="90" height="90"></canvas>
+                            <div class="donut-center">
+                                <span style="font-size:18px;font-weight:600;color:var(--gray-800);font-family:'DM Mono',monospace"><?= $visitedCnt+$missedCnt+$rescheduledCnt ?></span>
+                                <span style="font-size:9px;color:var(--gray-400)">total</span>
+                            </div>
+                        </div>
+                        <div class="donut-legend">
+                            <?php
+                            $total = $visitedCnt + $missedCnt + $rescheduledCnt ?: 1;
+                            $statusRows = [
+                                ['Visited',     $visitedCnt,     '#1D9E75','var(--green-lt)','var(--green-dk)'],
+                                ['Missed',      $missedCnt,      '#E24B4A','var(--red-lt)',  'var(--red-dk)'],
+                                ['Rescheduled', $rescheduledCnt, '#BA7517','var(--amber-lt)','var(--amber)'],
+                            ];
+                            foreach ($statusRows as [$lbl,$cnt,$bg,$bglt,$txtc]): ?>
+                            <div class="donut-leg-row">
+                                <span style="width:7px;height:7px;border-radius:2px;background:<?= $bg ?>;flex-shrink:0"></span>
+                                <span style="color:var(--gray-600);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= $lbl ?></span>
+                                <span style="font-weight:600;color:var(--gray-800);font-family:'DM Mono',monospace;margin-right:4px"><?= $cnt ?></span>
+                                <span class="pill" style="background:<?= $bglt ?>;color:<?= $txtc ?>"><?= round($cnt/$total*100) ?>%</span>
+                            </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Planned vs Actual -->
-                <div class="cn-panel">
-                    <div class="cn-panel-hd">
-                        <span class="cn-panel-title"><i class="fas fa-chart-line me-2" style="color:var(--gold)"></i>Planned vs Actual</span>
-                        <span style="font-size:.72rem;color:#9ca3af;"><?= $monthLabel ?></span>
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-sliders-h" style="color:var(--gold)"></i> Planned vs Actual</span>
                     </div>
-                    <div style="padding:14px 16px;">
-                        <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#9ca3af;margin-bottom:4px;">
-                            <span>Planned</span><strong style="color:#3b82f6;"><?= number_format($plannedHours,1) ?>h</strong>
+                    <div style="padding:14px 16px">
+                        <?php
+                        $pvaRows = [
+                            ['Planned',      $plannedHours, $plannedHours, 'var(--blue)'],
+                            ['Field actual', $totalHours,   $plannedHours, $effColor],
+                            ['Office hrs',   $officeHours,  $plannedHours, 'var(--green)'],
+                        ];
+                        foreach ($pvaRows as [$lbl,$val,$base,$color]):
+                            $w = $base > 0 ? min(round($val/$base*100),100) : 0;
+                        ?>
+                        <div class="bar-row">
+                            <span class="bar-lbl"><?= $lbl ?></span>
+                            <div class="bar-track"><div class="bar-fill" style="width:<?= $w ?>%;background:<?= $color ?>"></div></div>
+                            <span class="bar-val"><?= number_format($val,1) ?>h</span>
                         </div>
-                        <div style="background:#f1f5f9;border-radius:99px;height:8px;overflow:hidden;margin-bottom:12px;">
-                            <div style="width:100%;height:100%;background:#3b82f6;border-radius:99px;"></div>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#9ca3af;margin-bottom:4px;">
-                            <span>Actual</span><strong style="color:<?= $ec ?>;"><?= number_format($totalHours,1) ?>h</strong>
-                        </div>
-                        <div style="background:#f1f5f9;border-radius:99px;height:8px;overflow:hidden;margin-bottom:14px;">
-                            <?php $aw = $plannedHours > 0 ? min(round(($totalHours/$plannedHours)*100),100) : 0; ?>
-                            <div style="width:<?= $aw ?>%;height:100%;background:<?= $ec ?>;border-radius:99px;"></div>
-                        </div>
+                        <?php endforeach; ?>
+
                         <?php if ($totalLogs > 0): ?>
-                        <div style="font-size:.72rem;color:#9ca3af;margin-bottom:5px;">Visit Status</div>
-                        <div style="display:flex;border-radius:6px;overflow:hidden;height:10px;margin-bottom:6px;">
-                            <?php if ($visitedCnt): ?><div style="flex:<?= $visitedCnt ?>;background:#10b981;" title="Visited"></div><?php endif; ?>
-                            <?php if ($missedCnt): ?><div style="flex:<?= $missedCnt ?>;background:#ef4444;" title="Missed"></div><?php endif; ?>
-                            <?php if ($rescheduledCnt): ?><div style="flex:<?= $rescheduledCnt ?>;background:#f59e0b;" title="Rescheduled"></div><?php endif; ?>
-                        </div>
-                        <div style="display:flex;gap:12px;font-size:.72rem;flex-wrap:wrap;">
-                            <span style="color:#10b981;">● Visited <?= $visitedCnt ?></span>
-                            <span style="color:#ef4444;">● Missed <?= $missedCnt ?></span>
-                            <span style="color:#f59e0b;">● Rescheduled <?= $rescheduledCnt ?></span>
+                        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--gray-100)">
+                            <div style="font-size:10px;color:var(--gray-400);margin-bottom:5px;font-weight:500">Visit breakdown</div>
+                            <div style="display:flex;border-radius:5px;overflow:hidden;height:7px">
+                                <?php if($visitedCnt):?><div style="flex:<?=$visitedCnt?>;background:var(--green)"></div><?php endif;?>
+                                <?php if($missedCnt):?><div style="flex:<?=$missedCnt?>;background:var(--red)"></div><?php endif;?>
+                                <?php if($rescheduledCnt):?><div style="flex:<?=$rescheduledCnt?>;background:var(--amber)"></div><?php endif;?>
+                            </div>
+                            <div style="display:flex;gap:8px;margin-top:5px;font-size:10px;flex-wrap:wrap">
+                                <span style="color:var(--green-dk)">● Visited <?=$visitedCnt?></span>
+                                <span style="color:var(--red-dk)">● Missed <?=$missedCnt?></span>
+                                <span style="color:var(--amber)">● Rescheduled <?=$rescheduledCnt?></span>
+                            </div>
                         </div>
                         <?php endif; ?>
                     </div>
                 </div>
 
-                <!-- Monthly Trend Chart -->
-                <div class="cn-panel">
-                    <div class="cn-panel-hd">
-                        <span class="cn-panel-title"><i class="fas fa-chart-bar me-2" style="color:var(--gold)"></i>Monthly Trend</span>
-                        <span style="font-size:.72rem;color:#9ca3af;">Last 6 months</span>
+                <!-- Monthly Trend sparkline -->
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-chart-bar" style="color:var(--gold)"></i> Monthly Trend</span>
+                        <span class="panel-sub">Last 6 months</span>
                     </div>
-                    <div style="padding:14px 16px;">
-                        <?php if (empty($trend)): ?>
-                        <div style="text-align:center;color:#9ca3af;font-size:.8rem;padding:20px 0;">No data yet</div>
-                        <?php else:
-                            $maxH2 = max(array_column($trend,'hours') ?: [1]);
+                    <div class="chart-box" style="height:150px;padding:12px 14px 0">
+                        <canvas id="fieldTrendMini"></canvas>
+                    </div>
+                    <div class="legend-row">
+                        <span class="leg-item"><span class="leg-dot" style="background:var(--blue)"></span>Field hrs</span>
+                        <span class="leg-item"><span class="leg-dot" style="background:var(--green)"></span>Office hrs</span>
+                    </div>
+                </div>
+            </div><!-- /db-grid-3 field -->
+
+            <!-- ══════════ SECTION 2 — OFFICE WORK ══════════ -->
+            <div class="sec-div">
+                <span class="sec-div-label">
+                    <i class="fas fa-laptop" style="color:#3b82f6"></i> Office work overview
+                </span>
+            </div>
+
+            <?php
+            $officeKpis = [
+                ['icon'=>'fa-file-alt',    'val'=>number_format($officeLogCount),       'lbl'=>'Office Logs',    'color'=>'var(--blue)'],
+                ['icon'=>'fa-hourglass',   'val'=>number_format($officeHours,1).'h',    'lbl'=>'Office Hours',   'color'=>'var(--gold)'],
+                ['icon'=>'fa-building',    'val'=>$officeClients,                        'lbl'=>'Clients Served', 'color'=>'#0ea5e9'],
+                ['icon'=>'fa-check-double','val'=>$officeCompleted,                      'lbl'=>'Completed',      'color'=>'var(--green)'],
+                ['icon'=>'fa-spinner',     'val'=>$officeWip,                            'lbl'=>'In Progress',    'color'=>'var(--amber)'],
+                ['icon'=>'fa-pause-circle','val'=>$officeHolding,                        'lbl'=>'Holding',        'color'=>'var(--purple)'],
+                ['icon'=>'fa-circle',      'val'=>$officeNotStart,                       'lbl'=>'Not Started',    'color'=>'var(--gray-400)'],
+            ];
+            ?>
+            <div class="kpi-grid mb-3">
+                <?php foreach ($officeKpis as $k): ?>
+                <div class="kpi-tile">
+                    <div class="kpi-tile-accent" style="background:<?= $k['color'] ?>"></div>
+                    <div class="kpi-icon"><i class="fas <?= $k['icon'] ?>" style="color:<?= $k['color'] ?>"></i></div>
+                    <div class="kpi-val" style="color:<?= $k['color'] ?>"><?= $k['val'] ?></div>
+                    <div class="kpi-lbl"><?= $k['lbl'] ?></div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- 2-col: Office Status Bars | Office Completion Donut -->
+            <div class="db-grid-2">
+
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-tasks" style="color:var(--gold)"></i> Office Logs by Status</span>
+                        <span class="panel-sub"><?= $monthLabel ?></span>
+                    </div>
+                    <div style="padding:16px">
+                        <?php
+                        $maxO = max($officeCompleted,$officeWip,$officeHolding,$officeNotStart,1);
+                        $offRows=[
+                            ['Completed',   $officeCompleted,'var(--green)'],
+                            ['In Progress', $officeWip,      'var(--amber)'],
+                            ['Holding',     $officeHolding,  'var(--purple)'],
+                            ['Not Started', $officeNotStart, 'var(--gray-400)'],
+                        ];
+                        foreach ($offRows as [$lbl,$v,$c]):
+                            $w = round($v/$maxO*100);
                         ?>
-                        <div class="trend-bar-wrap">
-                            <?php foreach ($trend as $t):
-                                $barH = $maxH2 > 0 ? round(($t['hours']/$maxH2)*56) : 0;
-                                $barH = max($barH, 3);
-                                $bc   = $t['visited'] >= $t['missed'] ? '#10b981' : '#ef4444';
-                            ?>
-                            <div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-                                <div title="<?= $t['month_year'] ?>: <?= number_format($t['hours'],1) ?>h · <?= $t['logs'] ?> logs"
-                                     class="trend-bar"
-                                     style="height:<?= $barH ?>px;background:<?= $bc ?>;opacity:.85;">
-                                </div>
-                                <div class="trend-label"><?= date('M', strtotime($t['month_year'].'-01')) ?></div>
-                                <div style="font-size:.6rem;color:#c9a84c;font-weight:700;"><?= number_format($t['hours'],0) ?>h</div>
+                        <div class="bar-row">
+                            <span class="bar-lbl"><?= $lbl ?></span>
+                            <div class="bar-track"><div class="bar-fill" style="width:<?=$w?>%;background:<?=$c?>"></div></div>
+                            <span class="bar-val"><?=$v?></span>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Office completion donut -->
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-chart-pie" style="color:var(--gold)"></i> Completion Rate</span>
+                    </div>
+                    <div class="donut-wrap">
+                        <div class="donut-canvas-wrap" style="width:100px;height:100px">
+                            <canvas id="officeDonut" width="100" height="100"></canvas>
+                            <div class="donut-center">
+                                <?php $compRate = $officeLogCount > 0 ? round($officeCompleted/$officeLogCount*100) : 0; ?>
+                                <span style="font-size:17px;font-weight:600;color:var(--green);font-family:'DM Mono',monospace"><?= $compRate ?>%</span>
+                                <span style="font-size:9px;color:var(--gray-400)">done</span>
+                            </div>
+                        </div>
+                        <div class="donut-legend">
+                            <?php
+                            $offDonutRows=[
+                                ['Completed',  'var(--green)',    $officeCompleted],
+                                ['WIP',        'var(--amber)',    $officeWip],
+                                ['Holding',    'var(--purple)',   $officeHolding],
+                                ['Not started','var(--gray-400)', $officeNotStart],
+                            ];
+                            foreach ($offDonutRows as [$l,$c,$v]): ?>
+                            <div class="donut-leg-row">
+                                <span style="width:7px;height:7px;border-radius:2px;background:<?=$c?>;flex-shrink:0"></span>
+                                <span style="color:var(--gray-600);flex:1"><?=$l?></span>
+                                <span style="font-weight:600;color:var(--gray-800);font-family:'DM Mono',monospace"><?=$v?></span>
                             </div>
                             <?php endforeach; ?>
                         </div>
-                        <div style="display:flex;gap:10px;font-size:.7rem;margin-top:10px;flex-wrap:wrap;">
-                            <span style="color:#10b981;">● More visited months</span>
-                            <span style="color:#ef4444;">● More missed months</span>
-                        </div>
-                        <?php endif; ?>
                     </div>
+                </div>
+            </div><!-- /db-grid-2 office -->
+
+            <!-- Office logs table -->
+            <div class="panel mb-3">
+                <div class="panel-hd">
+                    <span class="panel-title"><i class="fas fa-table" style="color:var(--gold)"></i> Recent Office Logs</span>
+                    <span class="panel-sub"><?= $officeLogCount ?> entries · <?= $monthLabel ?></span>
+                </div>
+                <?php if (empty($officeLogs)): ?>
+                <div style="padding:40px;text-align:center;color:var(--gray-400);font-size:13px">
+                    <i class="fas fa-laptop" style="font-size:2rem;display:block;margin-bottom:8px;opacity:.3"></i>
+                    No office logs this month
+                </div>
+                <?php else: ?>
+                <div style="overflow-x:auto">
+                <table class="ol-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th><th>Staff</th><th>Client</th><th>Dept</th>
+                            <th>Time In</th><th>Time Out</th><th style="text-align:center">Hours</th>
+                            <th>Description</th><th style="text-align:center">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($officeLogs as $ol):
+                        $hrs = 0;
+                        if ($ol['time_in'] && $ol['time_out'])
+                            $hrs = (strtotime($ol['time_out']) - strtotime($ol['time_in'])) / 3600;
+                        $statusMap = [
+                            'completed'   => ['class'=>'pill-v','lbl'=>'Completed'],
+                            'wip'         => ['class'=>'pill-a','lbl'=>'WIP'],
+                            'holding'     => ['class'=>'pill-p','lbl'=>'Holding'],
+                            'not_started' => ['class'=>'pill-g','lbl'=>'Not Started'],
+                        ];
+                        $sm = $statusMap[$ol['status']] ?? $statusMap['not_started'];
+                    ?>
+                    <tr>
+                        <td>
+                            <div style="font-weight:600;font-size:12px"><?= date('d M', strtotime($ol['log_date'])) ?></div>
+                            <div style="font-size:10px;color:var(--gray-400)"><?= date('D', strtotime($ol['log_date'])) ?></div>
+                        </td>
+                        <td>
+                            <div style="font-weight:600"><?= htmlspecialchars($ol['full_name']) ?></div>
+                            <div style="font-size:10px;color:var(--gray-400)"><?= htmlspecialchars($ol['emp_id']??'') ?></div>
+                        </td>
+                        <td>
+                            <div style="font-weight:600"><?= htmlspecialchars($ol['company_name']) ?></div>
+                            <div style="font-size:10px;color:var(--gray-400)"><?= htmlspecialchars($ol['company_code']??'') ?></div>
+                        </td>
+                        <td style="color:var(--gray-600);font-size:11px"><?= htmlspecialchars($ol['dept_name']) ?></td>
+                        <td style="font-family:'DM Mono',monospace;font-size:11px"><?= $ol['time_in'] ? date('h:i A', strtotime($ol['time_in'])) : '—' ?></td>
+                        <td style="font-family:'DM Mono',monospace;font-size:11px"><?= $ol['time_out'] ? date('h:i A', strtotime($ol['time_out'])) : '—' ?></td>
+                        <td style="text-align:center">
+                            <strong style="color:var(--gold);font-family:'DM Mono',monospace"><?= number_format($hrs,1) ?>h</strong>
+                        </td>
+                        <td style="color:var(--gray-600);max-width:180px;overflow:hidden">
+                            <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">
+                                <?= htmlspecialchars(mb_strimwidth($ol['description']??'', 0, 60, '…')) ?>
+                            </div>
+                        </td>
+                        <td style="text-align:center">
+                            <span class="pill <?= $sm['class'] ?>"><?= $sm['lbl'] ?></span>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- ══════════ SECTION 3 — PERFORMANCE ══════════ -->
+            <div class="sec-div">
+                <span class="sec-div-label">
+                    <i class="fas fa-chart-line" style="color:#8b5cf6"></i> Performance analysis
+                </span>
+            </div>
+
+            <!-- Full trend line chart -->
+            <div class="panel mb-3">
+                <div class="panel-hd">
+                    <span class="panel-title"><i class="fas fa-chart-line" style="color:var(--gold)"></i> Field vs Office Hours Trend</span>
+                    <span class="panel-sub">Last 6 months</span>
+                </div>
+                <div class="chart-box" style="height:200px;padding:14px 16px 0">
+                    <canvas id="trendFull"></canvas>
+                </div>
+                <div class="legend-row" style="margin-top:4px">
+                    <span class="leg-item"><span class="leg-dot" style="background:var(--blue)"></span>Field hours</span>
+                    <span class="leg-item"><span class="leg-dot" style="background:var(--green)"></span>Office hours</span>
+                    <span class="leg-item"><span class="leg-dot" style="background:#E24B4A"></span>Missed visits</span>
                 </div>
             </div>
 
-            <!-- ROW 2: Staff Performance + Pending Approvals -->
-            <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;margin-bottom:16px;">
+            <!-- Staff Performance + Right sidebar -->
+            <div class="db-grid-main">
 
                 <!-- Staff Performance -->
-                <div class="cn-panel">
-                    <div class="cn-panel-hd" style="justify-content:space-between;">
-                        <span class="cn-panel-title"><i class="fas fa-users me-2" style="color:var(--gold)"></i>Staff Performance</span>
-                        <a href="staff_report.php?month=<?= $month ?>" style="font-size:.75rem;color:#3b82f6;">
-                            Full Report <i class="fas fa-chevron-right" style="font-size:.65rem;"></i>
+                <div class="panel">
+                    <div class="panel-hd">
+                        <span class="panel-title"><i class="fas fa-users" style="color:var(--gold)"></i> Staff Performance</span>
+                        <a href="staff_report.php?month=<?= $month ?>" style="font-size:11px;color:var(--blue)">
+                            Full Report <i class="fas fa-chevron-right" style="font-size:.6rem"></i>
                         </a>
                     </div>
-                    <div style="padding:0;">
-                        <table class="cn-table">
-                            <thead>
-                                <tr>
-                                    <th>Staff</th>
-                                    <th class="text-center">Logs</th>
-                                    <th class="text-center">Hours</th>
-                                    <th class="text-center">Visited</th>
-                                    <th class="text-center">Missed</th>
-                                    <th class="text-center">Clients</th>
-                                    <th style="width:100px;">Efficiency</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach ($staffPerf as $sp):
-                                $planned = $staffPlanned[$sp['id']] ?? 0;
-                                $eff = $planned > 0 ? min(round(($sp['actual_hours']/$planned)*100),100) : 0;
-                                $effC = $eff >= 80 ? '#10b981' : ($eff >= 50 ? '#f59e0b' : '#ef4444');
-                                $noLogs = ($sp['log_count'] == 0);
-                            ?>
-                            <tr style="<?= $noLogs ? 'opacity:.55;' : '' ?>">
-                                <td>
-                                    <div style="font-weight:600;font-size:.82rem;"><?= htmlspecialchars($sp['full_name']) ?></div>
-                                    <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($sp['employee_id'] ?? '') ?></div>
-                                    <?php if ($noLogs): ?>
-                                    <span class="alert-chip" style="background:#fef2f2;color:#ef4444;margin-top:2px;">
-                                        <i class="fas fa-exclamation-circle"></i> No logs
-                                    </span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="text-center"><strong><?= $sp['log_count'] ?></strong></td>
-                                <td class="text-center"><strong style="color:#c9a84c;"><?= number_format($sp['actual_hours'],1) ?>h</strong></td>
-                                <td class="text-center"><span style="color:#10b981;font-weight:700;"><?= $sp['visited'] ?></span></td>
-                                <td class="text-center"><span style="color:#ef4444;font-weight:700;"><?= $sp['missed'] ?></span></td>
-                                <td class="text-center"><?= $sp['unique_clients'] ?></td>
-                                <td>
-                                    <?php if ($planned > 0): ?>
-                                    <div style="font-size:.72rem;font-weight:700;color:<?= $effC ?>;"><?= $eff ?>%</div>
-                                    <div class="staff-eff-bar">
-                                        <div class="staff-eff-fill" style="width:<?= $eff ?>%;background:<?= $effC ?>;"></div>
-                                    </div>
-                                    <?php else: ?>
-                                    <span style="font-size:.7rem;color:#d1d5db;">No plan</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                            <?php if (empty($staffPerf)): ?>
-                            <tr><td colspan="7" style="text-align:center;color:#9ca3af;font-size:.8rem;padding:20px;">No staff data this month</td></tr>
-                            <?php endif; ?>
-                            </tbody>
-                        </table>
+                    <div class="chart-box" style="height:<?= max(count($staffPerf)*44+60, 140) ?>px;padding:12px 14px 0">
+                        <canvas id="staffChart"></canvas>
+                    </div>
+                    <div class="legend-row">
+                        <span class="leg-item"><span class="leg-dot" style="background:var(--blue)"></span>Actual hours</span>
+                        <span class="leg-item"><span class="leg-dot" style="background:var(--gray-200)"></span>Planned hours</span>
+                    </div>
+                    <div style="padding:4px 16px 12px">
+                        <?php foreach ($staffPerf as $sp):
+                            $pl  = $staffPlanned[$sp['id']] ?? 0;
+                            $eff = $pl > 0 ? min(round($sp['actual_hours']/$pl*100),100) : 0;
+                            $ec  = $eff>=80?'var(--green)':($eff>=50?'var(--amber)':'var(--red)');
+                            $initials = implode('',array_map(fn($w)=>strtoupper($w[0]??''),explode(' ',$sp['full_name'])));
+                            $colors=['#378ADD','#1D9E75','#BA7517','#7F77DD','#E24B4A','#D4537E','#639922','#0F6E56'];
+                            $c = $colors[abs(crc32($sp['full_name'])) % count($colors)];
+                        ?>
+                        <div class="staff-item">
+                            <div class="avatar" style="background:<?=$c?>22;color:<?=$c?>"><?= htmlspecialchars(substr($initials,0,2)) ?></div>
+                            <div style="flex:1;min-width:0">
+                                <div style="font-size:12.5px;font-weight:600;color:var(--gray-800);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= htmlspecialchars($sp['full_name']) ?></div>
+                                <div style="font-size:10px;color:var(--gray-400)"><?= htmlspecialchars($sp['employee_id']??'') ?></div>
+                                <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
+                                    <div class="eff-bar"><div class="eff-fill" style="width:<?=$eff?>%;background:<?=$ec?>"></div></div>
+                                    <span style="font-size:10px;color:<?=$ec?>;font-weight:600"><?=$eff?>%</span>
+                                </div>
+                            </div>
+                            <div style="text-align:right;flex-shrink:0;margin-left:8px">
+                                <div style="font-size:13px;font-weight:600;color:var(--gold);font-family:'DM Mono',monospace"><?= number_format($sp['actual_hours'],1) ?>h</div>
+                                <div style="display:flex;gap:4px;margin-top:3px;justify-content:flex-end">
+                                    <span class="pill pill-v"><?=$sp['visited']?>v</span>
+                                    <span class="pill pill-m"><?=$sp['missed']?>m</span>
+                                </div>
+                            </div>
+                        </div>
+                        <?php endforeach; ?>
+                        <?php if (empty($staffPerf)): ?>
+                        <div style="text-align:center;padding:20px;color:var(--gray-400);font-size:12px">No staff data this month</div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
-                <!-- Right column -->
-                <div style="display:flex;flex-direction:column;gap:16px;">
+                <!-- Right column: Pending + Alerts -->
+                <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
 
-                    <!-- Pending Approvals -->
-                    <div class="cn-panel">
-                        <div class="cn-panel-hd" style="justify-content:space-between;">
-                            <span class="cn-panel-title"><i class="fas fa-bell me-2" style="color:var(--gold)"></i>Pending Approvals</span>
-                            <a href="plans.php?status=submitted" style="font-size:.75rem;color:#3b82f6;">View all</a>
+                    <div class="panel">
+                        <div class="panel-hd">
+                            <span class="panel-title"><i class="fas fa-bell" style="color:var(--gold)"></i> Pending Approvals</span>
+                            <a href="plans.php?status=submitted" style="font-size:11px;color:var(--blue)">View all</a>
                         </div>
-                        <div style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;">
-                        <?php if (empty($pendingPlans)): ?>
-                            <div style="text-align:center;color:#9ca3af;font-size:.8rem;padding:16px 0;">
-                                <i class="fas fa-check-circle" style="color:#10b981;font-size:1.4rem;display:block;margin-bottom:6px;"></i>
+                        <div style="padding:10px 12px">
+                            <?php if (empty($pendingPlans)): ?>
+                            <div style="text-align:center;padding:18px 0;color:var(--gray-400);font-size:12px">
+                                <i class="fas fa-check-circle" style="color:var(--green);font-size:1.6rem;display:block;margin-bottom:6px"></i>
                                 All caught up!
                             </div>
-                        <?php else: ?>
+                            <?php else: ?>
                             <?php foreach ($pendingPlans as $pp): ?>
-                            <div style="background:#f9fafb;border-radius:8px;padding:9px 11px;border-left:3px solid #3b82f6;">
-                                <div style="font-size:.8rem;font-weight:700;"><?= htmlspecialchars($pp['full_name']) ?></div>
-                                <div style="font-size:.7rem;color:#9ca3af;margin-bottom:6px;">
+                            <div class="pend-card">
+                                <div style="font-size:12.5px;font-weight:600;color:var(--gray-800)"><?= htmlspecialchars($pp['full_name']) ?></div>
+                                <div style="font-size:10px;color:var(--gray-400);margin-bottom:7px">
                                     Week <?= $pp['week_number'] ?> · <?= $pp['entry_count'] ?> entries · <?= number_format($pp['planned_hours'],1) ?>h
                                 </div>
-                                <div style="display:flex;gap:6px;">
-                                    <a href="plan_view.php?id=<?= $pp['id'] ?>" class="cn-btn cn-btn-blue cn-btn-sm" style="flex:1;justify-content:center;">
-                                        <i class="fas fa-eye"></i> Review
-                                    </a>
-                                </div>
+                                <a href="plan_view.php?id=<?= $pp['id'] ?>"
+                                   style="display:block;text-align:center;background:var(--blue);color:#fff;
+                                          padding:5px;border-radius:var(--radius-sm);font-size:11px;font-weight:600;text-decoration:none">
+                                    <i class="fas fa-eye me-1"></i> Review
+                                </a>
                             </div>
                             <?php endforeach; ?>
-                        <?php endif; ?>
+                            <?php endif; ?>
                         </div>
                     </div>
 
-                    <!-- At-Risk Alerts -->
                     <?php if (!empty($noLogStaff) || !empty($unvisited)): ?>
-                    <div class="cn-panel">
-                        <div class="cn-panel-hd">
-                            <span class="cn-panel-title"><i class="fas fa-exclamation-triangle me-2" style="color:#ef4444"></i>Alerts</span>
+                    <div class="panel">
+                        <div class="panel-hd">
+                            <span class="panel-title"><i class="fas fa-exclamation-triangle" style="color:var(--red)"></i> Alerts</span>
                         </div>
-                        <div style="padding:10px 14px;display:flex;flex-direction:column;gap:10px;">
+                        <div style="padding:10px 12px">
                             <?php if (!empty($noLogStaff)): ?>
-                            <div>
-                                <div style="font-size:.72rem;font-weight:700;color:#ef4444;margin-bottom:5px;">
-                                    <i class="fas fa-user-times me-1"></i>Staff with No Logs
-                                </div>
-                                <?php foreach ($noLogStaff as $ns): ?>
-                                <div style="font-size:.75rem;padding:2px 0;color:#374151;">
-                                    <?= htmlspecialchars($ns['full_name']) ?>
-                                    <span style="color:#9ca3af;"><?= $ns['employee_id'] ? '· '.$ns['employee_id'] : '' ?></span>
-                                </div>
-                                <?php endforeach; ?>
+                            <div style="font-size:11px;font-weight:600;color:var(--red);margin-bottom:6px">
+                                <i class="fas fa-user-times me-1"></i>Staff with no logs
                             </div>
+                            <?php foreach ($noLogStaff as $ns): ?>
+                            <div class="alert-item" style="background:var(--red-lt)">
+                                <i class="fas fa-circle" style="font-size:6px;color:var(--red)"></i>
+                                <span style="color:var(--red-dk);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= htmlspecialchars($ns['full_name']) ?></span>
+                                <span style="font-size:10px;color:var(--gray-400)"><?= $ns['employee_id']??'' ?></span>
+                            </div>
+                            <?php endforeach; ?>
                             <?php endif; ?>
                             <?php if (!empty($unvisited)): ?>
-                            <div>
-                                <div style="font-size:.72rem;font-weight:700;color:#f59e0b;margin-bottom:5px;">
-                                    <i class="fas fa-building me-1"></i>Unvisited Clients
-                                </div>
-                                <?php foreach ($unvisited as $uv): ?>
-                                <div style="font-size:.75rem;padding:2px 0;color:#374151;">
-                                    <?= htmlspecialchars($uv['company_name']) ?>
-                                    <span style="color:#9ca3af;"><?= $uv['company_code'] ? '· '.$uv['company_code'] : '' ?></span>
-                                </div>
-                                <?php endforeach; ?>
+                            <div style="font-size:11px;font-weight:600;color:var(--amber);margin:10px 0 6px">
+                                <i class="fas fa-building me-1"></i>Unvisited clients
                             </div>
+                            <?php foreach ($unvisited as $uv): ?>
+                            <div class="alert-item" style="background:var(--amber-lt)">
+                                <i class="fas fa-circle" style="font-size:6px;color:var(--amber)"></i>
+                                <span style="color:#633806;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= htmlspecialchars($uv['company_name']) ?></span>
+                                <span style="font-size:10px;color:var(--gray-400)"><?= $uv['company_code']??'' ?></span>
+                            </div>
+                            <?php endforeach; ?>
                             <?php endif; ?>
                         </div>
                     </div>
                     <?php endif; ?>
 
                 </div>
-            </div>
+            </div><!-- /db-grid-main -->
 
-            <!-- ROW 3: Client Visit Summary -->
-            <div class="cn-panel mb-4">
-                <div class="cn-panel-hd" style="justify-content:space-between;">
-                    <span class="cn-panel-title"><i class="fas fa-building me-2" style="color:var(--gold)"></i>Client Visit Summary — <?= $monthLabel ?></span>
-                    <a href="client_report.php?month=<?= $month ?>" style="font-size:.75rem;color:#3b82f6;">
-                        Full Report <i class="fas fa-chevron-right" style="font-size:.65rem;"></i>
+            <!-- Client visit chart -->
+            <div class="panel mb-4">
+                <div class="panel-hd">
+                    <span class="panel-title"><i class="fas fa-building" style="color:var(--gold)"></i> Client Visit Summary — <?= $monthLabel ?></span>
+                    <a href="client_report.php?month=<?= $month ?>" style="font-size:11px;color:var(--blue)">
+                        Full Report <i class="fas fa-chevron-right" style="font-size:.6rem"></i>
                     </a>
                 </div>
-                <div style="padding:0;">
-                    <table class="cn-table">
-                        <thead>
-                            <tr>
-                                <th>Client</th>
-                                <th class="text-center">Visits</th>
-                                <th class="text-center">Hours</th>
-                                <th class="text-center">Visited</th>
-                                <th class="text-center">Missed</th>
-                                <th class="text-center">Last Visit</th>
-                                <th>Staff Who Visited</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($clientSummary as $cs): ?>
-                        <tr>
-                            <td>
-                                <div style="font-weight:600;font-size:.82rem;"><?= htmlspecialchars($cs['company_name']) ?></div>
-                                <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($cs['company_code'] ?? '') ?></div>
-                            </td>
-                            <td class="text-center"><strong><?= $cs['total_visits'] ?></strong></td>
-                            <td class="text-center"><strong style="color:#c9a84c;"><?= number_format($cs['total_hours'],1) ?>h</strong></td>
-                            <td class="text-center"><span style="color:#10b981;font-weight:700;"><?= $cs['visited'] ?></span></td>
-                            <td class="text-center"><span style="color:#ef4444;font-weight:700;"><?= $cs['missed'] ?></span></td>
-                            <td class="text-center" style="font-size:.78rem;color:#6b7280;">
-                                <?= $cs['last_visit'] ? date('d M Y', strtotime($cs['last_visit'])) : '—' ?>
-                            </td>
-                            <td style="font-size:.75rem;color:#374151;">
-                                <?php
-                                $names = $csMap[$cs['id']] ?? [];
-                                echo $names ? implode(', ', array_map('htmlspecialchars', array_slice($names,0,3))) : '<span style="color:#d1d5db;">None</span>';
-                                if (count($names) > 3) echo ' <span style="color:#9ca3af;">+'.( count($names)-3).' more</span>';
-                                ?>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                        <?php if (empty($clientSummary)): ?>
-                        <tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:20px;font-size:.8rem;">No client data this month</td></tr>
-                        <?php endif; ?>
-                        </tbody>
-                    </table>
+                <div class="chart-box" style="height:<?= max(count($clientSummary)*36+80,140) ?>px;padding:14px 16px 0">
+                    <canvas id="clientChart"></canvas>
+                </div>
+                <div class="legend-row" style="margin-top:4px">
+                    <span class="leg-item"><span class="leg-dot" style="background:var(--green)"></span>Visited</span>
+                    <span class="leg-item"><span class="leg-dot" style="background:var(--red)"></span>Missed</span>
+                    <span class="leg-item"><span class="leg-dot" style="background:var(--blue)"></span>Hours</span>
                 </div>
             </div>
 
-        </div>
+        </div><!-- /db-wrap -->
     </div>
 </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const TREND_LABELS      = <?= $trendLabels ?>;
+const TREND_FIELD_HOURS = <?= $trendFieldHours ?>;
+const TREND_FIELD_VISIT = <?= $trendFieldVisit ?>;
+const TREND_FIELD_MISS  = <?= $trendFieldMiss ?>;
+const TREND_OFF_HOURS   = <?= $trendOfficeHours ?>;
+const CLIENT_NAMES      = <?= $clientNames ?>;
+const CLIENT_VISITED    = <?= $clientVisits ?>;
+const CLIENT_MISSED     = <?= $clientMissed ?>;
+const CLIENT_HOURS      = <?= $clientHours ?>;
+const STAFF_NAMES       = <?= $staffNames ?>;
+const STAFF_HOURS       = <?= $staffHours ?>;
+const STAFF_PLANNED     = <?= $staffPlannedArr ?>;
+const STAFF_VISITED     = <?= $staffVisited ?>;
+const STAFF_MISSED      = <?= $staffMissed ?>;
+
+const C = {
+    blue:'#378ADD', green:'#1D9E75', red:'#E24B4A',
+    amber:'#BA7517', purple:'#7F77DD', gold:'#c9a84c',
+    gray:'#e5e7eb', grayDk:'#9ca3af',
+    blueLt:'rgba(55,138,221,.15)', greenLt:'rgba(29,158,117,.12)',
+    redLt:'rgba(226,75,74,.12)',   amberLt:'rgba(186,117,23,.12)',
+};
+
+const base = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } } };
+
+/* Visit status donut */
+new Chart(document.getElementById('donutChart'),{
+    type:'doughnut',
+    data:{
+        labels:['Visited','Missed','Rescheduled'],
+        datasets:[{ data:[<?= $visitedCnt ?>,<?= $missedCnt ?>,<?= $rescheduledCnt ?>],
+            backgroundColor:[C.green,C.red,C.amber], borderWidth:3, borderColor:'#fff', hoverOffset:4 }]
+    },
+    options:{...base, cutout:'76%',
+        plugins:{legend:{display:false}, tooltip:{callbacks:{label:ctx=>`${ctx.label}: ${ctx.parsed}`}}}
+    }
+});
+
+/* Office completion donut */
+new Chart(document.getElementById('officeDonut'),{
+    type:'doughnut',
+    data:{
+        labels:['Completed','WIP','Holding','Not Started'],
+        datasets:[{ data:[<?= $officeCompleted ?>,<?= $officeWip ?>,<?= $officeHolding ?>,<?= $officeNotStart ?>],
+            backgroundColor:[C.green,C.amber,C.purple,'#d1d5db'], borderWidth:3, borderColor:'#fff', hoverOffset:4 }]
+    },
+    options:{...base, cutout:'76%'}
+});
+
+/* Mini trend bar */
+new Chart(document.getElementById('fieldTrendMini'),{
+    type:'bar',
+    data:{
+        labels:TREND_LABELS,
+        datasets:[
+            {label:'Field hours',  data:TREND_FIELD_HOURS, backgroundColor:C.blueLt,  borderColor:C.blue,  borderWidth:1.5, borderRadius:4},
+            {label:'Office hours', data:TREND_OFF_HOURS,   backgroundColor:C.greenLt, borderColor:C.green, borderWidth:1.5, borderRadius:4},
+        ]
+    },
+    options:{...base,
+        scales:{
+            x:{ grid:{display:false}, ticks:{font:{size:10},color:C.grayDk} },
+            y:{ grid:{color:'rgba(0,0,0,.04)'}, ticks:{font:{size:10},color:C.grayDk,callback:v=>v+'h'}, beginAtZero:true }
+        },
+        plugins:{legend:{display:false}, tooltip:{mode:'index',intersect:false}}
+    }
+});
+
+/* Full trend line */
+new Chart(document.getElementById('trendFull'),{
+    type:'line',
+    data:{
+        labels:TREND_LABELS,
+        datasets:[
+            {label:'Field hours',  data:TREND_FIELD_HOURS, borderColor:C.blue,  backgroundColor:C.blueLt,  fill:true,  tension:.35, pointRadius:4, pointBackgroundColor:C.blue,  borderWidth:2},
+            {label:'Office hours', data:TREND_OFF_HOURS,   borderColor:C.green, backgroundColor:C.greenLt, fill:true,  tension:.35, pointRadius:4, pointBackgroundColor:C.green, borderWidth:2, borderDash:[5,3]},
+            {label:'Missed',       data:TREND_FIELD_MISS,  borderColor:C.red,   backgroundColor:C.redLt,   fill:false, tension:.35, pointRadius:4, pointBackgroundColor:C.red,   borderWidth:1.5, borderDash:[3,3]},
+        ]
+    },
+    options:{...base,
+        scales:{
+            x:{ grid:{color:'rgba(0,0,0,.03)'}, ticks:{font:{size:11},color:C.grayDk} },
+            y:{ grid:{color:'rgba(0,0,0,.04)'}, ticks:{font:{size:11},color:C.grayDk,callback:v=>v+'h'}, beginAtZero:true }
+        },
+        plugins:{legend:{display:false}, tooltip:{mode:'index',intersect:false}}
+    }
+});
+
+/* Staff horizontal bar */
+new Chart(document.getElementById('staffChart'),{
+    type:'bar',
+    data:{
+        labels:STAFF_NAMES,
+        datasets:[
+            {label:'Planned', data:STAFF_PLANNED, backgroundColor:C.gray, borderRadius:4, borderSkipped:false},
+            {label:'Actual',  data:STAFF_HOURS, borderRadius:4, borderSkipped:false,
+             backgroundColor:STAFF_HOURS.map((_,i)=>{
+                const p=STAFF_PLANNED[i]||0, e=p>0?STAFF_HOURS[i]/p*100:0;
+                return e>=80?C.green:e>=50?C.amber:C.red;
+             })},
+        ]
+    },
+    options:{...base, indexAxis:'y',
+        scales:{
+            x:{ grid:{color:'rgba(0,0,0,.04)'}, ticks:{font:{size:10},color:C.grayDk,callback:v=>v+'h'}, beginAtZero:true },
+            y:{ grid:{display:false}, ticks:{font:{size:11},color:'#374151'} }
+        },
+        plugins:{legend:{display:false}, tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.x}h`}}}
+    }
+});
+
+/* Client stacked bar */
+new Chart(document.getElementById('clientChart'),{
+    type:'bar',
+    data:{
+        labels:CLIENT_NAMES,
+        datasets:[
+            {label:'Visited', data:CLIENT_VISITED, backgroundColor:C.green, stack:'s', borderRadius:{topRight:4,bottomRight:4}},
+            {label:'Missed',  data:CLIENT_MISSED,  backgroundColor:C.red,   stack:'s', borderRadius:{topRight:4,bottomRight:4}},
+        ]
+    },
+    options:{...base, indexAxis:'y',
+        scales:{
+            x:{ stacked:true, grid:{color:'rgba(0,0,0,.04)'}, ticks:{font:{size:10},color:C.grayDk,stepSize:1}, beginAtZero:true },
+            y:{ stacked:true, grid:{display:false}, ticks:{font:{size:11},color:'#374151'} }
+        },
+        plugins:{legend:{display:false},
+            tooltip:{mode:'index',intersect:false,
+                callbacks:{afterBody:items=>{const i=items[0].dataIndex;return `Hours: ${CLIENT_HOURS[i]}h`;}}
+            }
+        }
+    }
+});
+
+/* Force resize after page fully loads */
+window.addEventListener('load', ()=>{
+    Object.values(Chart.instances).forEach(c => c.resize());
+});
+</script>
+
 <?php include '../../includes/footer.php'; ?>

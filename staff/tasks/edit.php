@@ -3,7 +3,6 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/notify.php';
-requireAdmin();
 
 $db   = getDB();
 $user = currentUser();
@@ -14,12 +13,6 @@ if (!$id) { header('Location: index.php'); exit; }
 $adminStmt = $db->prepare("SELECT * FROM users WHERE id = ?");
 $adminStmt->execute([$user['id']]);
 $adminUser = $adminStmt->fetch();
-
-// ── Detect branch manager (CORE dept admin) ──────────────────────────────
-$adminDeptCodeStmt = $db->prepare("SELECT d.dept_code FROM departments d WHERE d.id = ?");
-$adminDeptCodeStmt->execute([$adminUser['department_id']]);
-$adminDeptCodeCheck = $adminDeptCodeStmt->fetchColumn() ?: '';
-$isBranchManager = ($adminDeptCodeCheck === 'CORE');
 
 // Fetch task
 $taskStmt = $db->prepare("
@@ -42,38 +35,7 @@ $taskStmt = $db->prepare("
 $taskStmt->execute([$id]);
 $task = $taskStmt->fetch();
 if (!$task) { setFlash('error', 'Task not found.'); header('Location: index.php'); exit; }
-// ── Access check: admin can only edit tasks in their own dept or UDA depts ──
-if (!isExecutive() && !$isBranchManager) {
-    $allowedDeptIds = [$adminUser['department_id']];
 
-    // Add UDA depts
-    $udaStmt = $db->prepare("SELECT department_id FROM user_department_assignments WHERE user_id = ?");
-    $udaStmt->execute([$adminUser['id']]);
-    foreach ($udaStmt->fetchAll() as $row) {
-        $allowedDeptIds[] = (int)$row['department_id'];
-    }
-
-    // Add crossDept config depts
-    $crossDepts = CROSS_DEPT_ASSIGN[$adminUser['id']] ?? [];
-    if (!empty($crossDepts)) {
-        $cpStmt = $db->prepare(
-            "SELECT id FROM departments WHERE dept_code IN (" .
-            implode(',', array_fill(0, count($crossDepts), '?')) . ")"
-        );
-        $cpStmt->execute($crossDepts);
-        foreach ($cpStmt->fetchAll() as $row) {
-            $allowedDeptIds[] = (int)$row['id'];
-        }
-    }
-
-    $allowedDeptIds = array_unique($allowedDeptIds);
-
-    if (!in_array((int)$task['department_id'], $allowedDeptIds)) {
-        setFlash('error', 'You do not have permission to edit this task.');
-        header('Location: index.php');
-        exit;
-    }
-}
 // ── Load lookups ──────────────────────────────────────────────────────────────
 $taskStatuses = $db->query("SELECT id, status_name FROM task_status ORDER BY id")->fetchAll();
 $companiesStmt = $db->prepare("
@@ -88,15 +50,7 @@ $companiesStmt->execute();
 $companies = $companiesStmt->fetchAll();
 
 
-$allDeptsStmt = $db->prepare("
-    SELECT * FROM departments 
-    WHERE is_active=1 
-      AND dept_name != 'CORE ADMIN'
-      AND id != ?
-    ORDER BY dept_name
-");
-$allDeptsStmt->execute([$task['department_id']]);
-$allDepts = $allDeptsStmt->fetchAll();
+$allDepts = $db->query("SELECT * FROM departments WHERE is_active=1 AND dept_name != 'CORE ADMIN' ORDER BY dept_name")->fetchAll();
 
 // Transfer staff — admins only (exclude CORE), filtered by dept in JS
 $transferStaff = $db->query("
@@ -427,7 +381,7 @@ include '../../includes/header.php';
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 
 <div class="app-wrapper">
-<?php include '../../includes/sidebar_admin.php'; ?>
+<?php include '../../includes/sidebar_staff.php'; ?>
 <div class="main-content">
 <?php include '../../includes/topbar.php'; ?>
 <div style="padding:1.5rem 0;">

@@ -84,13 +84,8 @@ $plans = $db->query("
     LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
     WHERE wp.plan_month = '{$monthStart}'
       AND wp.user_id IN ({$inList})
-      AND (
-          wp.department_id = {$deptId}
-          OR wp.user_id IN (
-              SELECT uda.user_id FROM user_department_assignments uda
-              WHERE uda.department_id = {$deptId}
-          )
-      )
+      -- Simpler and correct
+AND wp.user_id IN ({$inList})
     GROUP BY wp.id
     ORDER BY wp.week_number ASC, u.full_name ASC
 ")->fetchAll(PDO::FETCH_ASSOC);

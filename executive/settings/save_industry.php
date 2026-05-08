@@ -13,14 +13,14 @@ $active = (int)($_POST['is_active'] ?? 1);
 
 if (!$name) {
     setFlash('error', 'Industry name is required.');
-    header('Location: industries.php'); exit;
+    header('Location: industry.php'); exit;
 }
 
 $dup = $db->prepare("SELECT id FROM industries WHERE industry_name = ?");
 $dup->execute([$name]);
 if ($dup->fetch()) {
     setFlash('error', "Industry \"{$name}\" already exists.");
-    header('Location: industries.php'); exit;
+    header('Location: industry.php'); exit;
 }
 
 $db->prepare("INSERT INTO industries (industry_name, is_active) VALUES (?, ?)")
@@ -28,5 +28,5 @@ $db->prepare("INSERT INTO industries (industry_name, is_active) VALUES (?, ?)")
 
 logActivity("Added industry: {$name}", 'industries');
 setFlash('success', "Industry \"{$name}\" added.");
-header('Location: industries.php');
+header('Location: industry.php');
 exit;

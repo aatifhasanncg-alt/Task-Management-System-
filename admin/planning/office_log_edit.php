@@ -141,7 +141,7 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_staff.php'; ?>
+    <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">

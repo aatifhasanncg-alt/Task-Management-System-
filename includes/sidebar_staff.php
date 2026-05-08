@@ -50,6 +50,8 @@ $__udaStmt = $__db->prepare("
 $__udaStmt->execute([$__userId]);
 $__udaDeptCodes = array_column($__udaStmt->fetchAll(PDO::FETCH_ASSOC), 'dept_code');
 $__hasUdaConsulting = in_array('CON', $__udaDeptCodes);
+$__nameParts = explode(' ', strtolower(trim($__staffProfile['full_name'] ?? '')));
+$__isMinu = ($__nameParts[0] === 'minu');
 
 // ── Task count (only for non-consulting staff) ────────────────
 $__taskCount = 0;
@@ -275,6 +277,11 @@ if (!function_exists('conNavActive')) {
                         <span class="nav-badge"><?= $pendingCnt ?></span>
                     <?php endif; ?>
                 </a>
+                <?php if ($__isMinu): ?>
+                    <a href="<?= APP_URL ?>/staff/tasks/assign.php" class="nav-item <?= isActiveStaff('/staff/tasks/assign') ?>">
+                        <i class="fas fa-plus-circle"></i><span>Assign Task</span>
+                    </a>
+                <?php endif; ?>
             <?php endif; ?>
 
             <!-- Consulting section — shown when staff has UDA CONS (regardless of primary dept) -->

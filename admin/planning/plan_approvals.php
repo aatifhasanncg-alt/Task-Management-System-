@@ -75,7 +75,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $planId = (int) ($_POST['plan_id'] ?? 0);
     $action = $_POST['action'] ?? '';
     $remarks = trim($_POST['remarks'] ?? '');
-
+    $statsStmt = $db->prepare("
+        SELECT 
+            COUNT(*) as entry_count,
+            COALESCE(SUM(planned_hours),0) as total_hours
+        FROM work_plan_entries
+        WHERE plan_id = ?
+    ");
+    $statsStmt->execute([$planId]);
+    $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
     $statusMap = [
         'approve' => 'approved',
         'reject' => 'rejected',
@@ -88,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Verify plan belongs to this dept
         $chk = $db->prepare("
-            SELECT id, user_id, week_number
+            SELECT id, user_id, week_number, week_start_date, week_end_date
             FROM work_plans
             WHERE id = ?
             AND department_id = ?
@@ -135,10 +143,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $staffUserId,
                         "Work Plan " . ucfirst($newStatus),
                         $message,
-                        'system',
+                        'status',
                         $link,
                         true,
-                        ['template' => 'generic']  // ← change from 'work_plan_status' to 'generic'
+                        [
+                            'template' => 'work_plan_status',
+                            'plan' => [
+                                'week'        => $weekNumber,
+                                'week_start'  => $planRow['week_start_date'] ?? null,
+                                'week_end'    => $planRow['week_end_date'] ?? null,
+                                'entry_count' => (int)$stats['entry_count'],
+                                'total_hours' => (float)$stats['total_hours'],
+                                'status'      => $newStatus,
+                                'remarks'     => $remarks,
+                                'reviewer'    => $user['full_name']
+                            ]
+                        ]
                     );
                 }
             } catch (Exception $ex) {

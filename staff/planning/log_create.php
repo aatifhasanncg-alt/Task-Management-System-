@@ -27,7 +27,50 @@ $companies = $db->prepare("
 ");
 $companies->execute([]);
 $companies = $companies->fetchAll();
+// Supervisors: admin role OR assigned to CON dept via primary dept or UDA
+// First try UDA managed_by for CON dept
+$managedByStmt = $db->prepare("
+    SELECT uda.managed_by
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+      AND d.dept_code = 'CON'
+      AND uda.managed_by IS NOT NULL
+    LIMIT 1
+");
+$managedByStmt->execute([$uid]);
+$defaultSupervisor = $managedByStmt->fetchColumn();
 
+// Fallback to users.managed_by if UDA has none
+if (!$defaultSupervisor) {
+    $mbStmt = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+    $mbStmt->execute([$uid]);
+    $defaultSupervisor = $mbStmt->fetchColumn();
+}
+
+// Supervisors: only admin OR staff linked to CON dept
+$supervisors = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    INNER JOIN (
+        SELECT u2.id
+        FROM users u2
+        LEFT JOIN departments dp ON dp.id = u2.department_id
+        WHERE dp.dept_code = 'CON'
+          AND u2.is_active = 1
+
+        UNION
+
+        SELECT uda2.user_id
+        FROM user_department_assignments uda2
+        JOIN departments du ON du.id = uda2.department_id
+        WHERE du.dept_code = 'CON'
+    ) AS con_users ON con_users.id = u.id
+    WHERE u.is_active = 1
+    ORDER BY u.full_name
+");
+$supervisors->execute();
+$supervisors = $supervisors->fetchAll();
 // Plan entries for today (for quick link)
 $todayEntries = $db->prepare("
     SELECT wpe.*, c.company_name, c.company_code, wp.week_number
@@ -52,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $visitStatus = $_POST['visit_status'] ?? 'visited';
     $workDesc = trim($_POST['work_description'] ?? '');
     $planEntryId = (int) ($_POST['plan_entry_id'] ?? 0) ?: null;
-
+    $supervisorId = (int) ($_POST['supervisor_id'] ?? 0) ?: null;
     if (!$clientId)
         $errors[] = 'Please select a client.';
     if (!$logDate)
@@ -73,16 +116,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $dow = $dateObj->format('l');
 
     if (!$errors) {
+        $cnRow = $db->prepare("SELECT company_name FROM companies WHERE id = ?");
+        $cnRow->execute([$clientId]);
+        $clientName = $cnRow->fetchColumn() ?: 'Client #' . $clientId;
         $ins = $db->prepare("
             INSERT INTO work_logs
-            (user_id, client_id, plan_entry_id, department_id, branch_id,
-             log_date, day_of_week, week_number, month_year,
-             time_in, time_out, duration_hours, work_description, visit_status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (user_id, client_id, supervisor_id, plan_entry_id, department_id, branch_id,
+            log_date, day_of_week, week_number, month_year,
+            time_in, time_out, duration_hours, work_description, visit_status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $ins->execute([
             $uid,
             $clientId,
+            $supervisorId,
             $planEntryId,
             $deptId,
             $branchId,
@@ -98,29 +145,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $logId = $db->lastInsertId();
 
-        // Notify supervisor/admin
-        $adminStmt = $db->prepare("
-            SELECT u.id FROM users u JOIN roles r ON r.id=u.role_id
-            WHERE r.role_name='admin' AND u.department_id=? AND u.branch_id=? AND u.is_active=1
-            LIMIT 5
-        ");
-        $adminStmt->execute([$deptId, $branchId]);
-        $admins = $adminStmt->fetchAll();
-
-        // Get client name
-        $cn = '';
-        foreach ($companies as $c) {
-            if ($c['id'] == $clientId) {
-                $cn = $c['company_name'];
-                break;
-            }
-        }
-
-        foreach ($admins as $admin) {
+        // Notify only the manager (managed_by)
+        if (!empty($user['managed_by'])) {
             notify(
-                $admin['id'],
+                (int) $user['managed_by'],
                 'Visit Logged',
-                $user['full_name'] . ' logged a ' . $visitStatus . ' visit to ' . $cn . ' on ' . date('d M Y', strtotime($logDate)),
+                $user['full_name'] . ' logged a ' . $visitStatus . ' visit to ' . $clientName . ' on ' . date('d M Y', strtotime($logDate)),
                 'task',
                 APP_URL . '/admin/planning/log_list.php?month=' . $monthYear,
                 false,
@@ -268,7 +298,27 @@ include '../../includes/header.php';
                                             <option value="rescheduled" <?= ($_POST['visit_status'] ?? '') === 'rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled</option>
                                         </select>
                                     </div>
-
+                                    <div class="col-md-6">
+    <label class="cn-label">Supervisor <span
+            style="font-size:.7rem;color:#9ca3af;">(Consulting dept only)</span></label>
+    <select name="supervisor_id" id="supervisorSelect" class="cn-input">
+        <option value="">— None —</option>
+        <?php foreach ($supervisors as $sv):
+            $selected = '';
+            if (isset($_POST['supervisor_id'])) {
+                $selected = ($_POST['supervisor_id'] == $sv['id']) ? 'selected' : '';
+            } else {
+                $selected = ($defaultSupervisor && $defaultSupervisor == $sv['id']) ? 'selected' : '';
+            }
+            $label = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
+        ?>
+            <option value="<?= $sv['id'] ?>" <?= $selected ?>
+                data-empid="<?= htmlspecialchars($sv['employee_id'] ?? '') ?>">
+                <?= htmlspecialchars($label) ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+</div>
                                     <div class="col-12">
                                         <label class="cn-label">Work Description</label>
                                         <textarea name="work_description" class="cn-input" rows="3"
@@ -345,13 +395,25 @@ include '../../includes/header.php';
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-new TomSelect('#clientSelect', {
-    placeholder: 'Search by name, code or PAN...',
-    maxOptions: 500,
+    new TomSelect('#clientSelect', {
+        placeholder: 'Search by name, code or PAN...',
+        maxOptions: 500,
+        allowEmptyOption: true,
+        searchField: ['text']   // searches full option text including PAN
+    });
+new TomSelect('#supervisorSelect', {
+    placeholder: 'Search by name or employee ID...',
     allowEmptyOption: true,
-    searchField: ['text']   // searches full option text including PAN
+    searchField: ['text'],
+    render: {
+        option: function(data, escape) {
+            return '<div>' + escape(data.text) + '</div>';
+        },
+        item: function(data, escape) {
+            return '<div>' + escape(data.text) + '</div>';
+        }
+    }
 });
-
     function calcDuration() {
         const tin = document.getElementById('timeIn').value;
         const tout = document.getElementById('timeOut').value;

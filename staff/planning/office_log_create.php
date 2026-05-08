@@ -59,6 +59,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $logDate, $timeIn, $timeOut, $description, $notes, $status
         ]);
         $logId = $db->lastInsertId();
+        // Notify only the manager (managed_by)
+        if (!empty($user['managed_by'])) {
+            require_once '../../config/notify.php';
+            notify(
+                (int)$user['managed_by'],
+                'Office Work Logged',
+                $user['full_name'] . ' logged office work for client #' . $clientId . ' on ' . date('d M Y', strtotime($logDate)),
+                'system',
+                APP_URL . '/admin/planning/office_log_view.php?id=' . $db->lastInsertId(),
+                false,
+                []
+            );
+        }
         logActivity('Office work logged for client #' . $clientId, 'consulting', 'office_log_id=' . $logId);
         setFlash('success', 'Office work log saved successfully!');
         header('Location: office_log_list.php?month=' . substr($logDate, 0, 7));
@@ -75,7 +88,7 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include '../../includes/sidebar_staff.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">

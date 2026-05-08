@@ -138,11 +138,29 @@ if ($isStaff && $task['assigned_to'] != $user['id']) {
 }
 
 $isCoreAdminDept = ($adminDeptCode === 'CORE');
+// Check if user has UDA assignment for the task's department
+$udaEditCheck = false;
+if (!$isStaff && $adminDeptCode !== $task['dept_code']) {
+    $udaEditStmt = $db->prepare("
+        SELECT COUNT(*) FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id = ?
+          AND d.dept_code = ?
+    ");
+    $udaEditStmt->execute([$user['id'], $task['dept_code']]);
+    $udaEditCheck = (int)$udaEditStmt->fetchColumn() > 0;
+}
+
+// canViewDept: can see the dept detail section (read-only or editable)
 $canViewDept = $isCoreAdminDept
     || ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code'])
-    || ($isStaff && $task['assigned_to'] == $user['id']);
+    || ($isStaff && $task['assigned_to'] == $user['id'])
+    || $udaEditCheck;  // ← UDA users can view too
+
+// canEditDept: can fill/save the dept detail forms
 $canEditDept = ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code'])
-    || ($isStaff && $task['assigned_to'] == $user['id']);
+    || ($isStaff && $task['assigned_to'] == $user['id'])
+    || $udaEditCheck;
 
 // ── Detail table map ──────────────────────────────────────────────────────────
 // Exact column names from SQL schemas
@@ -1058,7 +1076,7 @@ include '../../includes/header.php';
                          TAX DEPT — task_tax
                          Nullable: all except task_id, company_id
                     ════════════════════════════════════════════ -->
-                    <?php if ($task['dept_code'] === 'TAX' && ($canViewDept || $isStaff)): ?>
+                    <?php if ($task['dept_code'] === 'TAX' && ($isCoreAdminDept || $canViewDept)): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-receipt text-warning me-2"></i>Tax Details</h5>

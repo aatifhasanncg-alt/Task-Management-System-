@@ -34,6 +34,9 @@ $scopeSub = "
           -- currently assigned
           t.assigned_to = {$user['id']}
           OR
+          -- created by this user
+          t.created_by = {$user['id']}
+          OR
           -- ever transferred to this user
           EXISTS (
               SELECT 1 FROM task_workflow tw
@@ -479,9 +482,16 @@ include '../../includes/header.php';
                                         <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
                                     </td>
                                     <td>
-                                        <a href="view.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-gold">
-                                            <i class="fas fa-eye me-1"></i>View
-                                        </a>
+                                        <div class="d-flex gap-1">
+                                            <a href="view.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-gold">
+                                                <i class="fas fa-eye me-1"></i>View
+                                            </a>
+                                            <?php if ((int) $t['created_by'] === (int) $user['id']): ?>
+                                                <a href="edit.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-outline-warning">
+                                                    <i class="fas fa-pen me-1"></i>Edit
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

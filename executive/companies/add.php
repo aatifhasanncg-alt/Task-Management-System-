@@ -61,10 +61,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['form_action'] ?? '') === '
     }
 
     if (!$errors) {
-        if (!$companyCode) {
-            $companyCode = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $companyName), 0, 6))
-                         . rand(100, 999);
-        }
+    // Validate PAN length
+    if ($panNumber && strlen($panNumber) !== 9) {
+        $errors[] = 'PAN number must be exactly 9 digits.';
+    }
+}
+
+if (!$errors) {
+    if (!$companyCode) {
+        $companyCode = strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $companyName), 0, 6))
+                     . rand(100, 999);
+    }
+    try {
         $db->prepare("
             INSERT INTO companies
             (company_name, company_code, pan_number, reg_number,
@@ -81,8 +89,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['form_action'] ?? '') === '
         logActivity("Company added: {$companyName}", 'companies');
         setFlash('success', "Company \"{$companyName}\" added successfully.");
         header("Location: index.php"); exit;
+    } catch (Exception $e) {
+        $errors[] = 'Could not save company. Please check all fields and try again.';
     }
 }
+    }
+
 
 // Pull bulk-import row errors from session (set by bulk_import.php)
 $bulkErrors = $_SESSION['bulk_errors'] ?? [];

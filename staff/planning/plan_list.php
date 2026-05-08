@@ -56,10 +56,10 @@ $plans = $db->prepare("
            COALESCE(SUM(wpe.planned_hours),0) AS total_planned_hours
     FROM work_plans wp
     LEFT JOIN work_plan_entries wpe ON wpe.plan_id=wp.id
-    WHERE wp.user_id=? AND wp.plan_month=? AND wp.department_id=?
+    WHERE wp.user_id=? AND wp.plan_month=?
     GROUP BY wp.id ORDER BY wp.week_number ASC
 ");
-$plans->execute([$uid, $monthStart, $deptId]);
+$plans->execute([$uid, $monthStart]);
 $plans = $plans->fetchAll();
 
 $pageTitle = 'My Work Plans';

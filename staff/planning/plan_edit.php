@@ -80,11 +80,47 @@ $month = $monthDate->format('Y-m');
 $monthLabel = $monthDate->format('F Y');
 
 /* ── COMPANIES ───────────────── */
+/* ── COMPANIES ───────────────── */
 $companies = $db->query("
     SELECT id, company_name, company_code, pan_number
     FROM companies WHERE is_active=1
     ORDER BY company_name
 ")->fetchAll();
+
+/* ── SUPERVISORS ───────────────── */
+$supStmt = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    INNER JOIN (
+        SELECT u2.id FROM users u2
+        LEFT JOIN departments dp ON dp.id = u2.department_id
+        WHERE dp.dept_code = 'CON' AND u2.is_active = 1
+        UNION
+        SELECT uda2.user_id FROM user_department_assignments uda2
+        JOIN departments du ON du.id = uda2.department_id
+        WHERE du.dept_code = 'CON'
+    ) AS con_users ON con_users.id = u.id
+    WHERE u.is_active = 1
+    ORDER BY u.full_name
+");
+$supStmt->execute();
+$supervisors = $supStmt->fetchAll();
+
+// Default supervisor
+$managedByStmt = $db->prepare("
+    SELECT uda.managed_by FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ? AND d.dept_code = 'CON'
+      AND uda.managed_by IS NOT NULL
+    LIMIT 1
+");
+$managedByStmt->execute([$uid]);
+$defaultSupervisor = $managedByStmt->fetchColumn();
+if (!$defaultSupervisor) {
+    $mbStmt = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+    $mbStmt->execute([$uid]);
+    $defaultSupervisor = $mbStmt->fetchColumn();
+}
 
 /* ── UPDATE LOGIC ───────────────── */
 $errors = [];
@@ -103,9 +139,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->beginTransaction();
         try {
             // Update plan
-            $up = $db->prepare("
-                UPDATE work_plans SET remarks=? WHERE id=?
-            ");
+            // Only reset to draft if currently rejected, otherwise keep existing status
+            if ($plan['status'] === 'rejected') {
+                $up = $db->prepare("
+                    UPDATE work_plans SET remarks=?, status='draft', approved_by=NULL, approved_at=NULL WHERE id=?
+                ");
+            } else {
+                $up = $db->prepare("
+                    UPDATE work_plans SET remarks=? WHERE id=?
+                ");
+            }
             $up->execute([$remarks, $planId]);
 
             // Delete old entries
@@ -115,9 +158,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Insert new entries
             $ins = $db->prepare("
                 INSERT INTO work_plan_entries
-                (plan_id, client_id, client_code, assigned_to, plan_date,
+                (plan_id, client_id, client_code, assigned_to, supervisor_id, plan_date,
                  day_of_week, planned_time_in, planned_time_out, planned_hours, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ");
 
             foreach ($entries as $e) {
@@ -140,15 +183,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($companies as $c) {
                     if ($c['id'] == $cid) {
                         $cc = $c['company_code'];
+                        $pan = $c['pan_number'];
                         break;
                     }
                 }
 
+                $supId = (int)($e['supervisor_id'] ?? 0) ?: null;
                 $ins->execute([
                     $planId,
                     $cid,
                     $cc,
                     $uid,
+                    $supId,
                     $date,
                     date('l', strtotime($date)),
                     $tin,
@@ -164,39 +210,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 require_once '../../config/notify.php';
 
-                $branchId  = (int) $user['branch_id'];
+                $branchId = (int) $user['branch_id'];
                 $staffName = $user['full_name'] ?? ('User #' . $uid);
                 $weekRange = date('d M', strtotime($plan['week_start_date']))
-                        . ' – '
-                        . date('d M Y', strtotime($plan['week_end_date']));
+                    . ' – '
+                    . date('d M Y', strtotime($plan['week_end_date']));
 
                 $entryCount = count(array_filter($entries, fn($e) => !empty($e['client_id'])));
                 $totalHours = 0;
                 foreach ($entries as $e) {
                     if (!empty($e['time_in']) && !empty($e['time_out'])) {
                         $diff = (strtotime($e['time_out']) - strtotime($e['time_in'])) / 3600;
-                        if ($diff > 0) $totalHours += $diff;
+                        if ($diff > 0)
+                            $totalHours += $diff;
                     }
                 }
                 $totalHours = round($totalHours, 2);
 
                 $planUrl = APP_URL . '/admin/planning/plan_view.php?id=' . $planId;
 
-                $supStmt = $db->prepare("
-                    SELECT u.id FROM users u
-                    JOIN roles r ON r.id = u.role_id
-                    WHERE u.branch_id = ? AND r.role_name = 'admin' AND u.is_active = 1
+                // Find who manages this user
+                $managedByStmt = $db->prepare("
+                    SELECT u.id, u.full_name, u.email
+                    FROM users u
+                    WHERE u.id = (
+                        SELECT managed_by FROM users WHERE id = ?
+                    )
+                    AND u.is_active = 1
                 ");
-                $supStmt->execute([$branchId]);
-                $supervisors = $supStmt->fetchAll();
+                $managedByStmt->execute([$uid]);
+                $manager = $managedByStmt->fetch();
 
-                foreach ($supervisors as $sup) {
-                    $notifMsg  = "{$staffName} edited their work plan for Week {$plan['week_number']} ({$weekRange}).\n";
+                if ($manager) {
+                    $notifMsg = "{$staffName} edited their work plan for Week {$plan['week_number']} ({$weekRange}).\n";
                     $notifMsg .= "Entries: {$entryCount} clients · Total planned: {$totalHours} hrs";
-                    if ($remarks) $notifMsg .= "\nRemarks: {$remarks}";
+                    if ($remarks)
+                        $notifMsg .= "\nRemarks: {$remarks}";
 
                     notify(
-                        (int) $sup['id'],
+                        (int) $manager['id'],
                         'Work Plan Edited',
                         $notifMsg,
                         'system',
@@ -349,7 +401,37 @@ include '../../includes/header.php';
                                 Click "Add Entry" to add visits
                             </div>
                         </div>
-
+                        <!-- Actions -->
+                        <div class="cn-panel">
+                            <div class="cn-panel-hd">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-save me-2" style="color:var(--gold)"></i>Save
+                                </span>
+                            </div>
+                            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
+                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <i class="fas fa-save"></i> Update Plan
+                                </button>
+                                <?php if ($plan['status'] === 'rejected'): ?>
+                                <div style="margin-top:8px;padding:8px 10px;background:#fef9ec;border-radius:6px;
+                                    font-size:.75rem;color:#92400e;border:1px solid #fde68a;">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    This plan was <strong>rejected</strong>. Saving will reset it to
+                                    <strong>Draft</strong> so you can re-submit for approval.
+                                </div>
+                                <?php elseif ($plan['status'] === 'approved'): ?>
+                                <div style="margin-top:8px;padding:8px 10px;background:#f0fdf4;border-radius:6px;
+                                    font-size:.75rem;color:#166534;border:1px solid #bbf7d0;">
+                                    <i class="fas fa-check-circle me-1"></i>
+                                    This plan is <strong>approved</strong>. Edits will be saved without changing the approval status.
+                                </div>
+                                <?php endif; ?>
+                                <a href="plan_list.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
+                                    style="justify-content:center;">
+                                    <i class="fas fa-times"></i> Cancel
+                                </a>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- RIGHT -->
@@ -385,23 +467,7 @@ include '../../includes/header.php';
                             </div>
                         </div>
 
-                        <!-- Actions -->
-                        <div class="cn-panel">
-                            <div class="cn-panel-hd">
-                                <span class="cn-panel-title">
-                                    <i class="fas fa-save me-2" style="color:var(--gold)"></i>Save
-                                </span>
-                            </div>
-                            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Update Plan
-                                </button>
-                                <a href="plan_list.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
-                                    style="justify-content:center;">
-                                    <i class="fas fa-times"></i> Cancel
-                                </a>
-                            </div>
-                        </div>
+
 
                     </div>
                 </div><!-- /grid -->
@@ -472,11 +538,25 @@ include '../../includes/header.php';
                    value="${data.planned_time_out || ''}">
         </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;">
         <div>
             <label class="cn-label">Notes</label>
             <input type="text" name="entries[${idx}][notes]" class="cn-input"
                    placeholder="Purpose of visit…" value="${(data.notes || '').replace(/"/g, '&quot;')}">
+        </div>
+        <div>
+            <label class="cn-label">Supervisor</label>
+            <select name="entries[${idx}][supervisor_id]" class="cn-input entry-supervisor">
+                <option value="">— None —</option>
+                <?php foreach ($supervisors as $sv):
+                    $supLabel = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
+                ?>
+                <option value="<?= $sv['id'] ?>"
+                    data-default="<?= $defaultSupervisor == $sv['id'] ? '1' : '0' ?>">
+                    <?= htmlspecialchars($supLabel) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div class="hrs-pill">
             <i class="fas fa-clock me-1" style="color:#c9a84c;"></i>
@@ -495,7 +575,23 @@ include '../../includes/header.php';
         });
 
         // Pre-select existing client
+        // Pre-select existing client
         if (data.client_id) ts.setValue(String(data.client_id));
+
+        // TomSelect — supervisor
+        const supSel = div.querySelector('.entry-supervisor');
+        const supTs = new TomSelect(supSel, {
+            placeholder: 'Search supervisor…',
+            allowEmptyOption: true,
+            searchField: ['text']
+        });
+        // Pre-select saved supervisor or default managed_by
+        if (data.supervisor_id) {
+            supTs.setValue(String(data.supervisor_id));
+        } else {
+            const defOpt = supSel.querySelector('option[data-default="1"]');
+            if (defOpt) supTs.setValue(defOpt.value);
+        }
 
         // Time calc
         div.querySelectorAll('.time-in,.time-out').forEach(t =>

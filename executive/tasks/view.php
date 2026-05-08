@@ -444,7 +444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax'])) {
         $lastDate = $lastFu->fetchColumn();
         if ($lastDate !== $newFuDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
-            ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
+                ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
         }
     }
     $p = [
@@ -466,18 +466,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax'])) {
         ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null,
         ($t2['total_amount'] ?? '') !== '' ? (float) $t2['total_amount'] : 0,
         $t2['completed_date'] ?: null,
-        $t2['follow_up_date'] ?: null,
         trim($t2['remarks'] ?? ''),
         trim($t2['notes'] ?? ''),
     ];
     $ex = $db->prepare("SELECT id FROM task_tax WHERE task_id = ?");
     $ex->execute([$id]);
     if ($ex->fetch())
-        $db->prepare("UPDATE task_tax SET company_id=?,firm_name=?,assigned_office_id=?,assigned_office_address=?,tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,verify_by=?,tax_clearance_status_id=?,total_amount=?,completed_date=?,follow_up_date=?,remarks=?,notes=? WHERE task_id=?")
+        $db->prepare("UPDATE task_tax SET 
+            company_id=?,firm_name=?,assigned_office_id=?,assigned_office_address=?,
+            tax_type_id=?,fiscal_year=?,fiscal_year_id=?,submission_number=?,udin_no=?,
+            business_type=?,pan_number=?,assigned_to=?,file_received_by=?,updated_by=?,
+            verify_by=?,tax_clearance_status_id=?,total_amount=?,completed_date=?,
+            remarks=?,notes=? WHERE task_id=?")
             ->execute(array_merge($p, [$id]));
     else
-        $db->prepare("INSERT INTO task_tax(task_id,company_id,firm_name,assigned_office_id,assigned_office_address,tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,business_type,pan_number,assigned_to,file_received_by,updated_by,verify_by,tax_clearance_status_id,total_amount,completed_date,follow_up_date,remarks,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute(array_merge([$id], $p));
+        $db->prepare("INSERT INTO task_tax(
+        task_id,company_id,firm_name,assigned_office_id,assigned_office_address,
+        tax_type_id,fiscal_year,fiscal_year_id,submission_number,udin_no,
+        business_type,pan_number,assigned_to,file_received_by,updated_by,
+        verify_by,tax_clearance_status_id,total_amount,completed_date,
+        remarks,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        ->execute(array_merge([$id], $p));
     if (!empty($t2['status_id']))
         $db->prepare("UPDATE tasks SET status_id=?,updated_at=NOW() WHERE id=?")->execute([(int) $t2['status_id'], $id]);
     syncTaskFiscalYear($db, $id);
@@ -513,7 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail'])) {
         $lastDate = $lastFu->fetchColumn();
         if ($lastDate !== $newFuDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
-            ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
+                ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
         }
     }
     $p = [
@@ -539,16 +548,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail'])) {
         $r2['completed_date'] ?: null,
         ($r2['tax_clearance_status_id'] ?? '') !== '' ? (int) $r2['tax_clearance_status_id'] : null,
         ($r2['backup_status_id'] ?? '') !== '' ? (int) $r2['backup_status_id'] : null,
-        $r2['follow_up_date'] ?: null,
         trim($r2['notes'] ?? ''),
     ];
     $ex = $db->prepare("SELECT id FROM task_retail WHERE task_id = ?");
     $ex->execute([$id]);
     if ($ex->fetch())
-        $db->prepare("UPDATE task_retail SET company_id=?,firm_name=?,company_type_id=?,file_type_id=?,pan_vat_id=?,vat_client_id=?,return_type=?,fiscal_year=?,fiscal_year_id=?,no_of_audit_year=?,pan_no=?,assigned_to=?,assigned_date=?,audit_type_id=?,ecd=?,opening_due=?,work_status_id=?,finalisation_status_id=?,finalised_by=?,completed_date=?,tax_clearance_status_id=?,backup_status_id=?,follow_up_date=?,notes=? WHERE task_id=?")
+        $db->prepare("UPDATE task_retail SET 
+            company_id=?,firm_name=?,company_type_id=?,file_type_id=?,pan_vat_id=?,
+            vat_client_id=?,return_type=?,fiscal_year=?,fiscal_year_id=?,no_of_audit_year=?,
+            pan_no=?,assigned_to=?,assigned_date=?,audit_type_id=?,ecd=?,opening_due=?,
+            work_status_id=?,finalisation_status_id=?,finalised_by=?,completed_date=?,
+            tax_clearance_status_id=?,backup_status_id=?,notes=? 
+            WHERE task_id=?")
             ->execute(array_merge($p, [$id]));
     else
-        $db->prepare("INSERT INTO task_retail(task_id,company_id,firm_name,company_type_id,file_type_id,pan_vat_id,vat_client_id,return_type,fiscal_year,fiscal_year_id,no_of_audit_year,pan_no,assigned_to,assigned_date,audit_type_id,ecd,opening_due,work_status_id,finalisation_status_id,finalised_by,completed_date,tax_clearance_status_id,backup_status_id,follow_up_date,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        $db->prepare("INSERT INTO task_retail(
+            task_id,company_id,firm_name,company_type_id,file_type_id,pan_vat_id,
+            vat_client_id,return_type,fiscal_year,fiscal_year_id,no_of_audit_year,
+            pan_no,assigned_to,assigned_date,audit_type_id,ecd,opening_due,
+            work_status_id,finalisation_status_id,finalised_by,completed_date,
+            tax_clearance_status_id,backup_status_id,notes) 
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
             ->execute(array_merge([$id], $p));
     if (!empty($r2['work_status_id']))
         $db->prepare("UPDATE tasks SET status_id=?,updated_at=NOW() WHERE id=?")->execute([(int) $r2['work_status_id'], $id]);
@@ -560,37 +580,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail'])) {
 }
 
 /* POST: save_corporate */
+/* POST: save_corporate */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
     verifyCsrf();
     $co = $_POST['corporate'] ?? [];
-    $coFyId = ($co['fiscal_year_id'] ?? '') !== '' ? (int) $co['fiscal_year_id'] : getFiscalYearId($db, $co['fiscal_year_id'] ?? '');
 
-    $p = [
-        $task['company_id'],                                                                      // company_id
-        ($co['company_type_id'] ?? '') !== '' ? (int) $co['company_type_id'] : null,               // company_type_id
-        ($co['file_type_id'] ?? '') !== '' ? (int) $co['file_type_id'] : null,               // file_type_id
-        ($co['pan_vat_id'] ?? '') !== '' ? (int) $co['pan_vat_id'] : null,               // pan_vat_id
-        ($co['vat_client_id'] ?? '') !== '' ? (int) $co['vat_client_id'] : null,               // vat_client_id
-        $co['return_type'] ?? null,                                                               // return_type
-        trim($co['firm_name'] ?? '') ?: ($task['company_name'] ?? ''),                            // firm_name
-        trim($co['pan_no'] ?? '') ?: ($companyData['pan_number'] ?? null),                     // pan_no
-        ($co['grade_id'] ?? '') !== '' ? (int) $co['grade_id'] : null,                            // grade_id
-        ($co['assigned_to'] ?? '') !== '' ? (int) $co['assigned_to'] : $taskAssignedToId,          // assigned_to
-        ($co['finalised_by'] ?? '') !== '' ? (int) $co['finalised_by'] : null,                    // finalised_by
-        $co['completed_date'] ?: null,                                                            // completed_date
-        trim($co['remarks'] ?? '') ?: null,                                                       // remarks
-        $coFyId,                                                                                  // fiscal_year_id
-        (int) ($co['no_of_audit_year'] ?? 1),                                                     // no_of_audit_year
-        ($co['audit_type_id'] ?? '') !== '' ? (int) $co['audit_type_id'] : null,                  // audit_type_id
-        $co['ecd'] ?: null,                                                                       // ecd
-        ($co['opening_due'] ?? '') !== '' ? (float) $co['opening_due'] : 0,                       // opening_due
-        ($co['finalisation_status_id'] ?? '') !== '' ? (int) $co['finalisation_status_id'] : null, // finalisation_status_id
-        ($co['tax_clearance_status_id'] ?? '') !== '' ? (int) $co['tax_clearance_status_id'] : null, // tax_clearance_status_id
-        ($co['backup_status_id'] ?? '') !== '' ? (int) $co['backup_status_id'] : null,             // backup_status_id
-        trim($co['notes'] ?? '') ?: null,                                                         // notes
+    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int)$v   : null;
+    $fltOrNull = fn($v) => ($v !== '' && $v !== null) ? (float)$v : null;
+    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? trim($v)  : null;
+
+    $coFyId = $intOrNull($co['fiscal_year_id'] ?? '');
+
+    $sharedParams = [
+        $task['company_id'],                                                              // company_id
+        $intOrNull($co['company_type_id']          ?? ''),                                // company_type_id
+        $intOrNull($co['file_type_id']             ?? ''),                                // file_type_id
+        $intOrNull($co['pan_vat_id']               ?? ''),                                // pan_vat_id
+        $intOrNull($co['vat_client_id']            ?? ''),                                // vat_client_id
+        $strOrNull($co['return_type']              ?? ''),                                // return_type
+        trim($co['firm_name'] ?? '') ?: ($task['company_name'] ?? ''),                   // firm_name
+        trim($co['pan_no']    ?? '') ?: ($companyData['pan_number'] ?? null),             // pan_no
+        $intOrNull($co['grade_id']                 ?? ''),                                // grade_id
+        $intOrNull($co['assigned_to']              ?? '') ?? $taskAssignedToId,           // assigned_to
+        $intOrNull($co['finalised_by']             ?? ''),                                // finalised_by
+        $strOrNull($co['completed_date']           ?? ''),                                // completed_date
+        $strOrNull($co['remarks']                  ?? ''),                                // remarks
+        $coFyId,                                                                          // fiscal_year_id
+        (int)($co['no_of_audit_year']              ?? 1),                                 // no_of_audit_year
+        $intOrNull($co['audit_type_id']            ?? ''),                                // audit_type_id
+        $strOrNull($co['ecd']                      ?? ''),                                // ecd
+        $fltOrNull($co['opening_due']              ?? '') ?? 0,                           // opening_due
+        $intOrNull($co['finalisation_status_id']   ?? ''),                                // finalisation_status_id
+        $intOrNull($co['tax_clearance_status_id']  ?? ''),                                // tax_clearance_status_id
+        $intOrNull($co['backup_status_id']         ?? ''),                                // backup_status_id
+        $strOrNull($co['notes']                    ?? ''),                                // notes
     ];
-    // Save follow-up to task_followups table
-    $newFuDate = trim($co['follow_up_date'] ?? '');  // use $r2 for retail, $t2 for tax
+
+    // Save follow-up
+    $newFuDate = trim($co['follow_up_date'] ?? '');
     $newFuNote = trim($co['follow_up_note'] ?? '');
     if ($newFuDate) {
         $lastFu = $db->prepare("SELECT followup_date FROM task_followups WHERE task_id=? ORDER BY created_at DESC LIMIT 1");
@@ -598,43 +625,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
         $lastDate = $lastFu->fetchColumn();
         if ($lastDate !== $newFuDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
-            ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
+                ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
         }
     }
+
     try {
         $ex = $db->prepare("SELECT id FROM task_corporate WHERE task_id = ?");
         $ex->execute([$id]);
+
         if ($ex->fetch()) {
+            // UPDATE — sharedParams covers all SET columns, task_id goes at the end for WHERE
             $db->prepare("
                 UPDATE task_corporate SET
                     company_id=?, company_type_id=?, file_type_id=?, pan_vat_id=?,
                     vat_client_id=?, return_type=?, firm_name=?, pan_no=?, grade_id=?,
-                    assigned_to=?, finalised_by=?, completed_date=?, follow_up_date=?,
+                    assigned_to=?, finalised_by=?, completed_date=?,
                     remarks=?, fiscal_year_id=?, no_of_audit_year=?, audit_type_id=?,
                     ecd=?, opening_due=?, finalisation_status_id=?,
-                    tax_clearance_status_id=?, backup_status_id=?,
-                    assigned_date=?, notes=?
+                    tax_clearance_status_id=?, backup_status_id=?, notes=?
                 WHERE task_id=?
-            ")->execute(array_merge($p, [$id]));
+            ")->execute(array_merge($sharedParams, [$id]));
+
         } else {
+            // INSERT — prepend task_id, sharedParams covers all remaining columns
             $db->prepare("
                 INSERT INTO task_corporate(
-                    task_id, company_id, company_type_id, file_type_id, pan_vat_id,
+                    task_id,
+                    company_id, company_type_id, file_type_id, pan_vat_id,
                     vat_client_id, return_type, firm_name, pan_no, grade_id,
-                    assigned_to, finalised_by, completed_date, follow_up_date,
+                    assigned_to, finalised_by, completed_date,
                     remarks, fiscal_year_id, no_of_audit_year, audit_type_id,
                     ecd, opening_due, finalisation_status_id,
-                    tax_clearance_status_id, backup_status_id,
-                    assigned_date, notes
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ")->execute(array_merge([$id], $p));
+                    tax_clearance_status_id, backup_status_id, notes
+                ) VALUES (
+                    ?,
+                    ?,?,?,?,
+                    ?,?,?,?,?,
+                    ?,?,?,
+                    ?,?,?,?,
+                    ?,?,?,
+                    ?,?,?
+                )
+            ")->execute(array_merge([$id], $sharedParams));
         }
+
         syncTaskFiscalYear($db, $id);
         logActivity("Corporate saved: {$task['task_number']}", 'tasks');
         setFlash('success', 'Corporate details saved.');
+
     } catch (Exception $e) {
         setFlash('error', 'Could not save: ' . $e->getMessage());
     }
+
     header("Location: view.php?id={$id}");
     exit;
 }
@@ -692,150 +734,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_finance'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking'])) {
     verifyCsrf();
     $b = $_POST['banking'] ?? [];
-    foreach (['fiscal_year VARCHAR(10)', 'fiscal_year_id INT'] as $colDef) {
-        $col = explode(' ', $colDef)[0];
-        try {
-            $db->query("SELECT $col FROM task_banking LIMIT 1");
-        } catch (Exception $e) {
-            try {
-                $db->exec("ALTER TABLE task_banking ADD COLUMN $colDef NULL");
-            } catch (Exception $e2) {
-            }
-        }
-    }
-    $bank_reference_id = ($b['bank_reference_id'] ?? '') !== ''
-        ? (int) $b['bank_reference_id']
-        : null;
 
-    $client_category_id = ($b['client_category_id'] ?? '') !== ''
-        ? (int) $b['client_category_id']
-        : null;
-    $ecd = !empty($b['ecd']) ? $b['ecd'] : null;
+    // Helper to convert empty string to null for integer fields
+    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int)$v : null;
+    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? (string)$v : null;
+
+    $bank_reference_id  = $intOrNull($b['bank_reference_id']  ?? '');
+    $client_category_id = $intOrNull($b['client_category_id'] ?? '');
+    $ecd             = !empty($b['ecd'])             ? $b['ecd']             : null;
     $completion_date = !empty($b['completion_date']) ? $b['completion_date'] : null;
-    $p = [
-        $task['id'],
+
+    $sales_check                    = $intOrNull($b['sales_check']                    ?? '');
+    $audit_check                    = $intOrNull($b['audit_check']                    ?? '');
+    $provisional_financial_statement = $intOrNull($b['provisional_financial_statement'] ?? '');
+    $projected                      = $intOrNull($b['projected']                      ?? '');
+    $consulting                     = $intOrNull($b['consulting']                     ?? '');
+    $nta                            = $intOrNull($b['nta']                            ?? '');
+    $salary_certificate             = $intOrNull($b['salary_certificate']             ?? '');
+    $ca_certification               = $intOrNull($b['ca_certification']               ?? '');
+    $etds                           = $intOrNull($b['etds']                           ?? '');
+    $bill_issued                    = isset($b['bill_issued']) ? 1 : 0;
+    $remarks                        = $strOrNull($b['remarks'] ?? '');
+
+    $sharedParams = [
         $task['company_id'],
-        ($b['bank_reference_id'] ?? null),
-        ($b['client_category_id'] ?? null),
-        parseDate($b['ecd'] ?? null),
-        parseDate($b['completion_date'] ?? null),
-        (($b['sales_check'] !== '' && isset($b['sales_check'])) ? (int) $b['sales_check'] : null),
-        (($b['audit_check'] !== '' && isset($b['audit_check']))
-            ? (int) $b['audit_check']
-            : null),
-        ($b['provisional_financial_statement'] ?? null),
-        ($b['projected'] ?? null),
-        (($b['consulting'] !== '' && isset($b['consulting']))
-            ? (int) $b['consulting']
-            : null),
-        (($b['nta'] !== '' && isset($b['nta']))
-            ? (int) $b['nta']
-            : null),
-        (($b['salary_certificate'] !== '' && isset($b['salary_certificate']))
-            ? (int) $b['salary_certificate']
-            : null),
-        (($b['ca_certification'] !== '' && isset($b['ca_certification']))
-            ? (int) $b['ca_certification']
-            : null),
-        (($b['etds'] !== '' && isset($b['etds']))
-            ? (int) $b['etds']
-            : null),
-        isset($b['bill_issued']) ? 1 : 0,
-        $b['remarks'] ?? null,
+        $bank_reference_id,
+        $client_category_id,
+        $ecd,
+        $completion_date,
+        $sales_check,
+        $audit_check,
+        $provisional_financial_statement,
+        $projected,
+        $consulting,
+        $nta,
+        $salary_certificate,
+        $ca_certification,
+        $etds,
+        $bill_issued,
+        $remarks,
     ];
+
     $ex = $db->prepare("SELECT id FROM task_banking WHERE task_id = ?");
     $ex->execute([$task['id']]);
-    if ($ex->fetch())
+
+    if ($ex->fetch()) {
         $db->prepare("
-        UPDATE task_banking SET
-            company_id=?,
-            bank_reference_id=?,
-            client_category_id=?,
-            ecd=?,
-            completion_date=?,
-            sales_check=?,
-            audit_check=?,
-            provisional_financial_statement=?,
-            projected=?,
-            consulting=?,
-            nta=?,
-            salary_certificate=?,
-            ca_certification=?,
-            etds=?,
-            bill_issued=?,
-            remarks=?
-        WHERE task_id=?
-    ")->execute([
-                    $task['company_id'] ?? null,
-                    $bank_reference_id,
-                    $client_category_id,
-                    $ecd,
-                    $completion_date,
-                    ($b['sales_check'] !== '' && isset($b['sales_check'])) ? (int) $b['sales_check'] : null,
-                    ($b['audit_check'] !== '' && isset($b['audit_check']))
-                    ? (int) $b['audit_check']
-                    : null,
-                    $b['provisional_financial_statement'] ?? null,
-                    $b['projected'] ?? null,
-                    ($b['consulting'] !== '' && isset($b['consulting']))
-                    ? (int) $b['consulting']
-                    : null,
-                    ($b['nta'] !== '' && isset($b['nta']))
-                    ? (int) $b['nta']
-                    : null,
-                    ($b['salary_certificate'] !== '' && isset($b['salary_certificate']))
-                    ? (int) $b['salary_certificate']
-                    : null,
-                    ($b['ca_certification'] !== '' && isset($b['ca_certification']))
-                    ? (int) $b['ca_certification']
-                    : null,
-                    ($b['etds'] !== '' && isset($b['etds']))
-                    ? (int) $b['etds']
-                    : null,
-                    $b['bill_issued'] ?? 0,
-                    $b['remarks'] ?? null,
-                    $task['id']
-                ]);
-    else
+            UPDATE task_banking SET
+                company_id=?,
+                bank_reference_id=?,
+                client_category_id=?,
+                ecd=?,
+                completion_date=?,
+                sales_check=?,
+                audit_check=?,
+                provisional_financial_statement=?,
+                projected=?,
+                consulting=?,
+                nta=?,
+                salary_certificate=?,
+                ca_certification=?,
+                etds=?,
+                bill_issued=?,
+                remarks=?
+            WHERE task_id=?
+        ")->execute(array_merge($sharedParams, [$task['id']]));
+    } else {
         $db->prepare("
-        INSERT INTO task_banking(
-            task_id, company_id, bank_reference_id, client_category_id,
-            ecd, completion_date,
-            sales_check, audit_check, provisional_financial_statement, projected,
-            consulting, nta, salary_certificate, ca_certification, etds,
-            bill_issued, remarks
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ")->execute([
-                    $task['id'],
-                    $task['company_id'] ?? null,
-                    $bank_reference_id,
-                    $client_category_id,
-                    $ecd,
-                    $completion_date,
-                    ($b['sales_check'] !== '' && isset($b['sales_check'])) ? (int) $b['sales_check'] : null,
-                    ($b['audit_check'] !== '' && isset($b['audit_check']))
-                    ? (int) $b['audit_check']
-                    : null,
-                    $b['provisional_financial_statement'] ?? null,
-                    $b['projected'] ?? null,
-                    ($b['consulting'] !== '' && isset($b['consulting']))
-                    ? (int) $b['consulting']
-                    : null,
-                    ($b['nta'] !== '' && isset($b['nta']))
-                    ? (int) $b['nta']
-                    : null,
-                    ($b['salary_certificate'] !== '' && isset($b['salary_certificate']))
-                    ? (int) $b['salary_certificate']
-                    : null,
-                    ($b['ca_certification'] !== '' && isset($b['ca_certification']))
-                    ? (int) $b['ca_certification']
-                    : null,
-                    ($b['etds'] !== '' && isset($b['etds']))
-                    ? (int) $b['etds']
-                    : null,
-                    $b['bill_issued'] ?? 0,
-                    $b['remarks'] ?? null
-                ]);
+            INSERT INTO task_banking(
+                task_id, company_id, bank_reference_id, client_category_id,
+                ecd, completion_date,
+                sales_check, audit_check, provisional_financial_statement, projected,
+                consulting, nta, salary_certificate, ca_certification, etds,
+                bill_issued, remarks
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ")->execute(array_merge([$task['id']], $sharedParams));
+    }
+
     syncTaskFiscalYear($db, $task['id']);
     setFlash('success', 'Banking details saved.');
     header("Location: view.php?id={$task['id']}");
@@ -1342,8 +1317,8 @@ include '../../includes/header.php';
                                                     'Total Amount' => '<span class="money">Rs. ' . number_format($detail['total_amount'] ?? 0, 2) . '</span>',
                                                     'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—',
                                                     'Completed Date' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
-                                                    'Follow-up Date' => !empty($followupHistory) 
-                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date'])) 
+                                                    'Follow-up Date' => !empty($followupHistory)
+                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date']))
                                                         : '—',
                                                 ];
                                                 foreach ($taxViewRows as $l => $v): ?>
@@ -1495,8 +1470,8 @@ include '../../includes/header.php';
                                                     'Completed' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
                                                     'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'),
                                                     'Backup Status' => htmlspecialchars($detail['backup_status_value'] ?? '—'),
-                                                    'Follow-up Date' => !empty($followupHistory) 
-                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date'])) 
+                                                    'Follow-up Date' => !empty($followupHistory)
+                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date']))
                                                         : '—',
                                                 ] as $l => $v): ?>
                                                     <div>
@@ -1537,10 +1512,10 @@ include '../../includes/header.php';
                                                     'Completed Date' => ($detail['completed_date'] ?? '') ? date('d M Y', strtotime($detail['completed_date'])) : '—',
                                                     'Tax Clearance' => htmlspecialchars($detail['tax_clearance_status_name'] ?? '—'),
                                                     'Backup Status' => htmlspecialchars($detail['backup_status_value'] ?? '—'),
-                                                    'Follow-up Date' => !empty($followupHistory) 
-                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date'])) 
+                                                    'Follow-up Date' => !empty($followupHistory)
+                                                        ? date('d M Y', strtotime(end($followupHistory)['followup_date']))
                                                         : '—',
-                                                        ] as $l => $v): ?> 
+                                                ] as $l => $v): ?>
                                                     <div class="col-md-4">
                                                         <div class="vw-label"><?= $l ?></div>
                                                         <div class="vw-value"><?= $v ?></div>
@@ -2569,7 +2544,7 @@ include '../../includes/header.php';
                             </div><!-- tv-card-body -->
                         </div><!-- dept card -->
                     <?php endif; /* detailTable */ ?>
-                    
+
                     <!-- ── Comments ──────────────────────────────────────── -->
                     <div class="tv-card" id="comments">
                         <div class="tv-card-head">
@@ -2578,24 +2553,24 @@ include '../../includes/header.php';
                         </div>
                         <div class="tv-card-body">
                             <?php if (empty($comments)): ?>
-                                    <div class="text-center py-3 text-muted" style="font-size:.85rem;">No comments yet. Be the
-                                        first!</div>
+                                <div class="text-center py-3 text-muted" style="font-size:.85rem;">No comments yet. Be the
+                                    first!</div>
                             <?php endif; ?>
                             <?php foreach ($comments as $c): ?>
-                                    <div class="d-flex gap-3 mb-3">
-                                        <div class="av av-sm flex-shrink-0">
-                                            <?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?>
-                                        </div>
-                                        <div class="flex-grow-1">
-                                            <div class="d-flex gap-2 align-items-center mb-1">
-                                                <strong
-                                                    style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong>
-                                                <span
-                                                    style="font-size:.71rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span>
-                                            </div>
-                                            <div class="c-bubble"><?= nl2br(htmlspecialchars($c['comment'])) ?></div>
-                                        </div>
+                                <div class="d-flex gap-3 mb-3">
+                                    <div class="av av-sm flex-shrink-0">
+                                        <?= strtoupper(substr($c['full_name'] ?? '?', 0, 2)) ?>
                                     </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex gap-2 align-items-center mb-1">
+                                            <strong
+                                                style="font-size:.85rem;"><?= htmlspecialchars($c['full_name']) ?></strong>
+                                            <span
+                                                style="font-size:.71rem;color:#9ca3af;"><?= date('M j, Y H:i', strtotime($c['created_at'])) ?></span>
+                                        </div>
+                                        <div class="c-bubble"><?= nl2br(htmlspecialchars($c['comment'])) ?></div>
+                                    </div>
+                                </div>
                             <?php endforeach; ?>
                             <form method="POST" class="mt-3 d-flex gap-2">
                                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
@@ -2609,58 +2584,58 @@ include '../../includes/header.php';
 
                     <!-- ── Workflow History ──────────────────────────────── -->
                     <?php if (!empty($workflow)): ?>
-                            <div class="tv-card">
-                                <div class="tv-card-head">
-                                    <h5><i class="fas fa-history me-2" style="color:var(--gold)"></i>Workflow History</h5>
-                                </div>
-                                <div class="tv-card-body">
-                                    <?php foreach ($workflow as $w): ?>
-                                            <div class="d-flex gap-3 mb-3">
-                                                <div class="wf-icon">
-                                                    <i class="fas fa-<?= match ($w['action'] ?? '') {
-                                                        'created' => 'plus',
-                                                        'assigned' => 'user-check',
-                                                        'status_changed' => 'circle-dot',
-                                                        'transferred_dept' => 'exchange-alt',
-                                                        'transferred_staff' => 'user-arrows',
-                                                        'completed' => 'check-circle',
-                                                        default => 'pen',
-                                                    } ?>"></i>
-                                                </div>
-                                                <div class="flex-grow-1">
-                                                    <div style="font-size:.82rem;font-weight:600;color:#1f2937;">
-                                                        <?= ucwords(str_replace('_', ' ', $w['action'] ?? '')) ?>
-                                                        <?php if ($w['from_name']): ?> by
-                                                                <?= htmlspecialchars($w['from_name']) ?>                 <?php endif; ?>
-                                                        <?php if ($w['to_name']): ?> →
-                                                                <?= htmlspecialchars($w['to_name']) ?>                 <?php endif; ?>
-                                                    </div>
-                                                    <?php if ($w['from_dept'] || $w['to_dept']): ?>
-                                                            <div style="font-size:.74rem;color:#8b5cf6;">
-                                                                <?= htmlspecialchars($w['from_dept'] ?? '') ?>
-                                                                <?= ($w['from_dept'] && $w['to_dept']) ? ' → ' : '' ?>
-                                                                <?= htmlspecialchars($w['to_dept'] ?? '') ?>
-                                                            </div>
-                                                    <?php endif; ?>
-                                                    <?php if ($w['old_status'] || $w['new_status']): ?>
-                                                            <div style="font-size:.74rem;color:#9ca3af;">
-                                                                <?= htmlspecialchars($w['old_status'] ?? '') ?>
-                                                                <?= ($w['old_status'] && $w['new_status']) ? ' → ' : '' ?>
-                                                                <?= htmlspecialchars($w['new_status'] ?? '') ?>
-                                                            </div>
-                                                    <?php endif; ?>
-                                                    <?php if ($w['remarks'] ?? ''): ?>
-                                                            <div style="font-size:.77rem;color:#6b7280;font-style:italic;">
-                                                                "<?= htmlspecialchars($w['remarks']) ?>"</div>
-                                                    <?php endif; ?>
-                                                    <div style="font-size:.69rem;color:#9ca3af;margin-top:.15rem;">
-                                                        <?= date('d M Y, H:i', strtotime($w['created_at'])) ?>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                    <?php endforeach; ?>
-                                </div>
+                        <div class="tv-card">
+                            <div class="tv-card-head">
+                                <h5><i class="fas fa-history me-2" style="color:var(--gold)"></i>Workflow History</h5>
                             </div>
+                            <div class="tv-card-body">
+                                <?php foreach ($workflow as $w): ?>
+                                    <div class="d-flex gap-3 mb-3">
+                                        <div class="wf-icon">
+                                            <i class="fas fa-<?= match ($w['action'] ?? '') {
+                                                'created' => 'plus',
+                                                'assigned' => 'user-check',
+                                                'status_changed' => 'circle-dot',
+                                                'transferred_dept' => 'exchange-alt',
+                                                'transferred_staff' => 'user-arrows',
+                                                'completed' => 'check-circle',
+                                                default => 'pen',
+                                            } ?>"></i>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div style="font-size:.82rem;font-weight:600;color:#1f2937;">
+                                                <?= ucwords(str_replace('_', ' ', $w['action'] ?? '')) ?>
+                                                <?php if ($w['from_name']): ?> by
+                                                    <?= htmlspecialchars($w['from_name']) ?>         <?php endif; ?>
+                                                <?php if ($w['to_name']): ?> →
+                                                    <?= htmlspecialchars($w['to_name']) ?>         <?php endif; ?>
+                                            </div>
+                                            <?php if ($w['from_dept'] || $w['to_dept']): ?>
+                                                <div style="font-size:.74rem;color:#8b5cf6;">
+                                                    <?= htmlspecialchars($w['from_dept'] ?? '') ?>
+                                                    <?= ($w['from_dept'] && $w['to_dept']) ? ' → ' : '' ?>
+                                                    <?= htmlspecialchars($w['to_dept'] ?? '') ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if ($w['old_status'] || $w['new_status']): ?>
+                                                <div style="font-size:.74rem;color:#9ca3af;">
+                                                    <?= htmlspecialchars($w['old_status'] ?? '') ?>
+                                                    <?= ($w['old_status'] && $w['new_status']) ? ' → ' : '' ?>
+                                                    <?= htmlspecialchars($w['new_status'] ?? '') ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if ($w['remarks'] ?? ''): ?>
+                                                <div style="font-size:.77rem;color:#6b7280;font-style:italic;">
+                                                    "<?= htmlspecialchars($w['remarks']) ?>"</div>
+                                            <?php endif; ?>
+                                            <div style="font-size:.69rem;color:#9ca3af;margin-top:.15rem;">
+                                                <?= date('d M Y, H:i', strtotime($w['created_at'])) ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
                     <?php endif; ?>
 
                 </div><!-- col-lg-8 -->
@@ -2683,15 +2658,15 @@ include '../../includes/header.php';
                                         $sCol = $ts['color'] ?? '#9ca3af';
                                         $sBg = $ts['bg_color'] ?? '#f3f4f6';
                                         ?>
-                                            <div class="form-check mb-2">
-                                                <input class="form-check-input" type="radio" name="new_status"
-                                                    value="<?= htmlspecialchars($sKey) ?>" id="st_<?= $ts['id'] ?>"
-                                                    <?= ($task['status'] ?? '') === $sKey ? 'checked' : '' ?>>
-                                                <label class="form-check-label" for="st_<?= $ts['id'] ?>">
-                                                    <span class="s-pill"
-                                                        style="background:<?= $sBg ?>;color:<?= $sCol ?>;"><?= htmlspecialchars($sKey) ?></span>
-                                                </label>
-                                            </div>
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="radio" name="new_status"
+                                                value="<?= htmlspecialchars($sKey) ?>" id="st_<?= $ts['id'] ?>"
+                                                <?= ($task['status'] ?? '') === $sKey ? 'checked' : '' ?>>
+                                            <label class="form-check-label" for="st_<?= $ts['id'] ?>">
+                                                <span class="s-pill"
+                                                    style="background:<?= $sBg ?>;color:<?= $sCol ?>;"><?= htmlspecialchars($sKey) ?></span>
+                                            </label>
+                                        </div>
                                     <?php endforeach; ?>
                                 </div>
                                 <button type="submit" class="btn btn-gold w-100 btn-sm"><i
@@ -2715,50 +2690,52 @@ include '../../includes/header.php';
                             'Created' => date('d M Y, H:i', strtotime($task['created_at'])),
                             'Updated' => date('d M Y, H:i', strtotime($task['updated_at'])),
                         ] as $k => $v): ?>
-                                <div class="mb-2 d-flex justify-content-between">
-                                    <span style="color:#9ca3af;"><?= $k ?>:</span>
-                                    <span style="color:#374151;font-weight:600;text-align:right;max-width:65%;"><?= $v ?></span>
-                                </div>
+                            <div class="mb-2 d-flex justify-content-between">
+                                <span style="color:#9ca3af;"><?= $k ?>:</span>
+                                <span style="color:#374151;font-weight:600;text-align:right;max-width:65%;"><?= $v ?></span>
+                            </div>
                         <?php endforeach; ?>
                     </div>
-<!-- Follow-up History -->
+                    <!-- Follow-up History -->
                     <?php if (!empty($followupHistory)): ?>
-                            <div class="tv-card mt-3">
-                                <div class="tv-card-head">
-                                    <h5><i class="fas fa-clock-rotate-left me-2" style="color:var(--gold)"></i>Follow-up History</h5>
-                                    <span style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;font-weight:700;">
-                                        <?= count($followupHistory) ?>
-                                    </span>
-                                </div>
-                                <div class="tv-card-body" style="max-height:320px;overflow-y:auto;">
-                                    <?php foreach ($followupHistory as $i => $fu): ?>
-                                            <div class="d-flex gap-2 mb-3">
-                                                <div style="width:22px;height:22px;border-radius:50%;background:#f59e0b;color:white;
+                        <div class="tv-card mt-3">
+                            <div class="tv-card-head">
+                                <h5><i class="fas fa-clock-rotate-left me-2" style="color:var(--gold)"></i>Follow-up History
+                                </h5>
+                                <span
+                                    style="background:#f59e0b;color:white;padding:.15rem .5rem;border-radius:99px;font-size:.68rem;font-weight:700;">
+                                    <?= count($followupHistory) ?>
+                                </span>
+                            </div>
+                            <div class="tv-card-body" style="max-height:320px;overflow-y:auto;">
+                                <?php foreach ($followupHistory as $i => $fu): ?>
+                                    <div class="d-flex gap-2 mb-3">
+                                        <div style="width:22px;height:22px;border-radius:50%;background:#f59e0b;color:white;
                                                     display:flex;align-items:center;justify-content:center;
                                                     font-size:.65rem;font-weight:700;flex-shrink:0;">
-                                                    <?= $i + 1 ?>
-                                                </div>
-                                                <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+                                            <?= $i + 1 ?>
+                                        </div>
+                                        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
                                                     padding:.45rem .7rem;flex:1;">
-                                                    <div style="font-size:.8rem;font-weight:700;color:#92400e;">
-                                                        <?= date('d M Y', strtotime($fu['followup_date'])) ?>
-                                                        <span style="font-weight:400;color:#9ca3af;font-size:.7rem;">
-                                                            by <?= htmlspecialchars($fu['added_by_name']) ?>
-                                                        </span>
-                                                    </div>
-                                                    <?php if ($fu['notes']): ?>
-                                                            <div style="font-size:.75rem;color:#6b7280;margin-top:.15rem;font-style:italic;">
-                                                                "<?= htmlspecialchars($fu['notes']) ?>"
-                                                            </div>
-                                                    <?php endif; ?>
-                                                    <div style="font-size:.68rem;color:#9ca3af;margin-top:.1rem;">
-                                                        <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
-                                                    </div>
-                                                </div>
+                                            <div style="font-size:.8rem;font-weight:700;color:#92400e;">
+                                                <?= date('d M Y', strtotime($fu['followup_date'])) ?>
+                                                <span style="font-weight:400;color:#9ca3af;font-size:.7rem;">
+                                                    by <?= htmlspecialchars($fu['added_by_name']) ?>
+                                                </span>
                                             </div>
-                                    <?php endforeach; ?>
-                                </div>
+                                            <?php if ($fu['notes']): ?>
+                                                <div style="font-size:.75rem;color:#6b7280;margin-top:.15rem;font-style:italic;">
+                                                    "<?= htmlspecialchars($fu['notes']) ?>"
+                                                </div>
+                                            <?php endif; ?>
+                                            <div style="font-size:.68rem;color:#9ca3af;margin-top:.1rem;">
+                                                <?= date('d M Y, H:i', strtotime($fu['created_at'])) ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
                             </div>
+                        </div>
                     <?php endif; ?>
                 </div><!-- col-lg-4 -->
             </div><!-- row -->
@@ -2788,7 +2765,7 @@ include '../../includes/header.php';
 
     /* Auto-open edit mode via URL param */
     <?php if (isset($_GET['mode']) && $_GET['mode'] === 'edit'): ?>
-            document.addEventListener('DOMContentLoaded', () => switchMode('edit'));
+        document.addEventListener('DOMContentLoaded', () => switchMode('edit'));
     <?php endif; ?>
 
     /* Auto-fill office address from select */

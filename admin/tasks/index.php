@@ -43,27 +43,42 @@ $params = [];
 
 if (!isExecutive()) {
     if ($isBranchManager) {
-        // Branch Manager: always sees ALL tasks in their branch
         $where[]  = 't.branch_id = ?';
         $params[] = $adminBranchId;
-    } elseif ($showAll) {
-        $where[] = "(
-            (t.branch_id = ? AND t.department_id = ?)
-            OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.from_dept_id=?)
-            OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.to_dept_id=?)
-            OR t.created_by  = ?
-            OR t.assigned_to = ?
-        )";
-        $params[] = $adminBranchId;
-        $params[] = $adminDeptId;
-        $params[] = $adminDeptId;
-        $params[] = $adminDeptId;
-        $params[] = $user['id'];
-        $params[] = $user['id'];
     } else {
-        $where[]  = '(t.branch_id = ? AND t.department_id = ?)';
-        $params[] = $adminBranchId;
-        $params[] = $adminDeptId;
+        // Collect all dept IDs this admin has access to (primary + UDA)
+        $udaStmt = $db->prepare("
+            SELECT department_id FROM user_department_assignments WHERE user_id = ?
+        ");
+        $udaStmt->execute([$user['id']]);
+        $udaDeptIds = array_column($udaStmt->fetchAll(), 'department_id');
+
+        // Always include primary dept
+        $allAccessDeptIds = array_unique(array_filter(
+            array_merge([$adminDeptId], $udaDeptIds)
+        ));
+        $deptPlaceholders = implode(',', array_fill(0, count($allAccessDeptIds), '?'));
+
+        if ($showAll) {
+            $where[] = "(
+                (t.branch_id = ? AND t.department_id IN ({$deptPlaceholders}))
+                OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.from_dept_id IN ({$deptPlaceholders}))
+                OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.to_dept_id   IN ({$deptPlaceholders}))
+                OR t.created_by  = ?
+                OR t.assigned_to = ?
+            )";
+            $params = array_merge(
+                $params,
+                [$adminBranchId],
+                $allAccessDeptIds,   // for department_id IN
+                $allAccessDeptIds,   // for from_dept_id IN
+                $allAccessDeptIds,   // for to_dept_id IN
+                [$user['id'], $user['id']]
+            );
+        } else {
+            $where[]  = "(t.branch_id = ? AND t.department_id IN ({$deptPlaceholders}))";
+            $params   = array_merge($params, [$adminBranchId], $allAccessDeptIds);
+        }
     }
 }
 

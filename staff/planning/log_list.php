@@ -81,9 +81,11 @@ if ($filterType === '' || $filterType === 'visit') {
                NULL AS notes,
                c.company_name, c.company_code,
                'visit' AS log_type,
-               wl.day_of_week
+               wl.day_of_week,
+               sv.full_name AS supervisor_name
         FROM work_logs wl
-        LEFT JOIN companies c ON c.id = wl.client_id
+        LEFT JOIN companies c  ON c.id  = wl.client_id
+        LEFT JOIN users     sv ON sv.id = wl.supervisor_id
         WHERE " . implode(' AND ', $vWhere) . "
         ORDER BY wl.log_date DESC, wl.time_in DESC
     ";
@@ -501,6 +503,7 @@ include '../../includes/header.php';
                                     <th style="width:110px;">Date</th>
                                     <th style="width:90px;">Type</th>
                                     <th>Client</th>
+                                    <th style="width:120px;">Supervisor</th>
                                     <th class="text-center" style="width:88px;">Time In</th>
                                     <th class="text-center" style="width:88px;">Time Out</th>
                                     <th class="text-center" style="width:65px;">Hours</th>
@@ -508,7 +511,7 @@ include '../../includes/header.php';
                                     <th style="width:200px;">Description</th>
                                     <th class="text-center" style="width:80px;">Action</th>
                                 </tr>
-                            </thead>
+                                </thead>
                             <tbody>
                                 <?php foreach ($allLogs as $l):
                                     $isVisit = ($l['log_type'] === 'visit');
@@ -556,6 +559,16 @@ include '../../includes/header.php';
                                             <div style="font-size:.7rem;color:#9ca3af;">
                                                 <?= htmlspecialchars($l['company_code'] ?? '') ?>
                                             </div>
+                                        </td>
+                                        <!-- Supervisor -->
+                                        <td style="font-size:.78rem;">
+                                            <?php if ($isVisit && !empty($l['supervisor_name'])): ?>
+                                                <span style="font-weight:600;color:#374151;">
+                                                    <?= htmlspecialchars($l['supervisor_name']) ?>
+                                                </span>
+                                            <?php else: ?>
+                                                <span style="color:#d1d5db;">—</span>
+                                            <?php endif; ?>
                                         </td>
 
                                         <!-- Time In -->

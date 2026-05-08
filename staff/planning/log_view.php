@@ -23,11 +23,14 @@ if (!$id) {
 $log = $db->prepare("
     SELECT wl.*,
            c.company_name, c.company_code, c.pan_number,
-           d.dept_name, b.branch_name
+           d.dept_name, b.branch_name,
+           sv.full_name AS supervisor_name,
+           sv.employee_id AS supervisor_emp_id
     FROM work_logs wl
-    LEFT JOIN companies  c ON c.id = wl.client_id
-    LEFT JOIN departments d ON d.id = wl.department_id
-    LEFT JOIN branches    b ON b.id = wl.branch_id
+    LEFT JOIN companies   c  ON c.id  = wl.client_id
+    LEFT JOIN departments d  ON d.id  = wl.department_id
+    LEFT JOIN branches    b  ON b.id  = wl.branch_id
+    LEFT JOIN users       sv ON sv.id = wl.supervisor_id
     WHERE wl.id = ? AND wl.user_id = ?
 ");
 $log->execute([$id, $uid]);
@@ -225,6 +228,21 @@ include '../../includes/header.php';
                                     <div style="font-size:.85rem;font-weight:600;color:#374151;">
                                         <?= htmlspecialchars($log['branch_name'] ?? '—') ?>
                                     </div>
+                                </div>
+                                <!-- Supervisor -->
+                                <div class="col-md-4">
+                                    <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                                                letter-spacing:.05em;margin-bottom:5px;">
+                                        <i class="fas fa-user-tie me-1"></i>Supervisor
+                                    </div>
+                                    <div style="font-size:.85rem;font-weight:600;color:#374151;">
+                                        <?= htmlspecialchars($log['supervisor_name'] ?? '—') ?>
+                                    </div>
+                                    <?php if (!empty($log['supervisor_emp_id'])): ?>
+                                    <div style="font-size:.7rem;color:#9ca3af;">
+                                        <?= htmlspecialchars($log['supervisor_emp_id']) ?>
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
 
                             </div>
