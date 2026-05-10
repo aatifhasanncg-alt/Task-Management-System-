@@ -66,10 +66,10 @@ if (!in_array($filterType, ['', 'visit', 'office']))
 // ── Fetch VISIT logs ──────────────────────────────────────────
 $visitLogs = [];
 if ($filterType === '' || $filterType === 'visit') {
-    $vWhere = ['wl.user_id = ?', 'wl.month_year = ?', 'wl.department_id = ?'];
-    $vParams = [$uid, $month, $deptId];
+    $vWhere = ['wl.user_id = ?', 'wl.month_year = ?']; // ← removed department_id filter
+    $vParams = [$uid, $month];
 
-    if ($filterStatus && in_array($filterStatus, ['visited', 'missed','rescheduled'])) {
+    if ($filterStatus && in_array($filterStatus, ['visited', 'missed', 'rescheduled'])) {
         $vWhere[] = 'wl.visit_status = ?';
         $vParams[] = $filterStatus;
     }
@@ -138,13 +138,13 @@ $vKpi = $db->prepare("
     SELECT
         COUNT(*) AS total,
         COALESCE(SUM(duration_hours), 0) AS hours,
-        SUM(visit_status='visited') AS visited,
-        SUM(visit_status='missed')  AS missed,
+        SUM(visit_status='visited')     AS visited,
+        SUM(visit_status='missed')      AS missed,
         SUM(visit_status='rescheduled') AS rescheduled
     FROM work_logs
-    WHERE user_id=? AND month_year=? AND department_id=?
-");
-$vKpi->execute([$uid, $month, $deptId]);
+    WHERE user_id = ? AND month_year = ?
+"); // ← removed department_id = ?
+$vKpi->execute([$uid, $month]); // ← removed $deptId
 $vKpi = $vKpi->fetch();
 
 // Office KPIs

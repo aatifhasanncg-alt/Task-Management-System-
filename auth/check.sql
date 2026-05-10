@@ -863,7 +863,7 @@ CREATE TABLE IF NOT EXISTS `plan_notifications` (
 
 ALTER TABLE work_plan_entries 
 ADD COLUMN is_notified TINYINT(1) DEFAULT 0;
-
+ALTER TABLE work_logs DROP COLUMN plan_entry_id;
 CREATE TABLE user_department_assignments (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,

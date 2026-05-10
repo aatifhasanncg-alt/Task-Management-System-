@@ -49,6 +49,20 @@ $monthLabel = $monthDate->format('F Y');
 $currentRole = $_SESSION['role'] ?? ($user['role'] ?? '');
 $isAdmin = in_array($currentRole, ['admin', 'executive', 'superadmin']);
 
+// ── Scope: self + managed staff + other CON dept users ────────
+$myStaffIds = [];
+if ($isAdmin) {
+    $mStmt = $db->prepare("
+        SELECT DISTINCT u.id
+        FROM users u
+        LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+        WHERE u.is_active = 1
+          AND (u.managed_by = ? OR uda.managed_by = ?)
+    ");
+    $mStmt->execute([$uid, $uid]);
+    $myStaffIds = array_map('intval', array_column($mStmt->fetchAll(PDO::FETCH_ASSOC), 'id'));
+}
+
 if ($isAdmin) {
     $scopeRows = $db->query("
         SELECT DISTINCT u.id
@@ -71,35 +85,73 @@ if ($isAdmin) {
     $scopeIds = [$uid];
 }
 $inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
-
-
+// ── STEP 1: fetch plans FIRST ─────────────────────────────────
 $plans = $db->query("
     SELECT wp.*,
            u.full_name AS planner_name,
            u.employee_id,
-           COUNT(DISTINCT wpe.id)              AS entry_count,
-           COALESCE(SUM(wpe.planned_hours),0)  AS total_planned_hours
+           COUNT(DISTINCT wpe.id)             AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_planned_hours
     FROM work_plans wp
     LEFT JOIN users u ON u.id = wp.user_id
     LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
     WHERE wp.plan_month = '{$monthStart}'
       AND wp.user_id IN ({$inList})
-      -- Simpler and correct
-AND wp.user_id IN ({$inList})
     GROUP BY wp.id
     ORDER BY wp.week_number ASC, u.full_name ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-// Counts by status
+// ── STEP 2: status counts & KPIs (need $plans) ───────────────
+// ── STEP 2: categorised KPIs ──────────────────────────────────
 $statusCounts = [];
+$myOwnPlans = [];
+$myStaffPlans = [];
+$otherPlans = [];
+
 foreach ($plans as $p) {
     $statusCounts[$p['status']] = ($statusCounts[$p['status']] ?? 0) + 1;
+
+    $pid = (int) $p['user_id'];
+    if ($pid === $uid) {
+        $myOwnPlans[] = $p;
+    } elseif (in_array($pid, $myStaffIds)) {
+        $myStaffPlans[] = $p;
+    } else {
+        $otherPlans[] = $p;
+    }
 }
 
-// KPI calculations
 $totalPlans = count($plans);
 $totalEntries = array_sum(array_column($plans, 'entry_count'));
 $totalPlannedHours = (float) array_sum(array_column($plans, 'total_planned_hours'));
+
+// ── STEP 3: managedIds reuse myStaffIds + approvable count ────
+$managedIds = $myStaffIds; // already fetched above
+
+$approvableCount = 0;
+foreach ($plans as $p) {
+    if ($p['status'] === 'submitted' && in_array((int) $p['user_id'], $managedIds)) {
+        $approvableCount++;
+    }
+}
+
+// ── Per-category KPI helpers ───────────────────────────────────
+$kpiOwn = [
+    'plans' => count($myOwnPlans),
+    'entries' => array_sum(array_column($myOwnPlans, 'entry_count')),
+    'hours' => (float) array_sum(array_column($myOwnPlans, 'total_planned_hours')),
+];
+$kpiStaff = [
+    'plans' => count($myStaffPlans),
+    'entries' => array_sum(array_column($myStaffPlans, 'entry_count')),
+    'hours' => (float) array_sum(array_column($myStaffPlans, 'total_planned_hours')),
+];
+$kpiOther = [
+    'plans' => count($otherPlans),
+    'entries' => array_sum(array_column($otherPlans, 'entry_count')),
+    'hours' => (float) array_sum(array_column($otherPlans, 'total_planned_hours')),
+];
+
 $deptStmt = $db->prepare("SELECT dept_name FROM departments WHERE id = ?");
 $deptStmt->execute([$deptId]);
 $deptName = $deptStmt->fetchColumn() ?: 'Consulting';
@@ -135,8 +187,8 @@ include '../../includes/header.php';
                             value="<?= $month ?>" onchange="location='?month='+this.value">
                         <a href="plan_approvals.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-check-circle me-1"></i> Approvals
-                            <?php if (($statusCounts['submitted'] ?? 0) > 0): ?>
-                                <span class="badge bg-danger ms-1"><?= $statusCounts['submitted'] ?></span>
+                            <?php if ($approvableCount > 0): ?>
+                                <span class="badge bg-danger ms-1"><?= $approvableCount ?></span>
                             <?php endif; ?>
                         </a>
                         <a href="index.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
@@ -155,23 +207,25 @@ include '../../includes/header.php';
             </div>
 
             <div class="row g-3 mb-4">
+
+                <!-- ── Row 1: Overall totals + status ── -->
                 <?php
                 $planStatCards = [
-                    ['fa-calendar-alt', '#3b82f6', '#eff6ff', 'Plans', $totalPlans],
-                    ['fa-list', '#8b5cf6', '#eef2ff', 'Entries', $totalEntries],
+                    ['fa-calendar-alt', '#3b82f6', '#eff6ff', 'Total Plans', $totalPlans],
+                    ['fa-list', '#8b5cf6', '#eef2ff', 'Total Entries', $totalEntries],
                     ['fa-clock', '#c9a84c', '#fefce8', 'Planned Hours', number_format($totalPlannedHours, 1) . 'h'],
                     ['fa-file-alt', '#9ca3af', '#f3f4f6', 'Draft', $statusCounts['draft'] ?? 0],
                     ['fa-paper-plane', '#3b82f6', '#eff6ff', 'Submitted', $statusCounts['submitted'] ?? 0],
                     ['fa-check-circle', '#10b981', '#ecfdf5', 'Approved', $statusCounts['approved'] ?? 0],
                     ['fa-times-circle', '#ef4444', '#fef2f2', 'Rejected', $statusCounts['rejected'] ?? 0],
+                    ['fa-bell', '#f59e0b', '#fffbeb', 'Awaiting Review', $approvableCount],
                 ];
-                foreach ($planStatCards as [$icon, $col, $bg, $label, $value]):
-                    ?>
-                    <div class="col-6 col-md-4 col-xl-2">
+                foreach ($planStatCards as [$icon, $col, $bg, $label, $value]): ?>
+                    <div class="col-6 col-md-3 col-xl-auto">
                         <div style="background:<?= $bg ?>;border-radius:12px;border:1px solid <?= $col ?>22;padding:1rem;">
                             <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.65rem;">
-                                <div
-                                    style="width:36px;height:36px;border-radius:12px;background:<?= $col ?>22;color:<?= $col ?>;display:flex;align-items:center;justify-content:center;">
+                                <div style="width:36px;height:36px;border-radius:12px;background:<?= $col ?>22;
+                                color:<?= $col ?>;display:flex;align-items:center;justify-content:center;">
                                     <i class="fas <?= $icon ?>"></i>
                                 </div>
                                 <div style="font-size:.78rem;font-weight:600;color:#6b7280;"><?= $label ?></div>
@@ -182,7 +236,114 @@ include '../../includes/header.php';
                         </div>
                     </div>
                 <?php endforeach; ?>
+
             </div>
+
+            <!-- ── Row 2: My Own / My Staff / Other breakdown ── -->
+            <?php if ($isAdmin): ?>
+                <div class="row g-3 mb-4">
+
+                    <!-- My Own Plans -->
+                    <div class="col-12 col-md-4">
+                        <div style="background:#f0fdf4;border-radius:12px;border:1px solid #10b98122;padding:1rem;">
+                            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
+                                <div style="width:34px;height:34px;border-radius:10px;background:#10b98122;
+                            color:#10b981;display:flex;align-items:center;justify-content:center;">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div style="font-size:.82rem;font-weight:700;color:#065f46;">My Own Plans</div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;"><?= $kpiOwn['plans'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Plans</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;"><?= $kpiOwn['entries'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Entries</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;">
+                                        <?= number_format($kpiOwn['hours'], 1) ?>h
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Hours</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- My Staff Plans -->
+                    <div class="col-12 col-md-4">
+                        <div style="background:#eff6ff;border-radius:12px;border:1px solid #3b82f622;padding:1rem;">
+                            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
+                                <div style="width:34px;height:34px;border-radius:10px;background:#3b82f622;
+                            color:#3b82f6;display:flex;align-items:center;justify-content:center;">
+                                    <i class="fas fa-users"></i>
+                                </div>
+                                <div style="font-size:.82rem;font-weight:700;color:#1e40af;">My Staff Plans</div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#3b82f6;"><?= $kpiStaff['plans'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Plans</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#3b82f6;"><?= $kpiStaff['entries'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Entries</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#3b82f6;">
+                                        <?= number_format($kpiStaff['hours'], 1) ?>h
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Hours</div>
+                                </div>
+                            </div>
+                            <?php if ($approvableCount > 0): ?>
+                                <div style="margin-top:8px;padding:4px 8px;background:#fef3c7;border-radius:6px;
+                        font-size:.72rem;color:#92400e;font-weight:600;">
+                                    <i class="fas fa-bell me-1"></i><?= $approvableCount ?> awaiting your review
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- Other Plans -->
+                    <div class="col-12 col-md-4">
+                        <div style="background:#faf5ff;border-radius:12px;border:1px solid #8b5cf622;padding:1rem;">
+                            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
+                                <div style="width:34px;height:34px;border-radius:10px;background:#8b5cf622;
+                            color:#8b5cf6;display:flex;align-items:center;justify-content:center;">
+                                    <i class="fas fa-building"></i>
+                                </div>
+                                <div style="font-size:.82rem;font-weight:700;color:#5b21b6;">Consulting Dept Plans</div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#8b5cf6;"><?= $kpiOther['plans'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Plans</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#8b5cf6;"><?= $kpiOther['entries'] ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Entries</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:1.2rem;font-weight:800;color:#8b5cf6;">
+                                        <?= number_format($kpiOther['hours'], 1) ?>h
+                                    </div>
+                                    <div style="font-size:.68rem;color:#6b7280;">Hours</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            <?php endif; ?>
             <div class="card-mis mb-4">
                 <div class="card-mis-header">
                     <h5><i class="fas fa-table me-2 text-warning"></i>Plans — <?= $monthLabel ?></h5>
@@ -237,22 +398,45 @@ include '../../includes/header.php';
                                             <td style="font-size:.75rem;color:#9ca3af;">
                                                 <?= date('d M Y', strtotime($p['created_at'])) ?>
                                             </td>
+                                            <!-- REPLACE the existing actions <td> block with this: -->
                                             <td>
                                                 <div class="d-flex align-items-center gap-1 flex-wrap">
-                                                    <a href="plan_view.php?id=<?= $p['id'] ?>"
-                                                        class="cn-btn cn-btn-out cn-btn-sm">
-                                                        <i class="fas fa-eye"></i>
-                                                    </a>
+
+                                                    <!-- View: always show for own plans OR managed staff -->
+                                                    <?php if ((int) $p['user_id'] === $uid || in_array((int) $p['user_id'], $managedIds)): ?>
+                                                        <a href="plan_view.php?id=<?= $p['id'] ?>"
+                                                            class="cn-btn cn-btn-out cn-btn-sm">
+                                                            <i class="fas fa-eye"></i>
+                                                        </a>
+                                                    <?php endif; ?>
+
+                                                    <!-- Edit: always show for own plans OR managed staff -->
+                                                    <?php if ((int) $p['user_id'] === $uid || in_array((int) $p['user_id'], $managedIds)): ?>
                                                         <a href="plan_edit.php?id=<?= $p['id'] ?>" class="cn-btn cn-btn-sm"
                                                             style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
                                                             <i class="fas fa-pencil-alt"></i>
                                                         </a>
-                                                    <?php if ($p['status'] === 'submitted'): ?>
+                                                    <?php else: ?>
+                                                        <!-- Other dept plans: view only, no edit -->
+                                                        <a href="plan_edit.php?id=<?= $p['id'] ?>" class="cn-btn cn-btn-sm"
+                                                            style="background:#fefce8;border:1px solid #fde68a;color:#92400e;">
+                                                            <i class="fas fa-pencil-alt"></i>
+                                                        </a>
+                                                    <?php endif; ?>
+
+                                                    <!-- Review: only for submitted plans of managed staff (not self) -->
+                                                    <?php if ($p['status'] === 'submitted' && in_array((int) $p['user_id'], $managedIds)): ?>
                                                         <a href="plan_approvals.php?id=<?= $p['id'] ?>"
                                                             class="cn-btn cn-btn-gold cn-btn-sm">
                                                             <i class="fas fa-check"></i> Review
                                                         </a>
+                                                    <?php elseif ($p['status'] === 'submitted' && (int) $p['user_id'] !== $uid): ?>
+                                                        <span style="font-size:.7rem;color:#9ca3af;padding:3px 6px;background:#f3f4f6;
+                                                            border-radius:6px;white-space:nowrap;">
+                                                            <i class="fas fa-hourglass-half me-1"></i>Pending
+                                                        </span>
                                                     <?php endif; ?>
+
                                                 </div>
                                             </td>
                                         </tr>

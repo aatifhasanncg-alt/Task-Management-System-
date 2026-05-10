@@ -87,43 +87,54 @@ $notifCount = (int) $db->query("
 ")->fetchColumn();
 
 // ── Scope staff (same dept + no-dept in branch) ───────────────
+// ── Scope staff ───────────────────────────────────────────────
 if ($__isBranchManager) {
-    // BM: all staff in their branch who are in consulting dept or have UDA consulting
+    // Branch manager: all active consulting staff in the branch (primary dept OR UDA)
     $scopeStmt = $db->prepare("
-        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id
+        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id,
+               COALESCE(d.dept_name, '—') AS dept_name
         FROM users u
-        LEFT JOIN departments d ON d.id = u.department_id
+        LEFT JOIN departments d   ON d.id  = u.department_id
         LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-        LEFT JOIN departments ud ON ud.id = uda.department_id
+        LEFT JOIN departments d1  ON d1.id = u.department_id
+        LEFT JOIN departments d2  ON d2.id = uda.department_id
         WHERE u.is_active = 1
           AND u.branch_id = ?
           AND (
-              d.dept_code = 'CON'
-              OR d.dept_name LIKE '%consult%'
-              OR ud.dept_code = 'CON'
-              OR ud.dept_name LIKE '%consult%'
+              d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%'
+              OR d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%'
           )
         ORDER BY u.full_name
     ");
     $scopeStmt->execute([$branchId]);
 } else {
-    // Consulting primary or UDA consulting: same dept + no-dept in branch
+    // Consulting manager / staff: self + staff they directly manage in CON dept
     $scopeStmt = $db->prepare("
-        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id
+        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id,
+               COALESCE(d.dept_name, '—') AS dept_name
         FROM users u
+        LEFT JOIN departments d   ON d.id  = u.department_id
         LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+        LEFT JOIN departments d1  ON d1.id = u.department_id
+        LEFT JOIN departments d2  ON d2.id = uda.department_id
         WHERE u.is_active = 1
-          AND u.branch_id = ?
           AND (
               u.id = ?
-              OR u.department_id = ?
-              OR u.department_id IS NULL
-              OR u.department_id = 0
-              OR uda.department_id = ?
+              OR (
+                  u.managed_by = ?
+                  AND (
+                      d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%'
+                      OR d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%'
+                  )
+              )
+              OR (
+                  uda.managed_by = ?
+                  AND (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
+              )
           )
         ORDER BY u.full_name
     ");
-    $scopeStmt->execute([$branchId, $uid, $deptId, $deptId]);
+    $scopeStmt->execute([$uid, $uid, $uid]);
 }
 $scopeStaff = $scopeStmt->fetchAll(PDO::FETCH_ASSOC);
 $scopeIds = array_unique(array_map('intval', array_column($scopeStaff, 'id')));
@@ -151,22 +162,47 @@ $staffForFilter = $scopeStaff;
 // ════════════════════════════════════════════════════════════════
 // A. AGGREGATE KPIs
 // ════════════════════════════════════════════════════════════════
+// ── A. AGGREGATE KPIs (field + office combined) ───────────────
 $kpiWhere = "wl.month_year='{$month}' AND wl.user_id IN ({$activeInList})";
 if ($filterClientId)
     $kpiWhere .= " AND wl.client_id={$filterClientId}";
 
+$offKpiWhere = "owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND owl.user_id IN ({$activeInList})";
+if ($filterClientId)
+    $offKpiWhere .= " AND owl.client_id={$filterClientId}";
+
 $kpi = $db->query("
     SELECT
-        COUNT(*)                                AS total_logs,
-        COALESCE(SUM(duration_hours),0)         AS total_hours,
-        SUM(visit_status='visited')             AS visited,
-        SUM(visit_status='missed')              AS missed,
-        SUM(visit_status='rescheduled')         AS rescheduled,
-        COUNT(DISTINCT client_id)               AS unique_clients,
-        COUNT(DISTINCT user_id)                 AS active_staff
-    FROM work_logs wl
-    WHERE {$kpiWhere}
+        (SELECT COUNT(*)                   FROM work_logs       wl  WHERE {$kpiWhere})    AS field_logs,
+        (SELECT COALESCE(SUM(duration_hours),0) FROM work_logs  wl  WHERE {$kpiWhere})    AS field_hours,
+        (SELECT SUM(visit_status='visited')     FROM work_logs  wl  WHERE {$kpiWhere})    AS visited,
+        (SELECT SUM(visit_status='missed')      FROM work_logs  wl  WHERE {$kpiWhere})    AS missed,
+        (SELECT SUM(visit_status='rescheduled') FROM work_logs  wl  WHERE {$kpiWhere})    AS rescheduled,
+        (SELECT COUNT(DISTINCT client_id)       FROM work_logs  wl  WHERE {$kpiWhere})    AS field_clients,
+        (SELECT COUNT(DISTINCT user_id)         FROM work_logs  wl  WHERE {$kpiWhere})    AS field_staff,
+        (SELECT COUNT(*)                        FROM office_work_logs owl WHERE {$offKpiWhere}) AS office_logs,
+        (SELECT COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0),0)
+                                                FROM office_work_logs owl WHERE {$offKpiWhere}) AS office_hours,
+        (SELECT COUNT(DISTINCT client_id)       FROM office_work_logs owl WHERE {$offKpiWhere}) AS office_clients,
+        (SELECT COUNT(DISTINCT user_id)         FROM office_work_logs owl WHERE {$offKpiWhere}) AS office_staff
 ")->fetch(PDO::FETCH_ASSOC);
+
+$totalHours = (float) ($kpi['field_hours'] ?? 0) + (float) ($kpi['office_hours'] ?? 0);
+
+// Build alias-free WHERE strings for standalone queries
+$fieldWhereRaw = "month_year='{$month}' AND user_id IN ({$activeInList})"
+    . ($filterClientId ? " AND client_id={$filterClientId}" : "");
+$offWhereRaw = "log_date BETWEEN '{$monthStart}' AND '{$monthEnd}' AND user_id IN ({$activeInList})"
+    . ($filterClientId ? " AND client_id={$filterClientId}" : "");
+
+$totalClients = count(array_unique(array_merge(
+    $db->query("SELECT DISTINCT client_id FROM work_logs        WHERE {$fieldWhereRaw}")->fetchAll(PDO::FETCH_COLUMN),
+    $db->query("SELECT DISTINCT client_id FROM office_work_logs WHERE {$offWhereRaw}")->fetchAll(PDO::FETCH_COLUMN)
+)));
+$totalStaff = count(array_unique(array_merge(
+    $db->query("SELECT DISTINCT user_id FROM work_logs        WHERE {$fieldWhereRaw}")->fetchAll(PDO::FETCH_COLUMN),
+    $db->query("SELECT DISTINCT user_id FROM office_work_logs WHERE {$offWhereRaw}")->fetchAll(PDO::FETCH_COLUMN)
+)));
 
 // ── Total planned hours for scope ─────────────────────────────
 $totalPlanned = (float) $db->query("
@@ -200,63 +236,135 @@ $stmt = $db->prepare("
         c.id AS client_id,
         c.company_name,
         c.company_code,
-        COUNT(wl.id) AS total_visits,
-        SUM(wl.visit_status='visited') AS visited,
-        SUM(wl.visit_status='missed') AS missed,
-        SUM(wl.visit_status='rescheduled') AS rescheduled,
-        COALESCE(SUM(wl.duration_hours),0) AS actual_hours,
-        COUNT(DISTINCT wl.user_id) AS staff_count,
-        GROUP_CONCAT(DISTINCT u.full_name ORDER BY u.full_name SEPARATOR ', ') AS staff_names,
+
+        /* ── Field ── */
+        COUNT(wl.id)                            AS field_visits,
+        SUM(wl.visit_status='visited')          AS visited,
+        SUM(wl.visit_status='missed')           AS missed,
+        SUM(wl.visit_status='rescheduled')      AS rescheduled,
+        COALESCE(SUM(wl.duration_hours),0)      AS field_hours,
+        COUNT(DISTINCT wl.log_date)             AS field_days,
+        MIN(wl.log_date)                        AS first_field,
+        MAX(wl.log_date)                        AS last_field,
+
+        /* ── Office ── */
+        (SELECT COUNT(*)
+         FROM office_work_logs owl
+         WHERE owl.client_id = c.id
+           AND owl.user_id   IN ({$activeInList})
+           AND owl.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}') AS office_logs,
+
+        (SELECT COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0),0)
+         FROM office_work_logs owl
+         WHERE owl.client_id = c.id
+           AND owl.user_id   IN ({$activeInList})
+           AND owl.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}') AS office_hours,
+
+        (SELECT MAX(owl.log_date)
+         FROM office_work_logs owl
+         WHERE owl.client_id = c.id
+           AND owl.user_id   IN ({$activeInList})
+           AND owl.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}') AS last_office,
+
+        /* ── Combined staff ── */
+        COUNT(DISTINCT wl.user_id)              AS field_staff,
+        (SELECT COUNT(DISTINCT owl2.user_id)
+         FROM office_work_logs owl2
+         WHERE owl2.client_id = c.id
+           AND owl2.user_id   IN ({$activeInList})
+           AND owl2.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}') AS office_staff,
+
+        GROUP_CONCAT(DISTINCT u.full_name ORDER BY u.full_name SEPARATOR ', ') AS field_staff_names,
+
+        /* ── Plan ── */
         (SELECT COALESCE(SUM(wpe.planned_hours),0)
          FROM work_plan_entries wpe
          JOIN work_plans wp ON wp.id=wpe.plan_id
          WHERE wpe.client_id=c.id
            AND wp.plan_month='{$monthStart}'
-           AND wpe.assigned_to IN ({$activeInList})) AS planned_hours,
+           AND wpe.assigned_to IN ({$activeInList}))  AS planned_hours,
+
         (SELECT COUNT(DISTINCT wpe.id)
          FROM work_plan_entries wpe
          JOIN work_plans wp ON wp.id=wpe.plan_id
          WHERE wpe.client_id=c.id
            AND wp.plan_month='{$monthStart}'
-           AND wpe.assigned_to IN ({$activeInList})) AS planned_entries,
+           AND wpe.assigned_to IN ({$activeInList}))  AS planned_entries,
+
         (SELECT COUNT(DISTINCT CASE
             WHEN wl2.client_id=wpe2.client_id AND wl2.log_date=wpe2.plan_date
             THEN wpe2.id END)
          FROM work_plan_entries wpe2
          JOIN work_plans wp2 ON wp2.id=wpe2.plan_id
          LEFT JOIN work_logs wl2
-             ON wl2.client_id=wpe2.client_id
-             AND wl2.log_date=wpe2.plan_date
-             AND wl2.user_id=wpe2.assigned_to
+             ON  wl2.client_id=wpe2.client_id
+             AND wl2.log_date =wpe2.plan_date
+             AND wl2.user_id  =wpe2.assigned_to
          WHERE wpe2.client_id=c.id
            AND wp2.plan_month='{$monthStart}'
-           AND wpe2.assigned_to IN ({$activeInList})) AS matched_visits,
-        MIN(wl.log_date) AS first_visit,
-        MAX(wl.log_date) AS last_visit,
-        COUNT(DISTINCT wl.log_date) AS visit_days
+           AND wpe2.assigned_to IN ({$activeInList})) AS matched_visits
+
     FROM work_logs wl
-    LEFT JOIN companies c ON c.id=wl.client_id
-    LEFT JOIN users u ON u.id=wl.user_id
+    LEFT JOIN companies c ON c.id = wl.client_id
+    LEFT JOIN users u     ON u.id = wl.user_id
     WHERE {$clientWhere}
     GROUP BY c.id, c.company_name, c.company_code
-    ORDER BY actual_hours DESC
-");
 
-$stmt->execute($params);
+    UNION
+
+    /* ── Clients with ONLY office logs (no field visits in filter) ── */
+    SELECT
+        c.id AS client_id,
+        c.company_name,
+        c.company_code,
+        0 AS field_visits, 0 AS visited, 0 AS missed, 0 AS rescheduled,
+        0 AS field_hours,  0 AS field_days,
+        NULL AS first_field, NULL AS last_field,
+        COUNT(owl.id) AS office_logs,
+        COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0),0) AS office_hours,
+        MAX(owl.log_date) AS last_office,
+        0 AS field_staff,
+        COUNT(DISTINCT owl.user_id) AS office_staff,
+        NULL AS field_staff_names,
+        (SELECT COALESCE(SUM(wpe.planned_hours),0)
+         FROM work_plan_entries wpe
+         JOIN work_plans wp ON wp.id=wpe.plan_id
+         WHERE wpe.client_id=c.id
+           AND wp.plan_month='{$monthStart}'
+           AND wpe.assigned_to IN ({$activeInList}))  AS planned_hours,
+        (SELECT COUNT(DISTINCT wpe.id)
+         FROM work_plan_entries wpe
+         JOIN work_plans wp ON wp.id=wpe.plan_id
+         WHERE wpe.client_id=c.id
+           AND wp.plan_month='{$monthStart}'
+           AND wpe.assigned_to IN ({$activeInList}))  AS planned_entries,
+        0 AS matched_visits
+    FROM office_work_logs owl
+    LEFT JOIN companies c ON c.id = owl.client_id
+    WHERE owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'
+      AND owl.user_id IN ({$activeInList})
+      " . ($filterClientId ? "AND owl.client_id={$filterClientId}" : "") . "
+      AND owl.client_id NOT IN (
+          SELECT DISTINCT client_id FROM work_logs
+          WHERE {$fieldWhereRaw}
+      )
+    GROUP BY c.id, c.company_name, c.company_code
+
+    ORDER BY (field_hours + office_hours) DESC
+");
+$stmt->execute($params); // params used twice for UNION
 $clientPerf = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Chart data: top 10 clients ────────────────────────────────
 $topClientNames = [];
-$topClientHours = [];
+$topClientField = [];
+$topClientOffice = [];
 $topClientVisits = [];
-$topClientEff = [];
 foreach (array_slice($clientPerf, 0, 10) as $cp) {
     $topClientNames[] = mb_strimwidth($cp['company_name'] ?? '—', 0, 18, '…');
-    $topClientHours[] = (float) $cp['actual_hours'];
-    $topClientVisits[] = (int) $cp['total_visits'];
-    $pe = (int) $cp['planned_entries'];
-    $mv = (int) $cp['matched_visits'];
-    $topClientEff[] = $pe > 0 ? round(min(($mv / $pe) * 100, 100), 1) : 0;
+    $topClientField[] = round((float) $cp['field_hours'], 1);
+    $topClientOffice[] = round((float) $cp['office_hours'], 1);
+    $topClientVisits[] = (int) $cp['field_visits'];
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -412,7 +520,7 @@ include '../../includes/header.php';
                             <input type="month" id="filterMonth" class="form-control form-control-sm"
                                 value="<?= $month ?>" onchange="applyFilters()">
                         </div>
-                        <div class="col-md-3" <?= $__isBranchManager ? 'style="display:none;"' : '' ?>>
+                        <div class="col-md-3">
                             <label class="form-label-mis">Client</label>
                             <select id="filterClient" class="form-select form-select-sm">
                                 <option value="">— All Clients —</option>
@@ -473,20 +581,18 @@ include '../../includes/header.php';
             <!-- ══ KPI CARDS ══════════════════════════════════════════════ -->
             <div class="row g-3 mb-4">
                 <?php
-                $totalHours = (float) ($kpi['total_hours'] ?? 0);
-                $visitPct = (int) ($kpi['total_logs'] ?? 0) > 0
-                    ? min(100, round(($kpi['visited'] / $kpi['total_logs']) * 100))
-                    : 0;
+                $visitPct = (int) ($kpi['field_logs'] ?? 0) > 0
+                    ? min(100, round(($kpi['visited'] / $kpi['field_logs']) * 100)) : 0;
                 $visitPctCol = $visitPct >= 80 ? '#10b981' : ($visitPct >= 50 ? '#f59e0b' : '#ef4444');
 
                 $kpiCards = [
-                    ['fa-building', '#8b5cf6', '#f5f3ff', 'Clients Served', (int) ($kpi['unique_clients'] ?? 0)],
-                    ['fa-users', '#0ea5e9', '#e0f2fe', 'Active Staff', (int) ($kpi['active_staff'] ?? 0)],
-                    ['fa-clock', '#3b82f6', '#eff6ff', 'Total Hours', number_format($totalHours, 1) . 'h'],
-                    ['fa-calendar-alt', '#c9a84c', '#fefce8', 'Planned Hours', number_format($totalPlanned, 1) . 'h'],
+                    ['fa-building', '#8b5cf6', '#f5f3ff', 'Clients (All)', $totalClients],
+                    ['fa-users', '#0ea5e9', '#e0f2fe', 'Active Staff', $totalStaff],
+                    ['fa-clock', '#3b82f6', '#eff6ff', 'Field Hours', number_format((float) ($kpi['field_hours'] ?? 0), 1) . 'h'],
+                    ['fa-laptop', '#10b981', '#ecfdf5', 'Office Hours', number_format((float) ($kpi['office_hours'] ?? 0), 1) . 'h'],
+                    ['fa-clock', '#c9a84c', '#fefce8', 'Planned Hours', number_format($totalPlanned, 1) . 'h'],
                     ['fa-check-circle', '#10b981', '#ecfdf5', 'Visited', (int) ($kpi['visited'] ?? 0)],
                     ['fa-times-circle', '#ef4444', '#fef2f2', 'Missed', (int) ($kpi['missed'] ?? 0)],
-                    ['fa-redo', '#f59e0b', '#fffbeb', 'Rescheduled', (int) ($kpi['rescheduled'] ?? 0)],
                     ['fa-tachometer-alt', $visitPctCol, '#f9fafb', 'Visit Rate', $visitPct . '%'],
                 ];
                 foreach ($kpiCards as [$icon, $col, $bg, $lbl, $val]):
@@ -510,74 +616,145 @@ include '../../includes/header.php';
             </div>
 
             <!-- ══ DRILLDOWN — Selected Client Detail ═════════════════════ -->
-            <?php if ($filterClientId && !empty($drilldownLogs)): ?>
-                <?php
-                $selClient = array_values(array_filter($clientPerf, fn($c) => $c['client_id'] == $filterClientId))[0] ?? null;
-                ?>
-                <?php if ($selClient): ?>
-                    <div class="card-mis mb-4" style="border-left:4px solid #3b82f6;">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-search text-warning me-2"></i>
-                                Client Detail — <?= htmlspecialchars($selClient['company_name']) ?>
-                                <span style="font-size:.72rem;color:#9ca3af;font-weight:400;margin-left:.4rem;">
-                                    <?= htmlspecialchars($selClient['company_code'] ?? '') ?>
-                                </span>
-                            </h5>
-                            <div style="display:flex;align-items:center;gap:.5rem;">
-                                <a href="client_report.php?month=<?= urlencode($month) ?>" style="font-size:.72rem;color:#9ca3af;text-decoration:none;border:1px solid #e5e7eb;
-                  border-radius:6px;padding:.15rem .5rem;">
-                                    <i class="fas fa-times"></i> Clear
-                                </a>
-                                <a href="<?= APP_URL ?>/export/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>&from=<?= urlencode($filterFrom) ?>&to=<?= urlencode($filterTo) ?>"
-                                    class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
-                                    <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
-                                </a>
-                                <a href="<?= APP_URL ?>/export/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>"
-                                    class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
-                                    <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
-                                </a>
-                            </div>
+            <?php if ($filterClientId && $selClient = (array_values(array_filter($clientPerf, fn($c) => $c['client_id'] == $filterClientId))[0] ?? null)): ?>
+                <div class="card-mis mb-4" style="border-left:4px solid #3b82f6;">
+                    <div class="card-mis-header">
+                        <h5><i class="fas fa-search text-warning me-2"></i>
+                            Client Detail — <?= htmlspecialchars($selClient['company_name']) ?>
+                            <span style="font-size:.72rem;color:#9ca3af;font-weight:400;margin-left:.4rem;">
+                                <?= htmlspecialchars($selClient['company_code'] ?? '') ?>
+                            </span>
+                        </h5>
+                        <div style="display:flex;align-items:center;gap:.5rem;">
+                            <a href="client_report.php?month=<?= urlencode($month) ?>" style="font-size:.72rem;color:#9ca3af;text-decoration:none;border:1px solid #e5e7eb;
+                                     border-radius:6px;padding:.15rem .5rem;">
+                                <i class="fas fa-times"></i> Clear
+                            </a>
+                            <a href="<?= APP_URL ?>/export/export_pdf.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>&from=<?= urlencode($filterFrom) ?>&to=<?= urlencode($filterTo) ?>"
+                                class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
+                                <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
+                            </a>
+                            <a href="<?= APP_URL ?>/export/export_excel.php?module=consulting_performance&view=who&month=<?= urlencode($month) ?>&client_id=<?= $filterClientId ?>&staff_id=<?= $filterStaffId ?>"
+                                class="btn btn-outline-secondary btn-sm" style="font-size:.72rem;">
+                                <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
+                            </a>
                         </div>
-                        <div class="card-mis-body">
-                            <div class="row g-3 mb-3">
-                                <?php foreach ([
-                                    ['fa-clock', '#3b82f6', number_format((float) $selClient['actual_hours'], 1) . 'h', 'Actual Hours'],
-                                    ['fa-calendar', '#c9a84c', number_format((float) $selClient['planned_hours'], 1) . 'h', 'Planned Hours'],
-                                    ['fa-users', '#8b5cf6', (int) $selClient['staff_count'], 'Staff Involved'],
-                                    ['fa-check-circle', '#10b981', (int) $selClient['visited'], 'Visited'],
-                                    ['fa-times-circle', '#ef4444', (int) $selClient['missed'], 'Missed'],
-                                    ['fa-calendar-day', '#0ea5e9', (int) $selClient['visit_days'], 'Visit Days'],
-                                ] as [$ico, $col, $val, $lbl]):
-                                    ?>
-                                    <div class="col-4 col-md-2">
-                                        <div style="text-align:center;background:#f9fafb;border-radius:10px;padding:.8rem .5rem;">
-                                            <i class="fas <?= $ico ?>"
-                                                style="color:<?= $col ?>;font-size:1rem;margin-bottom:.3rem;display:block;"></i>
-                                            <div style="font-size:1.15rem;font-weight:800;color:#1f2937;"><?= $val ?></div>
-                                            <div style="font-size:.65rem;color:#9ca3af;"><?= $lbl ?></div>
-                                        </div>
+                    </div>
+                    <div class="card-mis-body">
+                        <div class="row g-3 mb-3">
+                            <?php foreach ([
+                                ['fa-car', '#3b82f6', number_format((float) $selClient['field_hours'], 1) . 'h', 'Field Hours'],
+                                ['fa-laptop', '#10b981', number_format((float) $selClient['office_hours'], 1) . 'h', 'Office Hours'],
+                                ['fa-calendar', '#c9a84c', number_format((float) $selClient['planned_hours'], 1) . 'h', 'Planned Hours'],
+                                ['fa-users', '#8b5cf6', (int) $selClient['field_staff'] + (int) $selClient['office_staff'], 'Staff Involved'],
+                                ['fa-check-circle', '#10b981', (int) $selClient['visited'], 'Visited'],
+                                ['fa-times-circle', '#ef4444', (int) $selClient['missed'], 'Missed'],
+                                ['fa-redo', '#f59e0b', (int) $selClient['rescheduled'], 'Rescheduled'],
+                                ['fa-calendar-day', '#0ea5e9', (int) $selClient['field_days'], 'Visit Days'],
+                            ] as [$ico, $col, $val, $lbl]):
+                                ?>
+                                <div class="col-6 col-md-3">
+                                    <div style="text-align:center;background:#f9fafb;border-radius:10px;padding:.8rem .5rem;">
+                                        <i class="fas <?= $ico ?>"
+                                            style="color:<?= $col ?>;font-size:1rem;margin-bottom:.3rem;display:block;"></i>
+                                        <div style="font-size:1.15rem;font-weight:800;color:#1f2937;"><?= $val ?></div>
+                                        <div style="font-size:.65rem;color:#9ca3af;"><?= $lbl ?></div>
                                     </div>
-                                <?php endforeach; ?>
-                            </div>
-                            <?php if ($selClient['staff_names']): ?>
-                                <div style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
-                                    <i class="fas fa-user-friends me-1 text-warning"></i>
-                                    <strong>Staff involved:</strong> <?= htmlspecialchars($selClient['staff_names']) ?>
                                 </div>
-                            <?php endif; ?>
+                            <?php endforeach; ?>
                         </div>
-                        <!-- Day-wise visit log -->
-                        <div style="border-top:1px solid #f3f4f6;">
-                            <div style="padding:.6rem 1rem;font-size:.8rem;font-weight:700;color:#374151;background:#f9fafb;">
-                                <i class="fas fa-calendar-day me-1 text-warning"></i>
-                                Day-wise Visit Log (<?= count($drilldownLogs) ?> entries)
+                        <?php if ($selClient['field_staff_name']): ?>
+                            <div style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
+                                <i class="fas fa-user-friends me-1 text-warning"></i>
+                                <strong>Staff involved:</strong> <?= htmlspecialchars($selClient['field_staff_name']) ?>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                    <!-- Day-wise visit log -->
+                    <div style="border-top:1px solid #f3f4f6;">
+                        <div style="padding:.6rem 1rem;font-size:.8rem;font-weight:700;color:#374151;background:#f9fafb;">
+                            <i class="fas fa-calendar-day me-1 text-warning"></i>
+                            Day-wise Visit Log (<?= count($drilldownLogs) ?> entries)
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table-mis w-100">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Day</th>
+                                        <th>Staff</th>
+                                        <th class="text-center">Time In</th>
+                                        <th class="text-center">Time Out</th>
+                                        <th class="text-center">Hours</th>
+                                        <th>Status</th>
+                                        <th>Description</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($drilldownLogs as $dl): ?>
+                                        <tr>
+                                            <td style="font-size:.83rem;font-weight:500;white-space:nowrap;">
+                                                <?= date('d M Y', strtotime($dl['log_date'])) ?>
+                                            </td>
+                                            <td style="font-size:.75rem;color:#9ca3af;">
+                                                <?= htmlspecialchars($dl['day_of_week'] ?? '') ?>
+                                            </td>
+                                            <td>
+                                                <div style="font-size:.83rem;"><?= htmlspecialchars($dl['staff_name']) ?></div>
+                                                <div style="font-size:.68rem;color:#9ca3af;">
+                                                    <?= htmlspecialchars($dl['employee_id'] ?? '') ?>
+                                                </div>
+                                            </td>
+                                            <td class="text-center" style="font-size:.78rem;">
+                                                <?= $dl['time_in'] ? date('g:i A', strtotime($dl['time_in'])) : '—' ?>
+                                            </td>
+                                            <td class="text-center" style="font-size:.78rem;">
+                                                <?= $dl['time_out'] ? date('g:i A', strtotime($dl['time_out'])) : '—' ?>
+                                            </td>
+                                            <td class="text-center">
+                                                <span
+                                                    style="font-weight:700;color:<?= (float) $dl['duration_hours'] >= 4 ? '#10b981' : ((float) $dl['duration_hours'] >= 2 ? '#f59e0b' : '#ef4444') ?>;">
+                                                    <?= number_format((float) $dl['duration_hours'], 1) ?>h
+                                                </span>
+                                            </td>
+                                            <td><?= vstBadgeCR($dl['visit_status'] ?? '') ?></td>
+                                            <td
+                                                style="font-size:.73rem;color:#6b7280;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                                                <?= htmlspecialchars(mb_strimwidth($dl['work_description'] ?? '—', 0, 50, '…')) ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <!-- Office logs for this client -->
+                    <?php
+                    $drillOffice = $db->query("
+                            SELECT owl.log_date, owl.time_in, owl.time_out, owl.description,
+                                owl.status, owl.notes,
+                                TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0 AS hrs,
+                                u.full_name AS staff_name, u.employee_id
+                            FROM office_work_logs owl
+                            JOIN users u ON u.id = owl.user_id
+                            WHERE owl.client_id = {$filterClientId}
+                            AND owl.user_id IN ({$activeInList})
+                            AND owl.log_date BETWEEN '{$filterFrom}' AND '{$filterTo}'
+                            ORDER BY owl.log_date DESC, owl.time_in ASC
+                        ")->fetchAll(PDO::FETCH_ASSOC);
+                    ?>
+                    <?php if (!empty($drillOffice)): ?>
+                        <div style="border-top:1px solid #e0f2fe;background:#f0f9ff;">
+                            <div style="padding:.6rem 1rem;font-size:.8rem;font-weight:700;color:#0369a1;background:#e0f2fe;">
+                                <i class="fas fa-laptop me-1"></i>
+                                Office Logs for this Client (
+                                <?= count($drillOffice) ?> entries)
                             </div>
                             <div class="table-responsive">
                                 <table class="table-mis w-100">
                                     <thead>
                                         <tr>
                                             <th>Date</th>
-                                            <th>Day</th>
                                             <th>Staff</th>
                                             <th class="text-center">Time In</th>
                                             <th class="text-center">Time Out</th>
@@ -587,36 +764,45 @@ include '../../includes/header.php';
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <?php foreach ($drilldownLogs as $dl): ?>
-                                            <tr>
+                                        <?php foreach ($drillOffice as $do): ?>
+                                            <tr style="background:#f0f9ff;">
                                                 <td style="font-size:.83rem;font-weight:500;white-space:nowrap;">
-                                                    <?= date('d M Y', strtotime($dl['log_date'])) ?>
-                                                </td>
-                                                <td style="font-size:.75rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($dl['day_of_week'] ?? '') ?>
+                                                    <?= date('d M Y', strtotime($do['log_date'])) ?>
                                                 </td>
                                                 <td>
-                                                    <div style="font-size:.83rem;"><?= htmlspecialchars($dl['staff_name']) ?></div>
+                                                    <div style="font-size:.83rem;">
+                                                        <?= htmlspecialchars($do['staff_name']) ?>
+                                                    </div>
                                                     <div style="font-size:.68rem;color:#9ca3af;">
-                                                        <?= htmlspecialchars($dl['employee_id'] ?? '') ?>
+                                                        <?= htmlspecialchars($do['employee_id'] ?? '') ?>
                                                     </div>
                                                 </td>
                                                 <td class="text-center" style="font-size:.78rem;">
-                                                    <?= $dl['time_in'] ? date('g:i A', strtotime($dl['time_in'])) : '—' ?>
+                                                    <?= $do['time_in'] ? date('g:i A', strtotime($do['time_in'])) : '—' ?>
                                                 </td>
                                                 <td class="text-center" style="font-size:.78rem;">
-                                                    <?= $dl['time_out'] ? date('g:i A', strtotime($dl['time_out'])) : '—' ?>
+                                                    <?= $do['time_out'] ? date('g:i A', strtotime($do['time_out'])) : '—' ?>
                                                 </td>
                                                 <td class="text-center">
+                                                    <strong
+                                                        style="color:<?= (float) $do['hrs'] >= 4 ? '#10b981' : ((float) $do['hrs'] >= 2 ? '#f59e0b' : '#6b7280') ?>;">
+                                                        <?= number_format((float) $do['hrs'], 1) ?>h
+                                                    </strong>
+                                                </td>
+                                                <td>
+                                                    <?php
+                                                    $osBg = $do['status'] === 'completed' ? '#f0fdf4' : '#fffbeb';
+                                                    $osCol = $do['status'] === 'completed' ? '#15803d' : '#b45309';
+                                                    $osLbl = $do['status'] === 'completed' ? 'Completed' : 'WIP';
+                                                    ?>
                                                     <span
-                                                        style="font-weight:700;color:<?= (float) $dl['duration_hours'] >= 4 ? '#10b981' : ((float) $dl['duration_hours'] >= 2 ? '#f59e0b' : '#ef4444') ?>;">
-                                                        <?= number_format((float) $dl['duration_hours'], 1) ?>h
+                                                        style="background:<?= $osBg ?>;color:<?= $osCol ?>;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;font-weight:600;">
+                                                        <?= $osLbl ?>
                                                     </span>
                                                 </td>
-                                                <td><?= vstBadgeCR($dl['visit_status'] ?? '') ?></td>
                                                 <td
                                                     style="font-size:.73rem;color:#6b7280;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                                    <?= htmlspecialchars(mb_strimwidth($dl['work_description'] ?? '—', 0, 50, '…')) ?>
+                                                    <?= htmlspecialchars(mb_strimwidth($do['description'] ?? '—', 0, 50, '…')) ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -624,55 +810,55 @@ include '../../includes/header.php';
                                 </table>
                             </div>
                         </div>
-                        <!-- Unlogged planned visits -->
-                        <?php if (!empty($unloggedPlans)): ?>
-                            <div style="border-top:1px solid #fde68a;background:#fffbeb;">
-                                <div style="padding:.6rem 1rem;font-size:.8rem;font-weight:700;color:#92400e;">
-                                    <i class="fas fa-exclamation-triangle me-1"></i>
-                                    Planned but NOT Logged (<?= count($unloggedPlans) ?> entries)
-                                </div>
-                                <div class="table-responsive">
-                                    <table class="table-mis w-100">
-                                        <thead>
-                                            <tr>
-                                                <th>Planned Date</th>
-                                                <th>Day</th>
-                                                <th>Staff</th>
-                                                <th class="text-center">Time In</th>
-                                                <th class="text-center">Hours</th>
-                                                <th>Notes</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <?php foreach ($unloggedPlans as $up): ?>
-                                                <tr style="background:#fffbeb;">
-                                                    <td style="font-size:.83rem;font-weight:500;white-space:nowrap;">
-                                                        <?= date('d M Y', strtotime($up['plan_date'])) ?>
-                                                    </td>
-                                                    <td style="font-size:.75rem;color:#9ca3af;">
-                                                        <?= htmlspecialchars($up['day_of_week'] ?? '') ?>
-                                                    </td>
-                                                    <td style="font-size:.83rem;"><?= htmlspecialchars($up['staff_name']) ?></td>
-                                                    <td class="text-center" style="font-size:.78rem;">
-                                                        <?= $up['planned_time_in'] ? date('g:i A', strtotime($up['planned_time_in'])) : '—' ?>
-                                                    </td>
-                                                    <td class="text-center" style="font-size:.8rem;color:#f59e0b;font-weight:600;">
-                                                        <?= number_format((float) $up['planned_hours'], 1) ?>h
-                                                    </td>
-                                                    <td style="font-size:.73rem;color:#6b7280;">
-                                                        <?= htmlspecialchars(mb_strimwidth($up['notes'] ?? '—', 0, 40, '…')) ?>
-                                                    </td>
-                                                </tr>
-                                            <?php endforeach; ?>
-                                        </tbody>
-                                    </table>
-                                </div>
+                    <?php endif; ?>
+                    <!-- Unlogged planned visits -->
+                    <?php if (!empty($unloggedPlans)): ?>
+                        <div style="border-top:1px solid #fde68a;background:#fffbeb;">
+                            <div style="padding:.6rem 1rem;font-size:.8rem;font-weight:700;color:#92400e;">
+                                <i class="fas fa-exclamation-triangle me-1"></i>
+                                Planned but NOT Logged (<?= count($unloggedPlans) ?> entries)
                             </div>
-                        <?php endif; ?>
-                    </div>
-                <?php endif; ?>
-            <?php endif; ?>
+                            <div class="table-responsive">
+                                <table class="table-mis w-100">
+                                    <thead>
+                                        <tr>
+                                            <th>Planned Date</th>
+                                            <th>Day</th>
+                                            <th>Staff</th>
+                                            <th class="text-center">Time In</th>
+                                            <th class="text-center">Hours</th>
+                                            <th>Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($unloggedPlans as $up): ?>
+                                            <tr style="background:#fffbeb;">
+                                                <td style="font-size:.83rem;font-weight:500;white-space:nowrap;">
+                                                    <?= date('d M Y', strtotime($up['plan_date'])) ?>
+                                                </td>
+                                                <td style="font-size:.75rem;color:#9ca3af;">
+                                                    <?= htmlspecialchars($up['day_of_week'] ?? '') ?>
+                                                </td>
+                                                <td style="font-size:.83rem;"><?= htmlspecialchars($up['staff_name']) ?></td>
+                                                <td class="text-center" style="font-size:.78rem;">
+                                                    <?= $up['planned_time_in'] ? date('g:i A', strtotime($up['planned_time_in'])) : '—' ?>
+                                                </td>
+                                                <td class="text-center" style="font-size:.8rem;color:#f59e0b;font-weight:600;">
+                                                    <?= number_format((float) $up['planned_hours'], 1) ?>h
+                                                </td>
+                                                <td style="font-size:.73rem;color:#6b7280;">
+                                                    <?= htmlspecialchars(mb_strimwidth($up['notes'] ?? '—', 0, 40, '…')) ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                </div>
 
+            <?php endif; ?>
             <!-- ══ TOP CLIENTS CHART ══════════════════════════════════════ -->
             <?php if (!empty($topClientNames)): ?>
                 <div class="card-mis mb-4">
@@ -701,23 +887,27 @@ include '../../includes/header.php';
                                     <th>#</th>
                                     <th>Client</th>
                                     <th class="text-center">Staff</th>
-                                    <th class="text-center">Visits</th>
+                                    <th class="text-center">Field Visits</th>
                                     <th class="text-center">Visited</th>
                                     <th class="text-center">Missed</th>
                                     <th class="text-center">Rescheduled</th>
-                                    <th class="text-center">Visit Days</th>
+                                    <th class="text-center">Field Hrs</th>
+                                    <th class="text-center">Office Logs</th>
+                                    <th class="text-center">Office Hrs</th>
                                     <th class="text-center">Planned Hrs</th>
-                                    <th class="text-center">Actual Hrs</th>
-                                    <th style="min-width:130px;">Hour Eff.</th>
-                                    <th style="min-width:130px;">Visit Eff.</th>
-                                    <th>Last Visit</th>
+                                    <th style="min-width:120px;">Hour Eff.</th>
+                                    <th style="min-width:120px;">Visit Eff.</th>
+                                    <th>Last Activity</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($clientPerf as $i => $cp):
-                                    [$cEff, $cEffRaw, $cEffCol] = safeEffCR((float) $cp['actual_hours'], (float) $cp['planned_hours']);
+                                    $actualCombined = (float) $cp['field_hours'] + (float) $cp['office_hours'];
+                                    [$cEff, $cEffRaw, $cEffCol] = safeEffCR($actualCombined, (float) $cp['planned_hours']);
                                     [$vcEff, $vcEffRaw, $vcEffCol] = visitEffCR((int) $cp['matched_visits'], (int) $cp['planned_entries']);
+                                    $combinedStaff = $cp['field_staff'] + $cp['office_staff']; // rough; dedup not needed for display
+                                    $lastActivity = max($cp['last_field'] ?? '', $cp['last_office'] ?? '');
                                     ?>
                                     <tr <?= $filterClientId == $cp['client_id'] ? 'style="background:#eff6ff;"' : '' ?>>
                                         <td style="color:#9ca3af;font-size:.75rem;"><?= $i + 1 ?></td>
@@ -731,15 +921,15 @@ include '../../includes/header.php';
                                         </td>
                                         <td class="text-center">
                                             <span
-                                                style="font-size:.78rem;font-weight:600;color:#8b5cf6;"><?= (int) $cp['staff_count'] ?></span>
-                                            <?php if ($cp['staff_names']): ?>
+                                                style="font-size:.78rem;font-weight:600;color:#8b5cf6;"><?= $combinedStaff ?></span>
+                                            <?php if ($cp['field_staff_names']): ?>
                                                 <div style="font-size:.63rem;color:#9ca3af;max-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
-                                                    title="<?= htmlspecialchars($cp['staff_names']) ?>">
-                                                    <?= htmlspecialchars(mb_strimwidth($cp['staff_names'], 0, 18, '…')) ?>
+                                                    title="<?= htmlspecialchars($cp['field_staff_names']) ?>">
+                                                    <?= htmlspecialchars(mb_strimwidth($cp['field_staff_names'], 0, 18, '…')) ?>
                                                 </div>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="text-center"><strong><?= $cp['total_visits'] ?></strong></td>
+                                        <td class="text-center"><strong><?= (int) $cp['field_visits'] ?></strong></td>
                                         <td class="text-center">
                                             <span
                                                 style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.74rem;font-weight:600;"><?= (int) $cp['visited'] ?></span>
@@ -756,19 +946,26 @@ include '../../includes/header.php';
                                                     style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.74rem;font-weight:600;"><?= (int) $cp['rescheduled'] ?></span>
                                             <?php else: ?><span style="color:#d1d5db;font-size:.77rem;">—</span><?php endif; ?>
                                         </td>
-                                        <td class="text-center" style="font-size:.8rem;color:#6b7280;">
-                                            <?= (int) $cp['visit_days'] ?>
-                                        </td>
-                                        <td class="text-center" style="color:#3b82f6;font-weight:600;">
-                                            <?= number_format((float) $cp['planned_hours'], 1) ?>h
-                                        </td>
                                         <td class="text-center">
                                             <strong
-                                                style="color:<?= (float) $cp['actual_hours'] >= 4 ? '#10b981' : ((float) $cp['actual_hours'] >= 2 ? '#f59e0b' : '#6b7280') ?>;">
-                                                <?= number_format((float) $cp['actual_hours'], 1) ?>h
-                                            </strong>
+                                                style="color:#3b82f6;"><?= number_format((float) $cp['field_hours'], 1) ?>h</strong>
                                         </td>
-                                        <!-- Hour efficiency -->
+                                        <td class="text-center">
+                                            <?php if ((int) $cp['office_logs'] > 0): ?>
+                                                <span
+                                                    style="font-size:.8rem;color:#8b5cf6;font-weight:600;"><?= (int) $cp['office_logs'] ?></span>
+                                            <?php else: ?><span style="color:#d1d5db;font-size:.77rem;">—</span><?php endif; ?>
+                                        </td>
+                                        <td class="text-center">
+                                            <?php if ((float) $cp['office_hours'] > 0): ?>
+                                                <strong
+                                                    style="color:#10b981;"><?= number_format((float) $cp['office_hours'], 1) ?>h</strong>
+                                            <?php else: ?><span style="color:#d1d5db;font-size:.77rem;">—</span><?php endif; ?>
+                                        </td>
+                                        <td class="text-center" style="color:#c9a84c;font-weight:600;">
+                                            <?= number_format((float) $cp['planned_hours'], 1) ?>h
+                                        </td>
+                                        <!-- Hour efficiency (field + office vs planned) -->
                                         <td>
                                             <?php if ((float) $cp['planned_hours'] > 0): ?>
                                                 <div style="display:flex;align-items:center;gap:.4rem;">
@@ -782,13 +979,12 @@ include '../../includes/header.php';
                                                         style="font-size:.72rem;font-weight:700;color:<?= $cEffCol ?>;min-width:34px;text-align:right;"><?= $cEff ?>%</span>
                                                 </div>
                                                 <?php if ($cEffRaw > 100): ?>
-                                                    <div style="font-size:.62rem;color:#f59e0b;margin-top:2px;">⚠ <?= $cEffRaw ?>% raw
-                                                    </div>
+                                                    <div style="font-size:.62rem;color:#f59e0b;">⚠ <?= $cEffRaw ?>% raw</div>
                                                 <?php endif; ?>
                                             <?php else: ?><span style="font-size:.74rem;color:#9ca3af;">No
                                                     plan</span><?php endif; ?>
                                         </td>
-                                        <!-- Visit efficiency -->
+                                        <!-- Visit efficiency (field only — office has no planned entries) -->
                                         <td>
                                             <?php if ((int) $cp['planned_entries'] > 0): ?>
                                                 <div style="display:flex;align-items:center;gap:.4rem;">
@@ -801,19 +997,24 @@ include '../../includes/header.php';
                                                     <span
                                                         style="font-size:.72rem;font-weight:700;color:<?= $vcEffCol ?>;min-width:34px;text-align:right;"><?= $vcEff ?>%</span>
                                                 </div>
-                                                <div style="font-size:.63rem;color:#9ca3af;margin-top:2px;">
+                                                <div style="font-size:.63rem;color:#9ca3af;">
                                                     <?= $cp['matched_visits'] ?>/<?= $cp['planned_entries'] ?> visits
                                                 </div>
                                             <?php else: ?><span style="font-size:.74rem;color:#9ca3af;">No
                                                     plan</span><?php endif; ?>
                                         </td>
                                         <td style="font-size:.75rem;color:#6b7280;white-space:nowrap;">
-                                            <?= $cp['last_visit'] ? date('d M Y', strtotime($cp['last_visit'])) : '—' ?>
+                                            <?= $lastActivity ? date('d M Y', strtotime($lastActivity)) : '—' ?>
+                                            <?php if ($cp['last_office'] && $cp['last_field']): ?>
+                                                <div style="font-size:.63rem;color:#9ca3af;">
+                                                    F:<?= date('d M', strtotime($cp['last_field'])) ?>
+                                                    O:<?= date('d M', strtotime($cp['last_office'])) ?>
+                                                </div>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
                                             <a href="?month=<?= urlencode($month) ?>&client_id=<?= $cp['client_id'] ?><?= $filterStaffId ? '&staff_id=' . $filterStaffId : '' ?><?= $filterStatus ? '&visit_status=' . urlencode($filterStatus) : '' ?>"
-                                                style="font-size:.72rem;color:#3b82f6;text-decoration:none;"
-                                                title="Drill into <?= htmlspecialchars($cp['company_name'] ?? '') ?>">
+                                                style="font-size:.72rem;color:#3b82f6;text-decoration:none;">
                                                 <i class="fas fa-search-plus"></i> Drill
                                             </a>
                                         </td>
@@ -825,16 +1026,22 @@ include '../../includes/header.php';
                                     <td colspan="3" style="padding:10px 14px;font-size:.82rem;color:#374151;">
                                         <i class="fas fa-calculator me-1 text-warning"></i>TOTAL
                                     </td>
-                                    <td class="text-center"><?= (int) ($kpi['total_logs'] ?? 0) ?></td>
+                                    <td class="text-center"><?= array_sum(array_column($clientPerf, 'field_visits')) ?></td>
                                     <td class="text-center" style="color:#15803d;"><?= (int) ($kpi['visited'] ?? 0) ?></td>
                                     <td class="text-center" style="color:#b91c1c;"><?= (int) ($kpi['missed'] ?? 0) ?></td>
                                     <td class="text-center" style="color:#b45309;"><?= (int) ($kpi['rescheduled'] ?? 0) ?>
                                     </td>
-                                    <td></td>
                                     <td class="text-center" style="color:#3b82f6;">
-                                        <?= number_format(array_sum(array_column($clientPerf, 'planned_hours')), 1) ?>h
+                                        <?= number_format(array_sum(array_column($clientPerf, 'field_hours')), 1) ?>h
                                     </td>
-                                    <td class="text-center" style="color:#c9a84c;"><?= number_format($totalHours, 1) ?>h
+                                    <td class="text-center" style="color:#8b5cf6;">
+                                        <?= array_sum(array_column($clientPerf, 'office_logs')) ?>
+                                    </td>
+                                    <td class="text-center" style="color:#10b981;">
+                                        <?= number_format(array_sum(array_column($clientPerf, 'office_hours')), 1) ?>h
+                                    </td>
+                                    <td class="text-center" style="color:#c9a84c;">
+                                        <?= number_format(array_sum(array_column($clientPerf, 'planned_hours')), 1) ?>h
                                     </td>
                                     <td colspan="4"></td>
                                 </tr>
@@ -858,79 +1065,68 @@ include '../../includes/header.php';
 </div>
 
 <script>
-    <?php if (!empty($topClientNames)): ?>
-        new Chart(document.getElementById('clientChart'), {
-            type: 'bar',
-            data: {
-                labels: <?= json_encode($topClientNames) ?>,
-                datasets: [
-                    {
-                        label: 'Actual Hours',
-                        data: <?= json_encode($topClientHours) ?>,
-                        backgroundColor: 'rgba(139,92,246,.65)', borderColor: '#8b5cf6',
-                        borderWidth: 1.5, borderRadius: 5,
-                    },
-                    {
-                        label: 'Visits',
-                        data: <?= json_encode($topClientVisits) ?>,
-                        backgroundColor: 'rgba(201,168,76,.4)', borderColor: '#c9a84c',
-                        borderWidth: 1.5, borderRadius: 5,
-                    }
-                ]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 } } } },
-                scales: {
-                    x: { beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { font: { size: 10 } } },
-                    y: { grid: { display: false }, ticks: { font: { size: 11 } } }
-                }
-            }
-        });
-    <?php endif; ?>
+
     // TomSelect on client filter
     let clientTs = null;
-    <?php if (!$__isBranchManager): ?>
-        clientTs = new TomSelect('#filterClient', {
-            placeholder: 'Search by name, code or PAN…',
-            allowEmptyOption: true,
-            maxOptions: 500,
-            searchField: ['text'],
-            score: function (search) {
-                const s = search.toLowerCase();
-                return function (item) {
-                    const text = (item.text || '').toLowerCase();
-                    const code = (item.$option?.dataset?.code || '').toLowerCase();
-                    const pan = (item.$option?.dataset?.pan || '').toLowerCase();
-                    return (text.includes(s) || code.includes(s) || pan.includes(s)) ? 1 : 0;
-                };
-            },
-            render: {
-                option: function (data, escape) {
-                    const code = data.$option?.dataset?.code || '';
-                    const pan = data.$option?.dataset?.pan || '';
-                    const name = escape(data.text.split(' — ')[0]);
-                    return `<div style="padding:3px 2px;">
+
+    clientTs = new TomSelect('#filterClient', {
+        placeholder: 'Search by name, code or PAN…',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        score: function (search) {
+            const s = search.toLowerCase();
+            return function (item) {
+                const text = (item.text || '').toLowerCase();
+                const code = (item.$option?.dataset?.code || '').toLowerCase();
+                const pan = (item.$option?.dataset?.pan || '').toLowerCase();
+                return (text.includes(s) || code.includes(s) || pan.includes(s)) ? 1 : 0;
+            };
+        },
+        render: {
+            option: function (data, escape) {
+                const code = data.$option?.dataset?.code || '';
+                const pan = data.$option?.dataset?.pan || '';
+                const name = escape(data.text.split(' — ')[0]);
+                return `<div style="padding:3px 2px;">
                 <div style="font-weight:600;font-size:.83rem;">${name}</div>
                 <div style="font-size:.7rem;color:#9ca3af;display:flex;gap:8px;margin-top:1px;">
                     ${code ? `<span><i class="fas fa-tag" style="font-size:.6rem;"></i> ${escape(code)}</span>` : ''}
                     ${pan ? `<span><i class="fas fa-id-card" style="font-size:.6rem;"></i> PAN: ${escape(pan)}</span>` : ''}
                 </div>
             </div>`;
-                },
-                item: function (data, escape) {
-                    const pan = data.$option?.dataset?.pan || '';
-                    const name = escape(data.text.split(' — ')[0]);
-                    return pan
-                        ? `<div>${name} <span style="font-size:.7rem;color:#9ca3af;">(PAN: ${escape(pan)})</span></div>`
-                        : `<div>${name}</div>`;
-                }
             },
-            onChange: function () { applyFilters(); }
+            item: function (data, escape) {
+                const pan = data.$option?.dataset?.pan || '';
+                const name = escape(data.text.split(' — ')[0]);
+                return pan
+                    ? `<div>${name} <span style="font-size:.7rem;color:#9ca3af;">(PAN: ${escape(pan)})</span></div>`
+                    : `<div>${name}</div>`;
+            }
+        },
+        onChange: function () { applyFilters(); }
+    });
+    <?php if (!empty($topClientNames)): ?>
+        new Chart(document.getElementById('clientChart'), {
+            type: 'bar',
+            data: {
+                labels: <?= json_encode($topClientNames) ?>,
+                datasets: [
+                    { label: 'Field Hours', data: <?= json_encode($topClientField) ?>, backgroundColor: 'rgba(59,130,246,.65)', borderColor: '#3b82f6', borderWidth: 1.5, borderRadius: 4, stack: 'hours' },
+                    { label: 'Office Hours', data: <?= json_encode($topClientOffice) ?>, backgroundColor: 'rgba(16,185,129,.55)', borderColor: '#10b981', borderWidth: 1.5, borderRadius: 4, stack: 'hours' },
+                    { label: 'Field Visits', data: <?= json_encode($topClientVisits) ?>, backgroundColor: 'rgba(201,168,76,.4)', borderColor: '#c9a84c', borderWidth: 1.5, borderRadius: 4, stack: 'visits' }
+                ]
+            },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 } } } },
+                scales: {
+                    x: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { font: { size: 10 } } },
+                    y: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } }
+                }
+            }
         });
     <?php endif; ?>
-
     function applyFilters() {
         const month = document.getElementById('filterMonth').value;
         const client = clientTs ? clientTs.getValue() : '';
@@ -947,4 +1143,3 @@ include '../../includes/header.php';
         location.href = 'client_report.php?' + p.toString();
     }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>

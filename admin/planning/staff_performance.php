@@ -1,26 +1,27 @@
 <?php
 /**
  * admin/planning/staff_performance.php
- * Staff Performance Report — aligned with actual DB schema
- * work_logs, office_work_logs, user_department_assignments
+ * Staff Performance Report
+ * Scope: login user (self) + staff where managed_by = $uid (primary OR via UDA)
+ *        filtered to CON dept — no plan_entry_id references
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 
-$db          = getDB();
-$user        = currentUser();
-$uid         = (int)$user['id'];
-$branchId    = (int)($user['branch_id']     ?? 0);
-$deptId      = (int)($user['department_id'] ?? 0);
+$db       = getDB();
+$user     = currentUser();
+$uid      = (int) $user['id'];
+$branchId = (int) ($user['branch_id']     ?? 0);
+$deptId   = (int) ($user['department_id'] ?? 0);
 
-/* ── Resolve consulting dept via UDA ─────────────────────────── */
-$__deptMeta = $db->prepare("SELECT dept_code, dept_name FROM departments WHERE id=?");
-$__deptMeta->execute([$user['department_id']]);
-$__dm = $__deptMeta->fetch(PDO::FETCH_ASSOC);
-$__primaryCode = $__dm['dept_code'] ?? '';
-$__isConsPrimary = ($__primaryCode === 'CON' || stripos($__dm['dept_name'] ?? '', 'consult') !== false);
+/* ── Resolve consulting dept via primary or UDA ───────────────── */
+$__dm = $db->prepare("SELECT dept_code, dept_name FROM departments WHERE id=?");
+$__dm->execute([$user['department_id']]);
+$__deptMeta      = $__dm->fetch(PDO::FETCH_ASSOC);
+$__primaryCode   = $__deptMeta['dept_code'] ?? '';
+$__isConsPrimary = ($__primaryCode === 'CON' || stripos($__deptMeta['dept_name'] ?? '', 'consult') !== false);
 $__isCoreAdmin   = ($__primaryCode === 'CORE');
 
 $__udaQ = $db->prepare("
@@ -32,11 +33,11 @@ $__udaQ = $db->prepare("
 $__udaQ->execute([$uid]);
 $__udaCons = $__udaQ->fetch(PDO::FETCH_ASSOC);
 
-if ($__isConsPrimary)                  $deptId = (int)$user['department_id'];
-elseif ($__isCoreAdmin && $__udaCons)  $deptId = (int)$__udaCons['id'];
-elseif ($__udaCons)                    $deptId = (int)$__udaCons['id'];
+if ($__isConsPrimary)                 $deptId = (int) $user['department_id'];
+elseif ($__isCoreAdmin && $__udaCons) $deptId = (int) $__udaCons['id'];
+elseif ($__udaCons)                   $deptId = (int) $__udaCons['id'];
 
-/* ── Month / filter ──────────────────────────────────────────── */
+/* ── Month / filters ─────────────────────────────────────────── */
 $now        = new DateTime();
 $month      = $_GET['month'] ?? $now->format('Y-m');
 $monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
@@ -44,7 +45,7 @@ $monthStart = $monthDate->format('Y-m-01');
 $monthEnd   = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');
 
-$filterStaffId = (int)($_GET['staff_id'] ?? 0) ?: null;
+$filterStaffId = (int) ($_GET['staff_id'] ?? 0) ?: null;
 $filterFrom    = $_GET['from'] ?? $monthStart;
 $filterTo      = $_GET['to']   ?? $monthEnd;
 $filterFrom    = max($filterFrom, $monthStart);
@@ -55,34 +56,48 @@ $deptNameStmt = $db->prepare("SELECT dept_name FROM departments WHERE id=?");
 $deptNameStmt->execute([$deptId]);
 $deptName = $deptNameStmt->fetchColumn() ?: 'Consulting';
 
-/* ── Unread plan_notifications ───────────────────────────────── */
+/* ── Unread notifications ────────────────────────────────────── */
 $notifCount = 0;
 try {
-    $notifCount = (int)$db->query("
+    $notifCount = (int) $db->query("
         SELECT COUNT(*) FROM plan_notifications
         WHERE user_id={$uid} AND is_read=0
     ")->fetchColumn();
 } catch (Exception $e) { $notifCount = 0; }
 
-/* ── Staff scope: same branch, consulting dept + no-dept ─────── */
+/* ══════════════════════════════════════════════════════════════
+   SCOPE: self + staff managed_by login user (primary OR UDA)
+          restricted to CON dept
+══════════════════════════════════════════════════════════════ */
 $scopeStmt = $db->prepare("
     SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id,
-           COALESCE(d.dept_name,'—') AS dept_name
+           COALESCE(d.dept_name, '—') AS dept_name
     FROM users u
     LEFT JOIN departments d ON d.id = u.department_id
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    LEFT JOIN departments d1 ON d1.id = u.department_id
+    LEFT JOIN departments d2 ON d2.id = uda.department_id
     WHERE u.is_active = 1
-      AND u.branch_id = ?
       AND (
+          /* always include self */
           u.id = ?
-          OR u.department_id = ?
-          OR u.department_id IS NULL
-          OR u.department_id = 0
-          OR uda.department_id = ?
+          OR (
+              /* directly managed by login user */
+              u.managed_by = ?
+              AND (
+                  (d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%')
+                  OR (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
+              )
+          )
+          OR (
+              /* managed via UDA row */
+              uda.managed_by = ?
+              AND (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
+          )
       )
     ORDER BY u.full_name
 ");
-$scopeStmt->execute([$branchId, $uid, $deptId, $deptId]);
+$scopeStmt->execute([$uid, $uid, $uid]);
 $scopeStaff = $scopeStmt->fetchAll(PDO::FETCH_ASSOC);
 $scopeIds   = array_unique(array_map('intval', array_column($scopeStaff, 'id')));
 if (!in_array($uid, $scopeIds)) $scopeIds[] = $uid;
@@ -90,41 +105,41 @@ $inList = implode(',', $scopeIds) ?: '0';
 
 $activeInList = $inList;
 if ($filterStaffId && in_array($filterStaffId, $scopeIds))
-    $activeInList = (string)$filterStaffId;
+    $activeInList = (string) $filterStaffId;
 
 /* ══════════════════════════════════════════════════════════════
-   A. FIELD KPIS (work_logs)
+   A. FIELD KPIs (work_logs)
 ══════════════════════════════════════════════════════════════ */
 $fieldKpi = $db->query("
     SELECT
-        COUNT(*)                             AS total_logs,
-        COALESCE(SUM(duration_hours),0)      AS total_hours,
-        SUM(visit_status='visited')          AS visited,
-        SUM(visit_status='missed')           AS missed,
-        SUM(visit_status='rescheduled')      AS rescheduled,
-        COUNT(DISTINCT client_id)            AS unique_clients,
-        COUNT(DISTINCT user_id)              AS active_staff
+        COUNT(*)                          AS total_logs,
+        COALESCE(SUM(duration_hours), 0)  AS total_hours,
+        SUM(visit_status='visited')       AS visited,
+        SUM(visit_status='missed')        AS missed,
+        SUM(visit_status='rescheduled')   AS rescheduled,
+        COUNT(DISTINCT client_id)         AS unique_clients,
+        COUNT(DISTINCT user_id)           AS active_staff
     FROM work_logs
     WHERE month_year='{$month}' AND user_id IN ({$activeInList})
 ")->fetch(PDO::FETCH_ASSOC);
 
 /* ══════════════════════════════════════════════════════════════
-   B. OFFICE KPIS (office_work_logs)
+   B. OFFICE KPIs (office_work_logs)
 ══════════════════════════════════════════════════════════════ */
 $officeKpi = $db->query("
     SELECT
-        COUNT(*)                                                        AS total_logs,
-        COALESCE(SUM(TIMESTAMPDIFF(MINUTE,time_in,time_out)/60.0),0)   AS total_hours,
-        SUM(status='completed')                                         AS completed,
-        SUM(status='wip')                                               AS wip,
-        SUM(status='holding')                                           AS holding,
-        SUM(status='not_started')                                       AS not_started,
-        COUNT(DISTINCT client_id)                                       AS unique_clients
+        COUNT(*)                                                       AS total_logs,
+        COALESCE(SUM(TIMESTAMPDIFF(MINUTE,time_in,time_out)/60.0), 0) AS total_hours,
+        SUM(status='completed')                                        AS completed,
+        SUM(status='wip')                                              AS wip,
+        SUM(status='holding')                                          AS holding,
+        SUM(status='not_started')                                      AS not_started,
+        COUNT(DISTINCT client_id)                                      AS unique_clients
     FROM office_work_logs
     WHERE log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'
       AND user_id IN ({$activeInList})
 ")->fetch(PDO::FETCH_ASSOC);
-$officeHours = round((float)($officeKpi['total_hours'] ?? 0), 1);
+$officeHours = round((float) ($officeKpi['total_hours'] ?? 0), 1);
 
 /* ── Plan counts ─────────────────────────────────────────────── */
 $pk = $db->query("
@@ -139,49 +154,52 @@ $pk = $db->query("
 ")->fetch(PDO::FETCH_ASSOC);
 
 /* ── Planned vs Actual hours ─────────────────────────────────── */
-$teamPlanned = (float)$db->query("
-    SELECT COALESCE(SUM(wpe.planned_hours),0)
+$teamPlanned = (float) $db->query("
+    SELECT COALESCE(SUM(wpe.planned_hours), 0)
     FROM work_plan_entries wpe
-    JOIN work_plans wp ON wp.id=wpe.plan_id
+    JOIN work_plans wp ON wp.id = wpe.plan_id
     WHERE wp.plan_month='{$monthStart}' AND wpe.assigned_to IN ({$activeInList})
 ")->fetchColumn();
 
-$teamActual = (float)$db->query("
-    SELECT COALESCE(SUM(duration_hours),0)
+$teamActual = (float) $db->query("
+    SELECT COALESCE(SUM(duration_hours), 0)
     FROM work_logs
     WHERE month_year='{$month}' AND user_id IN ({$activeInList})
 ")->fetchColumn();
 
-/* ── Match efficiency ────────────────────────────────────────── */
+/* ── Match efficiency (plan_entry_id dropped — match by client+date+user) ── */
 $teamMatch = $db->query("
     SELECT
-        COUNT(DISTINCT wpe.id)                                   AS planned_count,
+        COUNT(DISTINCT wpe.id)                                    AS planned_count,
         COUNT(DISTINCT CASE
-            WHEN wl.client_id=wpe.client_id AND wl.log_date=wpe.plan_date
-            THEN wpe.id END)                                     AS matched_count,
-        COALESCE(SUM(wpe.planned_hours),0)                      AS planned_hrs
+            WHEN wl.client_id = wpe.client_id
+             AND wl.log_date  = wpe.plan_date
+             AND wl.user_id   = wpe.assigned_to
+            THEN wpe.id END)                                      AS matched_count,
+        COALESCE(SUM(wpe.planned_hours), 0)                      AS planned_hrs
     FROM work_plan_entries wpe
-    JOIN work_plans wp ON wp.id=wpe.plan_id
+    JOIN work_plans wp ON wp.id = wpe.plan_id
     LEFT JOIN work_logs wl
-        ON wl.client_id=wpe.client_id
-        AND wl.log_date=wpe.plan_date
-        AND wl.user_id=wpe.assigned_to
+        ON  wl.client_id = wpe.client_id
+        AND wl.log_date  = wpe.plan_date
+        AND wl.user_id   = wpe.assigned_to
     WHERE wp.plan_month='{$monthStart}' AND wpe.assigned_to IN ({$activeInList})
 ")->fetch(PDO::FETCH_ASSOC);
 
-$plannedCount = (int)($teamMatch['planned_count'] ?? 0);
-$matchedCount = (int)($teamMatch['matched_count'] ?? 0);
-$plannedHrs   = (float)($teamMatch['planned_hrs']  ?? 0);
+$plannedCount = (int)   ($teamMatch['planned_count'] ?? 0);
+$matchedCount = (int)   ($teamMatch['matched_count'] ?? 0);
+$plannedHrs   = (float) ($teamMatch['planned_hrs']   ?? 0);
 
-$visitEffRaw  = $plannedCount > 0 ? round(($matchedCount/$plannedCount)*100,1) : 0;
+$visitEffRaw  = $plannedCount > 0 ? round(($matchedCount / $plannedCount) * 100, 1) : 0;
 $visitEff     = min($visitEffRaw, 100);
-$hourEffRaw   = $plannedHrs   > 0 ? round(($teamActual/$plannedHrs)*100,1)    : 0;
+$hourEffRaw   = $plannedHrs   > 0 ? round(($teamActual   / $plannedHrs)   * 100, 1) : 0;
 $hourEff      = min($hourEffRaw, 100);
 $effColor     = $visitEff >= 80 ? '#10b981' : ($visitEff >= 50 ? '#f59e0b' : '#ef4444');
 $hourEffColor = $hourEff  >= 80 ? '#10b981' : ($hourEff  >= 50 ? '#f59e0b' : '#ef4444');
 
 /* ══════════════════════════════════════════════════════════════
    C. PER-STAFF ROWS (field + office combined)
+      Match: client_id + plan_date + user_id (no plan_entry_id)
 ══════════════════════════════════════════════════════════════ */
 $staffPerfRows = [];
 if (!empty($scopeIds)) {
@@ -192,7 +210,7 @@ if (!empty($scopeIds)) {
                 GROUP_CONCAT(DISTINCT d_all.dept_name ORDER BY d_all.dept_name SEPARATOR ', '),
                 'No Dept'
             )                                           AS dept_label,
-            COALESCE(SUM(wl.duration_hours),0)          AS hours,
+            COALESCE(SUM(wl.duration_hours), 0)         AS hours,
             COUNT(wl.id)                                AS logs,
             SUM(wl.visit_status='visited')              AS visited,
             SUM(wl.visit_status='missed')               AS missed,
@@ -200,70 +218,64 @@ if (!empty($scopeIds)) {
             COUNT(DISTINCT wl.client_id)                AS clients,
             COUNT(DISTINCT wl.log_date)                 AS active_days,
             MAX(wl.log_date)                            AS last_log_date,
+            /* planned visit count */
             (SELECT COUNT(DISTINCT wpe2.id)
              FROM work_plan_entries wpe2
-             JOIN work_plans wp2 ON wp2.id=wpe2.plan_id
-             WHERE wpe2.assigned_to=u.id
-               AND wp2.plan_month='{$monthStart}')      AS planned_visits,
+             JOIN work_plans wp2 ON wp2.id = wpe2.plan_id
+             WHERE wpe2.assigned_to = u.id
+               AND wp2.plan_month   = '{$monthStart}')  AS planned_visits,
+            /* matched: client+date+user */
             (SELECT COUNT(DISTINCT CASE
-                WHEN wl2.client_id=wpe2.client_id
-                 AND wl2.log_date=wpe2.plan_date
-                THEN wpe2.id END)
+                 WHEN wl2.client_id = wpe2.client_id
+                  AND wl2.log_date  = wpe2.plan_date
+                 THEN wpe2.id END)
              FROM work_plan_entries wpe2
-             JOIN work_plans wp2 ON wp2.id=wpe2.plan_id
+             JOIN work_plans wp2 ON wp2.id = wpe2.plan_id
              LEFT JOIN work_logs wl2
-                ON wl2.client_id=wpe2.client_id
-               AND wl2.log_date=wpe2.plan_date
-               AND wl2.user_id=wpe2.assigned_to
-             WHERE wpe2.assigned_to=u.id
-               AND wp2.plan_month='{$monthStart}')      AS matched_visits,
-            (SELECT COALESCE(SUM(wpe3.planned_hours),0)
+                 ON  wl2.client_id = wpe2.client_id
+                 AND wl2.log_date  = wpe2.plan_date
+                 AND wl2.user_id   = wpe2.assigned_to
+             WHERE wpe2.assigned_to = u.id
+               AND wp2.plan_month   = '{$monthStart}')  AS matched_visits,
+            /* planned hours */
+            (SELECT COALESCE(SUM(wpe3.planned_hours), 0)
              FROM work_plan_entries wpe3
-             JOIN work_plans wp3 ON wp3.id=wpe3.plan_id
-             WHERE wpe3.assigned_to=u.id
-               AND wp3.plan_month='{$monthStart}')      AS planned_hours,
-            (SELECT COUNT(*)
-             FROM work_plans
-             WHERE user_id=u.id AND plan_month='{$monthStart}'
-               AND status='approved')                   AS plans_approved,
-            (SELECT COUNT(*)
-             FROM work_plans
-             WHERE user_id=u.id AND plan_month='{$monthStart}'
-               AND status='submitted')                  AS plans_submitted,
-            (SELECT COUNT(*)
-             FROM work_plans
-             WHERE user_id=u.id AND plan_month='{$monthStart}'
-               AND status='draft')                      AS plans_draft,
-            (SELECT COUNT(*)
-             FROM work_plans
-             WHERE user_id=u.id AND plan_month='{$monthStart}'
-               AND status='rejected')                   AS plans_rejected,
-            /* Office work columns */
-            (SELECT COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0),0)
+             JOIN work_plans wp3 ON wp3.id = wpe3.plan_id
+             WHERE wpe3.assigned_to = u.id
+               AND wp3.plan_month   = '{$monthStart}')  AS planned_hours,
+            /* plan statuses */
+            (SELECT COUNT(*) FROM work_plans
+             WHERE user_id=u.id AND plan_month='{$monthStart}' AND status='approved')  AS plans_approved,
+            (SELECT COUNT(*) FROM work_plans
+             WHERE user_id=u.id AND plan_month='{$monthStart}' AND status='submitted') AS plans_submitted,
+            (SELECT COUNT(*) FROM work_plans
+             WHERE user_id=u.id AND plan_month='{$monthStart}' AND status='draft')     AS plans_draft,
+            (SELECT COUNT(*) FROM work_plans
+             WHERE user_id=u.id AND plan_month='{$monthStart}' AND status='rejected')  AS plans_rejected,
+            /* office work */
+            (SELECT COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0), 0)
              FROM office_work_logs owl
-             WHERE owl.user_id=u.id
-               AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}')
-                                                        AS office_hours,
+             WHERE owl.user_id = u.id
+               AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}')             AS office_hours,
             (SELECT COUNT(*)
              FROM office_work_logs owl
-             WHERE owl.user_id=u.id
-               AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}')
-                                                        AS office_logs,
+             WHERE owl.user_id = u.id
+               AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}')             AS office_logs,
             (SELECT COUNT(*)
              FROM office_work_logs owl
-             WHERE owl.user_id=u.id
+             WHERE owl.user_id = u.id
                AND owl.log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'
-               AND owl.status='completed')              AS office_completed
+               AND owl.status  = 'completed')                                          AS office_completed
         FROM users u
-        LEFT JOIN user_department_assignments uda ON uda.user_id=u.id
+        LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
         LEFT JOIN departments d_all ON (
-            d_all.id=u.department_id OR d_all.id=uda.department_id
+            d_all.id = u.department_id OR d_all.id = uda.department_id
         )
         LEFT JOIN work_logs wl
-            ON wl.user_id=u.id
-           AND wl.month_year='{$month}'
-           AND wl.log_date BETWEEN '{$filterFrom}' AND '{$filterTo}'
-        WHERE u.id IN ({$activeInList}) AND u.is_active=1
+            ON  wl.user_id   = u.id
+            AND wl.month_year = '{$month}'
+            AND wl.log_date  BETWEEN '{$filterFrom}' AND '{$filterTo}'
+        WHERE u.id IN ({$activeInList}) AND u.is_active = 1
         GROUP BY u.id, u.full_name, u.employee_id, u.department_id
         ORDER BY hours DESC
     ")->fetchAll(PDO::FETCH_ASSOC);
@@ -274,9 +286,9 @@ if (!empty($scopeIds)) {
 ══════════════════════════════════════════════════════════════ */
 $trendRows = $db->query("
     SELECT log_date,
-           COALESCE(SUM(duration_hours),0) AS hours,
-           COUNT(*)                        AS visits,
-           COUNT(DISTINCT user_id)         AS active_staff
+           COALESCE(SUM(duration_hours), 0) AS hours,
+           COUNT(*)                          AS visits,
+           COUNT(DISTINCT user_id)           AS active_staff
     FROM work_logs
     WHERE log_date BETWEEN '{$monthStart}' AND '{$monthEnd}'
       AND user_id IN ({$activeInList})
@@ -290,42 +302,44 @@ $trendRows = $db->query("
 $recentSQL = "
     SELECT wl.log_date, wl.day_of_week, wl.time_in, wl.time_out,
            wl.duration_hours, wl.visit_status, wl.work_description,
-           c.company_name, c.company_code, u.full_name AS staff_name
+           c.company_name, c.company_code,
+           u.full_name AS staff_name
     FROM work_logs wl
-    JOIN companies c ON c.id=wl.client_id
-    JOIN users u     ON u.id=wl.user_id
-    WHERE wl.month_year='{$month}'
+    JOIN companies c ON c.id = wl.client_id
+    JOIN users u     ON u.id = wl.user_id
+    WHERE wl.month_year = '{$month}'
       AND wl.user_id IN ({$activeInList})
       AND wl.log_date BETWEEN '{$filterFrom}' AND '{$filterTo}'
 ";
-if ($filterStaffId) $recentSQL .= " AND wl.user_id=".(int)$filterStaffId;
+if ($filterStaffId) $recentSQL .= " AND wl.user_id=" . (int) $filterStaffId;
 $recentSQL .= " ORDER BY wl.log_date DESC, wl.created_at DESC LIMIT 15";
 $recentLogs = $db->query($recentSQL)->fetchAll(PDO::FETCH_ASSOC);
 
 /* ══════════════════════════════════════════════════════════════
    F. RECENT OFFICE LOGS
 ══════════════════════════════════════════════════════════════ */
-$recentOffice = $db->query("
+$recentOffSQL = "
     SELECT owl.log_date, owl.time_in, owl.time_out, owl.description,
            owl.status,
            TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60.0 AS hrs,
            c.company_name, c.company_code,
            u.full_name AS staff_name, u.employee_id
     FROM office_work_logs owl
-    JOIN companies c ON c.id=owl.client_id
-    JOIN users u     ON u.id=owl.user_id
+    JOIN companies c ON c.id = owl.client_id
+    JOIN users u     ON u.id = owl.user_id
     WHERE owl.log_date BETWEEN '{$filterFrom}' AND '{$filterTo}'
       AND owl.user_id IN ({$activeInList})
-    ORDER BY owl.log_date DESC, owl.time_in DESC
-    LIMIT 10
-")->fetchAll(PDO::FETCH_ASSOC);
+";
+if ($filterStaffId) $recentOffSQL .= " AND owl.user_id=" . (int) $filterStaffId;
+$recentOffSQL .= " ORDER BY owl.log_date DESC, owl.time_in DESC LIMIT 10";
+$recentOffice = $db->query($recentOffSQL)->fetchAll(PDO::FETCH_ASSOC);
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 function vstBadgeSP(string $s): string {
     $map = [
         'visited'     => ['#ecfdf5','#10b981','fa-check-circle','Visited'],
         'missed'      => ['#fef2f2','#ef4444','fa-times-circle','Missed'],
-        'rescheduled' => ['#fffbeb','#f59e0b','fa-redo','Rescheduled'],
+        'rescheduled' => ['#fffbeb','#f59e0b','fa-redo',        'Rescheduled'],
     ];
     [$bg,$col,$ico,$lbl] = $map[$s] ?? ['#f9fafb','#9ca3af','fa-circle','—'];
     return "<span style='background:{$bg};color:{$col};padding:.15rem .55rem;border-radius:99px;
@@ -369,14 +383,12 @@ include '../../includes/header.php';
             <div class="page-hero-badge">
                 <i class="fas fa-users"></i> Staff Performance
                 <?php if ($notifCount > 0): ?>
-                <span style="background:#ef4444;color:#fff;border-radius:99px;padding:.05rem .42rem;font-size:.65rem;font-weight:700;margin-left:.35rem;"><?= $notifCount ?></span>
+                    <span style="background:#ef4444;color:#fff;border-radius:99px;padding:.05rem .42rem;font-size:.65rem;font-weight:700;margin-left:.35rem;"><?= $notifCount ?></span>
                 <?php endif; ?>
             </div>
             <h4>Staff Performance Report</h4>
             <p><?= htmlspecialchars($user['full_name']) ?> · <?= htmlspecialchars($deptName) ?> · <?= $monthLabel ?>
-                <span style="font-size:.72rem;background:#f3f4f6;border-radius:99px;padding:.1rem .55rem;margin-left:.35rem;">
-                    <?= count($scopeStaff) ?> staff
-                </span>
+                <span style="font-size:.72rem;background:#f3f4f6;border-radius:99px;padding:.1rem .55rem;margin-left:.35rem;"><?= count($scopeStaff) ?> staff</span>
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap align-items-center">
@@ -385,7 +397,7 @@ include '../../includes/header.php';
             <a href="plan_approvals.php" class="btn btn-outline-secondary btn-sm position-relative">
                 <i class="fas fa-check-circle me-1"></i>Approvals
                 <?php if ($notifCount > 0): ?>
-                <span style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;border-radius:50%;width:16px;height:16px;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;"><?= $notifCount ?></span>
+                    <span style="position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;border-radius:50%;width:16px;height:16px;font-size:.6rem;font-weight:700;display:flex;align-items:center;justify-content:center;"><?= $notifCount ?></span>
                 <?php endif; ?>
             </a>
             <a href="client_report.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
@@ -420,10 +432,10 @@ include '../../includes/header.php';
                 <select id="filterStaff" class="form-select form-select-sm" onchange="applyFilters()">
                     <option value="">— All Staff —</option>
                     <?php foreach ($scopeStaff as $sf): ?>
-                    <option value="<?= $sf['id'] ?>" <?= $filterStaffId==$sf['id']?'selected':'' ?>>
-                        <?= htmlspecialchars($sf['full_name']) ?>
-                        <?= empty($sf['department_id']) ? ' (Multi-dept)' : '' ?>
-                    </option>
+                        <option value="<?= $sf['id'] ?>" <?= $filterStaffId == $sf['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($sf['full_name']) ?>
+                            <?= $sf['id'] == $uid ? ' (You)' : '' ?>
+                        </option>
                     <?php endforeach; ?>
                 </select>
             </div>
@@ -443,32 +455,20 @@ include '../../includes/header.php';
     </div>
 </div>
 
-<!-- ══ NO-DEPT NOTICE ════════════════════════════════════════ -->
-<?php $noDeptStaff = array_filter($scopeStaff, fn($s)=>empty($s['department_id'])); ?>
-<?php if (!empty($noDeptStaff)): ?>
-<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:.75rem 1rem;margin-bottom:1rem;display:flex;align-items:center;gap:.65rem;">
-    <i class="fas fa-info-circle" style="color:#f59e0b;flex-shrink:0;"></i>
-    <div style="font-size:.8rem;color:#92400e;">
-        <strong>Multi-Department Staff included:</strong>
-        <?= implode(', ', array_map(fn($s) => htmlspecialchars($s['full_name']), $noDeptStaff)) ?>
-    </div>
-</div>
-<?php endif; ?>
-
 <!-- ══ KPI CARDS — FIELD ═════════════════════════════════════ -->
 <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem;">
     <i class="fas fa-car" style="color:#c9a84c;margin-right:.3rem;"></i>Field Visits
 </div>
 <div class="row g-3 mb-3">
 <?php
-$totalHours = (float)($fieldKpi['total_hours'] ?? 0);
+$totalHours = (float) ($fieldKpi['total_hours'] ?? 0);
 $kpiCards = [
-    ['fa-users',         '#8b5cf6','#f5f3ff', 'Active Staff',    (int)($fieldKpi['active_staff'] ??0)],
+    ['fa-users',         '#8b5cf6','#f5f3ff', 'Active Staff',    (int)($fieldKpi['active_staff']   ??0)],
     ['fa-clock',         '#3b82f6','#eff6ff', 'Field Hours',     number_format($totalHours,1).'h'],
-    ['fa-check-circle',  '#10b981','#ecfdf5', 'Visited',         (int)($fieldKpi['visited']      ??0)],
-    ['fa-times-circle',  '#ef4444','#fef2f2', 'Missed',          (int)($fieldKpi['missed']       ??0)],
-    ['fa-redo',          '#f59e0b','#fffbeb', 'Rescheduled',     (int)($fieldKpi['rescheduled']  ??0)],
-    ['fa-building',      '#0ea5e9','#e0f2fe', 'Clients Served',  (int)($fieldKpi['unique_clients']??0)],
+    ['fa-check-circle',  '#10b981','#ecfdf5', 'Visited',         (int)($fieldKpi['visited']        ??0)],
+    ['fa-times-circle',  '#ef4444','#fef2f2', 'Missed',          (int)($fieldKpi['missed']         ??0)],
+    ['fa-redo',          '#f59e0b','#fffbeb', 'Rescheduled',     (int)($fieldKpi['rescheduled']    ??0)],
+    ['fa-building',      '#0ea5e9','#e0f2fe', 'Clients Served',  (int)($fieldKpi['unique_clients'] ??0)],
     ['fa-tachometer-alt',$effColor,'#f9fafb', 'Visit Efficiency',$visitEff.'%'],
     ['fa-calendar-check','#10b981','#ecfdf5', 'Plans Approved',  (int)($pk['approved']??0).'/'.(int)($pk['total_plans']??0)],
 ];
@@ -493,16 +493,16 @@ foreach ($kpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
 </div>
 <div class="row g-3 mb-4">
 <?php
-$officeKpiCards = [
-    ['fa-file-alt',    '#3b82f6','#eff6ff', 'Office Logs',     (int)($officeKpi['total_logs']    ??0)],
-    ['fa-clock',       '#c9a84c','#fefce8', 'Office Hours',    number_format($officeHours,1).'h'],
-    ['fa-check-double','#10b981','#ecfdf5', 'Completed',       (int)($officeKpi['completed']     ??0)],
-    ['fa-spinner',     '#f59e0b','#fffbeb', 'WIP',             (int)($officeKpi['wip']           ??0)],
-    ['fa-pause-circle','#8b5cf6','#f5f3ff', 'Holding',         (int)($officeKpi['holding']       ??0)],
-    ['fa-circle',      '#9ca3af','#f9fafb', 'Not Started',     (int)($officeKpi['not_started']   ??0)],
-    ['fa-building',    '#0ea5e9','#e0f2fe', 'Clients (Office)',(int)($officeKpi['unique_clients']??0)],
+$offKpiCards = [
+    ['fa-file-alt',    '#3b82f6','#eff6ff', 'Office Logs',      (int)($officeKpi['total_logs']    ??0)],
+    ['fa-clock',       '#c9a84c','#fefce8', 'Office Hours',     number_format($officeHours,1).'h'],
+    ['fa-check-double','#10b981','#ecfdf5', 'Completed',        (int)($officeKpi['completed']     ??0)],
+    ['fa-spinner',     '#f59e0b','#fffbeb', 'WIP',              (int)($officeKpi['wip']           ??0)],
+    ['fa-pause-circle','#8b5cf6','#f5f3ff', 'Holding',          (int)($officeKpi['holding']       ??0)],
+    ['fa-circle',      '#9ca3af','#f9fafb', 'Not Started',      (int)($officeKpi['not_started']   ??0)],
+    ['fa-building',    '#0ea5e9','#e0f2fe', 'Clients (Office)', (int)($officeKpi['unique_clients']??0)],
 ];
-foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
+foreach ($offKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
 <div class="col-6 col-md-3 col-lg-2">
     <div style="background:#fff;border-radius:12px;border:1px solid #f3f4f6;padding:.85rem 1rem;display:flex;align-items:center;gap:.65rem;box-shadow:0 1px 3px rgba(0,0,0,.04);">
         <div style="width:36px;height:36px;border-radius:9px;background:<?=$bg?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
@@ -517,26 +517,23 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
 <?php endforeach; ?>
 </div>
 
-<!-- ══ PLANNED vs ACTUAL ════════════════════════════════════ -->
+<!-- ══ PLANNED vs ACTUAL ═════════════════════════════════════ -->
 <div class="card-mis mb-4">
     <div class="card-mis-header">
         <h5><i class="fas fa-chart-bar text-warning me-2"></i>Team Planned vs Actual — <?= $monthLabel ?></h5>
         <div style="display:flex;gap:14px;font-size:.75rem;">
             <span>Visit eff: <strong style="color:<?=$effColor?>"><?=$visitEff?>%</strong></span>
-            <span>Hour eff: <strong style="color:<?=$hourEffColor?>"><?=$hourEff?>%</strong></span>
+            <span>Hour eff:  <strong style="color:<?=$hourEffColor?>"><?=$hourEff?>%</strong></span>
         </div>
     </div>
     <div class="card-mis-body">
-        <?php
-        $maxH = max($plannedHrs, $teamActual, $officeHours, 1);
-        ?>
+        <?php $maxH = max($plannedHrs, $teamActual, $officeHours, 1); ?>
         <?php foreach ([
-            ['Planned Field', $plannedHrs, $maxH, '#3b82f6'],
-            ['Actual Field',  $teamActual, $maxH, $hourEffColor],
-            ['Office Hours',  $officeHours,$maxH, '#10b981'],
+            ['Planned Field', $plannedHrs,  $maxH, '#3b82f6'],
+            ['Actual Field',  $teamActual,  $maxH, $hourEffColor],
+            ['Office Hours',  $officeHours, $maxH, '#10b981'],
         ] as [$lbl,$val,$base,$col]):
-            $w = $base > 0 ? min(100, round($val/$base*100)) : 0;
-        ?>
+            $w = $base > 0 ? min(100, round($val / $base * 100)) : 0; ?>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
             <span style="font-size:.76rem;color:#9ca3af;min-width:88px;"><?=$lbl?></span>
             <div style="flex:1;background:#f3f4f6;border-radius:99px;height:8px;overflow:hidden;">
@@ -547,11 +544,11 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
         <?php endforeach; ?>
         <div style="display:flex;gap:1.5rem;margin-top:.9rem;flex-wrap:wrap;padding-top:.75rem;border-top:1px solid #f3f4f6;">
             <?php foreach ([
-                ['Planned Visits',$plannedCount,'#3b82f6'],
-                ['Matched',       $matchedCount,'#10b981'],
-                ['Unmatched',     max(0,$plannedCount-$matchedCount),'#ef4444'],
-                ['Visit Eff.',    $visitEff.'%',$effColor],
-                ['Hour Eff.',     $hourEff.'%', $hourEffColor],
+                ['Planned Visits', $plannedCount,                    '#3b82f6'],
+                ['Matched',        $matchedCount,                    '#10b981'],
+                ['Unmatched',      max(0,$plannedCount-$matchedCount),'#ef4444'],
+                ['Visit Eff.',     $visitEff.'%',                   $effColor],
+                ['Hour Eff.',      $hourEff.'%',                    $hourEffColor],
             ] as [$lbl,$val,$col]): ?>
             <div style="font-size:.75rem;display:flex;flex-direction:column;gap:1px;">
                 <span style="color:#9ca3af;"><?=$lbl?></span>
@@ -578,9 +575,7 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
         <div class="card-mis h-100">
             <div class="card-mis-header"><h5><i class="fas fa-chart-pie text-warning me-2"></i>Status</h5></div>
             <div class="card-mis-body d-flex flex-column align-items-center">
-                <div style="height:150px;width:100%;position:relative;">
-                    <canvas id="statusChart"></canvas>
-                </div>
+                <div style="height:150px;width:100%;position:relative;"><canvas id="statusChart"></canvas></div>
                 <div style="width:100%;margin-top:.5rem;">
                     <?php foreach ([
                         ['Visited',     $fieldKpi['visited']??0,     '#10b981'],
@@ -605,10 +600,10 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
             <div class="card-mis-body">
                 <div class="row g-2">
                     <?php foreach ([
-                        ['Draft',      $pk['draft']      ??0,'#9ca3af','#f9fafb'],
-                        ['Submitted',  $pk['submitted']  ??0,'#3b82f6','#eff6ff'],
-                        ['Approved',   $pk['approved']   ??0,'#10b981','#ecfdf5'],
-                        ['Rejected',   $pk['rejected']   ??0,'#ef4444','#fef2f2'],
+                        ['Draft',     $pk['draft']     ??0,'#9ca3af','#f9fafb'],
+                        ['Submitted', $pk['submitted'] ??0,'#3b82f6','#eff6ff'],
+                        ['Approved',  $pk['approved']  ??0,'#10b981','#ecfdf5'],
+                        ['Rejected',  $pk['rejected']  ??0,'#ef4444','#fef2f2'],
                     ] as [$lbl,$cnt,$col,$bg]): ?>
                     <div class="col-6">
                         <div style="text-align:center;background:<?=$bg?>;border-radius:8px;padding:.7rem .3rem;border:1px solid <?=$col?>22;">
@@ -647,42 +642,41 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
             </thead>
             <tbody>
             <?php foreach ($staffPerfRows as $i => $s):
-                $sPlanned = (int)($s['planned_visits'] ?? 0);
-                $sMatched = (int)($s['matched_visits'] ?? 0);
-                $sEffRaw  = $sPlanned > 0 ? round(($sMatched/$sPlanned)*100) : 0;
-                $sEff     = min($sEffRaw, 100);
-                $sEffCol  = $sEff>=80 ? '#10b981' : ($sEff>=50 ? '#f59e0b' : '#ef4444');
-                $isNoDept = empty($s['department_id']);
-                $initials = strtoupper(
-                    substr($s['full_name'],0,1) .
-                    (strpos($s['full_name'],' ')!==false ? substr($s['full_name'],strpos($s['full_name'],' ')+1,1) : '')
+                $sPlanned    = (int)   ($s['planned_visits'] ?? 0);
+                $sMatched    = (int)   ($s['matched_visits'] ?? 0);
+                $sEffRaw     = $sPlanned > 0 ? round(($sMatched / $sPlanned) * 100) : 0;
+                $sEff        = min($sEffRaw, 100);
+                $sEffCol     = $sEff >= 80 ? '#10b981' : ($sEff >= 50 ? '#f59e0b' : '#ef4444');
+                $sPlannedHrs = (float) ($s['planned_hours'] ?? 0);
+                $sActualHrs  = (float) ($s['hours']         ?? 0);
+                $isSelf      = ($s['id'] == $uid);
+                $initials    = strtoupper(
+                    substr($s['full_name'], 0, 1) .
+                    (strpos($s['full_name'], ' ') !== false
+                        ? substr($s['full_name'], strpos($s['full_name'], ' ') + 1, 1) : '')
                 );
-                $sPlannedHrs = (float)($s['planned_hours']  ?? 0);
-                $sActualHrs  = (float)($s['hours']          ?? 0);
-                $sHourEffRaw = $sPlannedHrs > 0 ? round(($sActualHrs/$sPlannedHrs)*100,1) : 0;
-                $sHourEff    = min($sHourEffRaw, 100);
-                $sHourEffCol = $sHourEff>=80?'#10b981':($sHourEff>=50?'#f59e0b':'#ef4444');
             ?>
-            <tr <?=$isNoDept?'style="background:#fffdf0;"':''?>>
+            <tr <?= $isSelf ? 'style="background:rgba(201,168,76,.04);"' : '' ?>>
                 <td style="color:#9ca3af;font-size:.75rem;"><?=$i+1?></td>
                 <td>
                     <div style="display:flex;align-items:center;gap:.6rem;">
                         <div style="width:32px;height:32px;border-radius:50%;
-                            background:<?=$isNoDept?'#fef3c7':'#c9a84c22'?>;
-                            color:<?=$isNoDept?'#b45309':'#c9a84c'?>;
+                            background:<?=$isSelf?'#fef3c7':'#c9a84c22'?>;
+                            color:<?=$isSelf?'#b45309':'#c9a84c'?>;
                             display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;">
                             <?=$initials?>
                         </div>
                         <div>
-                            <div style="font-size:.85rem;font-weight:500;"><?=htmlspecialchars($s['full_name'])?>
-                                <?php if($isNoDept):?><i class="fas fa-layer-group" style="color:#f59e0b;font-size:.65rem;" title="Multi-dept"></i><?php endif;?>
+                            <div style="font-size:.85rem;font-weight:500;">
+                                <?=htmlspecialchars($s['full_name'])?>
+                                <?php if ($isSelf): ?><span style="font-size:.65rem;color:#c9a84c;font-weight:700;margin-left:3px;">YOU</span><?php endif; ?>
                             </div>
                             <div style="font-size:.68rem;color:#9ca3af;"><?=htmlspecialchars($s['employee_id']??'')?></div>
                         </div>
                     </div>
                 </td>
                 <td>
-                    <span style="font-size:.73rem;background:<?=$isNoDept?'#fef3c7':'#f3f4f6'?>;color:<?=$isNoDept?'#92400e':'#6b7280'?>;padding:.1rem .45rem;border-radius:6px;">
+                    <span style="font-size:.73rem;background:#f3f4f6;color:#6b7280;padding:.1rem .45rem;border-radius:6px;">
                         <?=htmlspecialchars($s['dept_label'])?>
                     </span>
                 </td>
@@ -691,8 +685,8 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
                 <td class="text-center" style="color:#6366f1;"><?=$sPlannedHrs>0?number_format($sPlannedHrs,1).'h':'<span style="color:#d1d5db;">—</span>'?></td>
                 <td class="text-center">
                     <?php if ((float)$s['office_hours'] > 0): ?>
-                    <strong style="color:#10b981;"><?=number_format((float)$s['office_hours'],1)?>h</strong>
-                    <div style="font-size:.65rem;color:#9ca3af;"><?=(int)$s['office_logs']?> logs</div>
+                        <strong style="color:#10b981;"><?=number_format((float)$s['office_hours'],1)?>h</strong>
+                        <div style="font-size:.65rem;color:#9ca3af;"><?=(int)$s['office_logs']?> logs</div>
                     <?php else: ?><span style="color:#d1d5db;font-size:.77rem;">—</span><?php endif; ?>
                 </td>
                 <td class="text-center" style="font-size:.82rem;color:#6b7280;"><?=(int)$s['active_days']?>d</td>
@@ -758,10 +752,10 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
                 <tr><th>Date</th><th>Staff</th><th>Client</th><th class="text-center">Time In</th><th class="text-center">Hours</th><th>Status</th><th>Description</th></tr>
             </thead>
             <tbody>
-            <?php if(empty($recentLogs)): ?>
+            <?php if (empty($recentLogs)): ?>
                 <tr><td colspan="7" style="text-align:center;padding:24px;color:#9ca3af;font-size:.83rem;">No logs for selected range</td></tr>
             <?php endif; ?>
-            <?php foreach($recentLogs as $l): ?>
+            <?php foreach ($recentLogs as $l): ?>
             <tr>
                 <td>
                     <div style="font-size:.83rem;font-weight:500;white-space:nowrap;"><?=date('d M Y',strtotime($l['log_date']))?></div>
@@ -797,10 +791,10 @@ foreach ($officeKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
     <div class="table-responsive">
         <table class="table-mis w-100">
             <thead>
-                <tr><th>Date</th><th>Staff</th><th>Client</th><th class="text-center">Time In</th><th class="text-center">Time Out</th><th class="text-center">Hours</th><th>Description</th><th class="text-center">Status</th></tr>
+                <tr><th>Date</th><th>Staff</th><th>Client</th><th class="text-center">In</th><th class="text-center">Out</th><th class="text-center">Hours</th><th>Description</th><th class="text-center">Status</th></tr>
             </thead>
             <tbody>
-            <?php foreach($recentOffice as $ol): ?>
+            <?php foreach ($recentOffice as $ol): ?>
             <tr>
                 <td style="font-size:.83rem;font-weight:500;white-space:nowrap;"><?=date('d M Y',strtotime($ol['log_date']))?></td>
                 <td>
@@ -834,9 +828,9 @@ new Chart(document.getElementById('trendChart'), {
     data: {
         labels: <?= json_encode(array_map(fn($r) => date('d M', strtotime($r['log_date'])), $trendRows)) ?>,
         datasets: [
-            { label:'Hours',  data:<?= json_encode(array_map(fn($r)=>(float)$r['hours'],$trendRows)) ?>,
+            { label:'Hours', data:<?= json_encode(array_map(fn($r)=>(float)$r['hours'],$trendRows)) ?>,
               backgroundColor:'rgba(201,168,76,.25)',borderColor:'#c9a84c',borderWidth:2,borderRadius:4,yAxisID:'y' },
-            { label:'Visits', type:'line',data:<?= json_encode(array_map(fn($r)=>(int)$r['visits'],$trendRows)) ?>,
+            { label:'Visits', type:'line', data:<?= json_encode(array_map(fn($r)=>(int)$r['visits'],$trendRows)) ?>,
               borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.08)',pointBackgroundColor:'#3b82f6',
               pointRadius:4,tension:.4,fill:true,yAxisID:'y1' }
         ]
@@ -851,7 +845,6 @@ new Chart(document.getElementById('trendChart'), {
         }
     }
 });
-
 new Chart(document.getElementById('statusChart'), {
     type:'doughnut',
     data:{
@@ -864,10 +857,11 @@ new Chart(document.getElementById('statusChart'), {
     },
     options:{
         responsive:true,maintainAspectRatio:false,cutout:'68%',
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw}`}}}
+        plugins:{legend:{display:false}}
     },
     plugins:[{
-        id:'centre',afterDraw(chart){
+        id:'centre',
+        afterDraw(chart){
             const {ctx,chartArea:{top,bottom,left,right}}=chart;
             const cx=(left+right)/2,cy=(top+bottom)/2;
             ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';
@@ -878,13 +872,12 @@ new Chart(document.getElementById('statusChart'), {
         }
     }]
 });
-
 function applyFilters() {
     const p = new URLSearchParams({
-        month: document.getElementById('filterMonth').value,
+        month:    document.getElementById('filterMonth').value,
         staff_id: document.getElementById('filterStaff').value,
-        from: document.getElementById('filterFrom').value,
-        to:   document.getElementById('filterTo').value,
+        from:     document.getElementById('filterFrom').value,
+        to:       document.getElementById('filterTo').value,
     });
     if (!p.get('staff_id')) p.delete('staff_id');
     location.href = 'staff_performance.php?' + p.toString();

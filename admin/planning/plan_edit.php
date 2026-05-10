@@ -30,17 +30,31 @@ $planStmt->execute([$planId]);
 $plan = $planStmt->fetch(PDO::FETCH_ASSOC);
 if (!$plan) { setFlash('error', 'Plan not found.'); header('Location: plan_list.php'); exit; }
 // ── Can the logged-in user edit this plan? ─────────────────────
-// Only if they are managed_by for the plan owner in users OR uda
+// ── Can the logged-in user edit this plan? ─────────────────────
+// managed_by = full edit; supervisor_id on entries = view only
 $canEditStmt = $db->prepare("
     SELECT 1 FROM users
     WHERE id = ? AND managed_by = ?
     UNION
     SELECT 1 FROM user_department_assignments
     WHERE user_id = ? AND managed_by = ?
+    UNION
+    SELECT 1 FROM work_plans
+    WHERE id = ? AND user_id = ?
     LIMIT 1
 ");
-$canEditStmt->execute([$plan['user_id'], $uid, $plan['user_id'], $uid]);
+$canEditStmt->execute([$plan['user_id'], $uid, $plan['user_id'], $uid, $planId, $uid]);
 $canEdit = ($plan['user_id'] === $uid) || (bool)$canEditStmt->fetch();
+
+// ── Is login user a supervisor on any entry of this plan? ──────
+$isSupervisorStmt = $db->prepare("
+    SELECT 1 FROM work_plan_entries
+    WHERE plan_id = ? AND supervisor_id = ?
+    LIMIT 1
+");
+$isSupervisorStmt->execute([$planId, $uid]);
+$isSupervisor = (bool)$isSupervisorStmt->fetch();
+
 // ── UDA consulting dept detection ─────────────────────────────
 $deptId = (int)$user['department_id'];
 $branchId = (int)$user['branch_id'];
@@ -100,14 +114,39 @@ while ($cur <= $last && $wn <= 5) {
 
 // ── Existing entries ───────────────────────────────────────────
 $existingEntries = $db->prepare("
-    SELECT wpe.*, c.company_name, c.company_code, c.pan_number
+    SELECT wpe.*, c.company_name, c.company_code, c.pan_number,
+           sv.full_name AS supervisor_name
     FROM work_plan_entries wpe
     LEFT JOIN companies c ON c.id = wpe.client_id
+    LEFT JOIN users sv ON sv.id = wpe.supervisor_id
     WHERE wpe.plan_id = ?
     ORDER BY wpe.plan_date ASC, wpe.id ASC
 ");
 $existingEntries->execute([$planId]);
 $existingEntries = $existingEntries->fetchAll(PDO::FETCH_ASSOC);
+
+// Show the plan owner's managed_by user who is in CON dept
+$supervisorName = '—';
+$svNameStmt = $db->prepare("
+    SELECT u2.full_name
+    FROM users u1
+    JOIN users u2 ON u2.id = u1.managed_by
+    WHERE u1.id = ?
+      AND (
+          EXISTS (
+              SELECT 1 FROM departments d
+              WHERE d.id = u2.department_id
+          )
+          OR EXISTS (
+              SELECT 1 FROM user_department_assignments uda
+              JOIN departments d ON d.id = uda.department_id
+              WHERE uda.user_id = u2.id
+          )
+      )
+    LIMIT 1
+");
+$svNameStmt->execute([$plan['user_id']]);
+$supervisorName = $svNameStmt->fetchColumn() ?: '—';
 
 // ── Companies ──────────────────────────────────────────────────
 $companies = $db->query("
@@ -134,6 +173,17 @@ if ($isAdmin) {
     $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// ── Supervisor list (all admins/executives the login user manages or peers) ──
+$supervisorList = $db->prepare("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    WHERE u.is_active = 1
+      AND u.role_id IN (SELECT id FROM roles WHERE role_name IN ('admin','executive'))
+    ORDER BY u.full_name
+");
+$supervisorList->execute();
+$supervisorList = $supervisorList->fetchAll(PDO::FETCH_ASSOC);
+
 // ── POST ───────────────────────────────────────────────────────
 $errors  = [];
 $postData = $_POST;
@@ -141,6 +191,82 @@ $postData = $_POST;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
+    if (!$canEdit) {
+        // Non-full-editor: can only update their own supervised entries + add new entries
+        $db->beginTransaction();
+        try {
+            // Update existing entries where supervisor_id = login user
+            $svEntries = $_POST['sv_entries'] ?? [];
+            if (!empty($svEntries)) {
+                $svUpd = $db->prepare("
+                    UPDATE work_plan_entries
+                    SET plan_date=?, day_of_week=?, planned_time_in=?,
+                        planned_time_out=?, planned_hours=?, notes=?
+                    WHERE id=? AND plan_id=? AND supervisor_id=?
+                ");
+                foreach ($svEntries as $entryId => $ev) {
+                    $entryId = (int)$entryId;
+                    $pdate   = trim($ev['plan_date'] ?? '') ?: null;
+                    $tin     = trim($ev['time_in']   ?? '') ?: null;
+                    $tout    = trim($ev['time_out']  ?? '') ?: null;
+                    $hrs     = 0.0;
+                    if ($tin && $tout) {
+                        $diff = strtotime($tout) - strtotime($tin);
+                        if ($diff > 0) $hrs = round($diff / 3600, 2);
+                    }
+                    $svUpd->execute([
+                        $pdate, $pdate ? date('l', strtotime($pdate)) : null,
+                        $tin, $tout, $hrs,
+                        trim($ev['notes'] ?? ''), $entryId, $planId, $uid
+                    ]);
+                }
+            }
+
+            // Insert new entries — supervisor defaults to login user if not chosen
+            $newEntries = $_POST['entries'] ?? [];
+            if (!empty($newEntries)) {
+                $ccMap = array_column($companies, 'company_code', 'id');
+                $insE  = $db->prepare("
+                    INSERT INTO work_plan_entries
+                      (plan_id, client_id, client_code, assigned_to, supervisor_id,
+                       plan_date, day_of_week, planned_time_in, planned_time_out,
+                       planned_hours, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ");
+                foreach ($newEntries as $e) {
+                    $cid   = (int)($e['client_id'] ?? 0);
+                    $pdate = trim($e['plan_date']  ?? '');
+                    if (!$cid || !$pdate) continue;
+                    $tin   = trim($e['time_in']  ?? '') ?: null;
+                    $tout  = trim($e['time_out'] ?? '') ?: null;
+                    $supId = ($e['supervisor_id'] ?? '') !== '' ? (int)$e['supervisor_id'] : $uid;
+                    $hrs   = 0.0;
+                    if ($tin && $tout) {
+                        $diff = strtotime($tout) - strtotime($tin);
+                        if ($diff > 0) $hrs = round($diff / 3600, 2);
+                    }
+                    $insE->execute([
+                        $planId, $cid, $ccMap[$cid] ?? '',
+                        $plan['user_id'], $supId,
+                        $pdate, date('l', strtotime($pdate)),
+                        $tin, $tout, $hrs, trim($e['notes'] ?? ''),
+                    ]);
+                }
+            }
+
+            $db->commit();
+            logActivity('Added/updated entries on plan #' . $planId, 'consulting');
+            setFlash('success', 'Entries saved successfully.');
+            header('Location: plan_edit.php?id=' . $planId);
+            exit;
+
+        } catch (Exception $ex) {
+            $db->rollBack();
+            $errors[] = 'Failed to save: ' . $ex->getMessage();
+        }
+    }
+
+    // ── Full edit (canEdit) ────────────────────────────────────
     $planUserId = $isAdmin ? (int)($_POST['assigned_user_id'] ?? $plan['user_id']) : $plan['user_id'];
     $weekNum    = (int)($_POST['week_number']    ?? 0);
     $weekStart  = trim($_POST['week_start_date'] ?? '');
@@ -152,78 +278,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$weekStart) $errors[] = 'Week start date missing.';
     if (empty($entries) || !is_array($entries)) $errors[] = 'Add at least one plan entry.';
 
-    // Duplicate check — exclude current plan
     if (!$errors) {
         $dup = $db->prepare("
             SELECT id FROM work_plans
-            WHERE user_id = ? AND plan_month = ? AND week_number = ? AND department_id = ? AND id != ?
+            WHERE user_id=? AND plan_month=? AND week_number=? AND department_id=? AND id!=?
         ");
         $dup->execute([$planUserId, $monthStart, $weekNum, $plan['department_id'], $planId]);
-        if ($dup->fetch()) {
-            $errors[] = 'Another plan already exists for this staff member for Week ' . $weekNum . '.';
-        }
+        if ($dup->fetch()) $errors[] = 'Another plan already exists for this staff for Week ' . $weekNum . '.';
     }
 
     if (!$errors) {
         $db->beginTransaction();
         try {
-            // Update plan header — reset to draft if it was rejected/submitted
             $newStatus = ($plan['status'] === 'approved') ? 'approved' : 'draft';
-
             $db->prepare("
-                UPDATE work_plans SET
-                    user_id        = ?,
-                    week_number    = ?,
-                    week_start_date = ?,
-                    week_end_date  = ?,
-                    remarks        = ?,
-                    status         = ?,
-                    updated_at     = NOW()
-                WHERE id = ?
-            ")->execute([
-                $planUserId, $weekNum, $weekStart, $weekEnd,
-                $remarks, $newStatus, $planId,
-            ]);
+                UPDATE work_plans SET user_id=?, week_number=?, week_start_date=?,
+                    week_end_date=?, remarks=?, status=?, updated_at=NOW()
+                WHERE id=?
+            ")->execute([$planUserId, $weekNum, $weekStart, $weekEnd, $remarks, $newStatus, $planId]);
 
-            // Delete old entries and reinsert
-            $db->prepare("DELETE FROM work_plan_entries WHERE plan_id = ?")->execute([$planId]);
-
+            $db->prepare("DELETE FROM work_plan_entries WHERE plan_id=?")->execute([$planId]);
             $ccMap = array_column($companies, 'company_code', 'id');
-
-            $insE = $db->prepare("
+            $insE  = $db->prepare("
                 INSERT INTO work_plan_entries
-                  (plan_id, client_id, client_code, assigned_to,
-                   plan_date, day_of_week, planned_time_in, planned_time_out,
-                   planned_hours, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                  (plan_id, client_id, client_code, assigned_to, supervisor_id,
+                   plan_date, day_of_week, planned_time_in, planned_time_out, planned_hours, notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ");
-
             foreach ($entries as $e) {
                 $cid   = (int)($e['client_id'] ?? 0);
                 $pdate = trim($e['plan_date'] ?? '');
                 if (!$cid || !$pdate) continue;
-
-                $tin  = trim($e['time_in']  ?? '') ?: null;
-                $tout = trim($e['time_out'] ?? '') ?: null;
-                $hrs  = 0.0;
+                $tin   = trim($e['time_in']  ?? '') ?: null;
+                $tout  = trim($e['time_out'] ?? '') ?: null;
+                $supId = ($e['supervisor_id'] ?? '') !== '' ? (int)$e['supervisor_id'] : null;
+                $hrs   = 0.0;
                 if ($tin && $tout) {
                     $diff = strtotime($tout) - strtotime($tin);
                     if ($diff > 0) $hrs = round($diff / 3600, 2);
                 }
-
                 $insE->execute([
                     $planId, $cid, $ccMap[$cid] ?? '',
-                    $planUserId, $pdate, date('l', strtotime($pdate)),
+                    $planUserId, $supId, $pdate, date('l', strtotime($pdate)),
                     $tin, $tout, $hrs, trim($e['notes'] ?? ''),
                 ]);
             }
 
-            // Notify plan owner if edited by someone else
             if ($planUserId !== $uid) {
                 try {
                     $db->prepare("
-                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                        VALUES (?, 'task', 'Work Plan Updated', ?, ?, 0, NOW())
+                        INSERT INTO notifications (user_id,type,title,message,link,is_read,created_at)
+                        VALUES (?,'task','Work Plan Updated',?,?,0,NOW())
                     ")->execute([
                         $planUserId,
                         $user['full_name'] . ' updated your work plan — Week ' . $weekNum . ', ' . $monthLabel,
@@ -234,7 +339,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             logActivity('Edited plan #' . $planId . ' Week ' . $weekNum, 'consulting');
             $db->commit();
-
             setFlash('success', 'Work plan updated successfully!');
             header('Location: ' . APP_URL . '/admin/planning/plan_list.php?month=' . $month);
             exit;
@@ -343,7 +447,7 @@ include '../../includes/header.php';
             </div>
             <?php endif; ?>
 
-            <form method="POST" id="planForm" <?= !$canEdit ? 'onsubmit="return false;"' : '' ?>>
+            <form method="POST" id="planForm" <?= (!$canEdit && !$isSupervisor) ? 'onsubmit="return false;"' : '' ?>>
                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
 
                 <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
@@ -426,26 +530,12 @@ include '../../includes/header.php';
                         <div class="card-mis mb-4">
                             <div class="card-mis-header d-flex justify-content-between align-items-center">
                             <h5><i class="fas fa-list-check text-warning me-2"></i>Client Visit Entries</h5>
-                            <?php if ($canEdit): ?>
+                
                             <button type="button" class="btn btn-gold btn-sm" onclick="addEntry()">
                                 <i class="fas fa-plus me-1"></i> Add Entry
                             </button>
-                            <?php endif; ?>
                         </div>
-                        <!-- Occupied time hint -->
-                        <?php if (!empty($existingEntries)): ?>
-                        <div style="padding:6px 18px 0;display:flex;flex-wrap:wrap;gap:6px;">
-                            <?php foreach ($existingEntries as $oe): ?>
-                            <?php if ($oe['planned_time_in'] && $oe['planned_time_out']): ?>
-                            <span style="font-size:.7rem;background:#fef3c7;color:#92400e;border-radius:6px;padding:3px 8px;font-weight:600;">
-                                <i class="fas fa-clock me-1"></i>
-                                <?= htmlspecialchars($oe['company_name'] ?? '') ?>:
-                                <?= date('h:i A', strtotime($oe['planned_time_in'])) ?> – <?= date('h:i A', strtotime($oe['planned_time_out'])) ?>
-                            </span>
-                            <?php endif; ?>
-                            <?php endforeach; ?>
-                        </div>
-                        <?php endif; ?>
+                        
 
                             <div id="entriesContainer"></div>
 
@@ -498,22 +588,14 @@ include '../../includes/header.php';
                                 <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
                                     <i class="fas fa-save"></i> Update Plan
                                 </button>
-                                <a href="plan_view.php?id=<?= $planId ?>"
-                                   class="cn-btn cn-btn-out" style="justify-content:center;">
-                                    <i class="fas fa-times"></i> Cancel
-                                </a>
-                                <?php if ($plan['status'] === 'draft' || $plan['status'] === 'rejected'): ?>
-                                <hr style="margin:4px 0;border-color:var(--cn4);">
-                                <a href="plan_approvals.php?action=submit&id=<?= $planId ?>"
-                                class="cn-btn" style="justify-content:center;background:#3b82f6;color:#fff;"
-                                onclick="return confirm('Save changes and submit for approval?')">
-                                    <i class="fas fa-paper-plane"></i> Save &amp; Submit
-                                </a>
+                                <?php else: ?>
+                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <i class="fas fa-save"></i> Save My Entries
+                                </button>
                                 <?php endif; ?>
-                                <?php endif; // canEdit ?>
                                 <a href="plan_list.php?month=<?= $month ?>"
                                 class="cn-btn cn-btn-out" style="justify-content:center;">
-                                    <i class="fas fa-times"></i> <?= $canEdit ? 'Cancel' : 'Back' ?>
+                                    <i class="fas fa-times"></i> Cancel
                                 </a>
                             </div>
                         </div>
@@ -535,6 +617,19 @@ include '../../includes/header.php';
                                         <td style="padding:4px 0;color:var(--muted);">Department</td>
                                         <td style="padding:4px 0;font-weight:600;"><?= htmlspecialchars($deptName) ?></td>
                                     </tr>
+                                    <tr>
+                                        <td style="padding:4px 0;color:var(--muted);">Supervisor</td>
+                                        <td style="padding:4px 0;font-weight:600;"><?= htmlspecialchars($supervisorName) ?></td>
+                                    </tr>
+                                    <?php if ($isSupervisor && !$canEdit): ?>
+                                    <tr>
+                                        <td colspan="2" style="padding:6px 0;">
+                                            <span style="font-size:.72rem;background:#eff6ff;color:#3b82f6;padding:3px 8px;border-radius:6px;font-weight:600;">
+                                                <i class="fas fa-eye me-1"></i>You are supervisor — view only
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <?php endif; ?>
                                     <tr>
                                         <td style="padding:4px 0;color:var(--muted);">Status</td>
                                         <td style="padding:4px 0;">
@@ -568,38 +663,52 @@ include '../../includes/header.php';
     </div>
 </div>
 
-<!-- Entry template -->
+<!-- ✅ Full edit template (was missing entirely) -->
 <template id="entryTemplate">
 <div class="entry-row" data-index="__IDX__">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <span style="font-size:.82rem;font-weight:600;color:var(--gold);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span style="font-size:.75rem;font-weight:700;color:var(--gold);">
             <i class="fas fa-building me-1"></i>Visit #<span class="entry-num">1</span>
         </span>
-        <button type="button" onclick="removeEntry(this)"
-                class="cn-btn cn-btn-danger cn-btn-sm" style="padding:3px 9px;">
+        <button type="button" class="btn btn-sm btn-outline-danger"
+                onclick="removeEntry(this)" style="font-size:.7rem;padding:2px 8px;">
             <i class="fas fa-trash"></i>
         </button>
     </div>
-    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:8px;">
         <div>
             <label class="cn-label">Client <span class="required-star">*</span></label>
-            <select name="entries[__IDX__][client_id]" class="cn-input entry-client" required>
+            <select name="entries[__IDX__][client_id]" class="cn-input entry-client">
                 <option value="">— Select Client —</option>
                 <?php foreach ($companies as $c): ?>
                 <option value="<?= $c['id'] ?>"
-                    data-code="<?= htmlspecialchars($c['company_code'] ?? '') ?>"
-                    data-pan="<?= htmlspecialchars($c['pan_number'] ?? '') ?>">
+                        data-code="<?= htmlspecialchars($c['company_code']) ?>"
+                        data-pan="<?= htmlspecialchars($c['pan_number']) ?>">
                     <?= htmlspecialchars($c['company_name']) ?>
                     <?= $c['company_code'] ? ' — ' . htmlspecialchars($c['company_code']) : '' ?>
-                    <?= $c['pan_number']   ? ' — ' . htmlspecialchars($c['pan_number'])   : '' ?>
                 </option>
                 <?php endforeach; ?>
             </select>
         </div>
         <div>
             <label class="cn-label">Date <span class="required-star">*</span></label>
-            <input type="date" name="entries[__IDX__][plan_date]" class="cn-input entry-date" required>
+            <input type="date" name="entries[__IDX__][plan_date]"
+                   class="cn-input entry-date" required>
         </div>
+        <div>
+            <label class="cn-label">Supervisor</label>
+            <select name="entries[__IDX__][supervisor_id]" class="cn-input entry-supervisor">
+                <option value="">— None —</option>
+                <?php foreach ($supervisorList as $sv): ?>
+                <option value="<?= $sv['id'] ?>">
+                    <?= htmlspecialchars($sv['full_name']) ?>
+                    <?= $sv['employee_id'] ? ' · ' . htmlspecialchars($sv['employee_id']) : '' ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;">
         <div>
             <label class="cn-label">Time In</label>
             <input type="time" name="entries[__IDX__][time_in]" class="cn-input time-in">
@@ -608,20 +717,63 @@ include '../../includes/header.php';
             <label class="cn-label">Time Out</label>
             <input type="time" name="entries[__IDX__][time_out]" class="cn-input time-out">
         </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
-        <div>
-            <label class="cn-label">Notes</label>
-            <input type="text" name="entries[__IDX__][notes]" class="cn-input"
-                   placeholder="Purpose of visit…">
-        </div>
         <div class="hrs-pill">
             <i class="fas fa-clock me-1" style="color:var(--gold);"></i>
             <span class="planned-hrs">0.00h</span>
         </div>
     </div>
+    <div>
+        <label class="cn-label">Notes</label>
+        <input type="text" name="entries[__IDX__][notes]" class="cn-input"
+               placeholder="Visit notes…">
+    </div>
 </div>
 </template>
+
+<!-- ✅ Supervisor template (deduplicated — keep only this one) -->
+<template id="entryTemplateSupervisor">
+<div class="entry-row entry-row-supervisor" data-index="__IDX__"
+     style="background:#f8fafc;border-left:3px solid #3b82f6;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span style="font-size:.75rem;font-weight:700;color:#3b82f6;">
+            <i class="fas fa-building me-1"></i>Visit #<span class="entry-num">1</span>
+        </span>
+        <span class="sv-role-badge"
+              style="font-size:.7rem;background:#eff6ff;color:#3b82f6;border-radius:4px;padding:2px 7px;font-weight:600;">
+            <i class="fas fa-user-shield me-1"></i>Supervisor View
+        </span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+        <div>
+            <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Staff</div>
+            <div class="cn-input" style="background:#f3f4f6;cursor:default;color:#374151;font-weight:600;"
+                 data-field="assigned_name">—</div>
+        </div>
+        <div>
+            <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Date</div>
+            <div class="cn-input" style="background:#f3f4f6;cursor:default;color:#374151;font-weight:600;"
+                 data-field="plan_date">—</div>
+        </div>
+    </div>
+    <div data-field="schedule-slot" style="margin-bottom:8px;">
+        <div class="cn-input" style="background:#fef3c7;cursor:default;color:#92400e;font-weight:700;"
+             data-field="schedule">—</div>
+    </div>
+    <div data-field="notes-slot" style="margin-bottom:4px;">
+        <div data-field="notes" style="font-size:.75rem;color:#6b7280;">—</div>
+    </div>
+    <div data-field="client-slot" style="display:none;margin-bottom:4px;">
+        <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Client</div>
+        <div data-field="client_name"
+             style="font-size:.82rem;font-weight:600;color:#1f2937;background:#f0fdf4;border-radius:6px;padding:5px 10px;"></div>
+    </div>
+    <div class="sv-lock-note" style="font-size:.7rem;color:#9ca3af;font-style:italic;margin-top:4px;">
+        <i class="fas fa-lock me-1"></i>Client details are visible to the assigned staff only.
+    </div>
+</div>
+</template>
+
+
 
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
@@ -629,18 +781,24 @@ let entIdx = 0;
 const wsEl = document.getElementById('weekStart');
 const weEl = document.getElementById('weekEnd');
 
-// Pre-existing entries from DB
 const existingEntries = <?= json_encode(array_map(function($e) {
     return [
-        'client_id'  => $e['client_id'],
-        'plan_date'  => $e['plan_date'],
-        'time_in'    => $e['planned_time_in'],
-        'time_out'   => $e['planned_time_out'],
-        'notes'      => $e['notes'],
+        'entry_id'      => $e['id'],
+        'client_id'     => $e['client_id'],
+        'company_name'  => $e['company_name'],
+        'plan_date'     => $e['plan_date'],
+        'time_in'       => $e['planned_time_in'],
+        'time_out'      => $e['planned_time_out'],
+        'notes'         => $e['notes'],
+        'supervisor_id' => $e['supervisor_id'],
+        'assigned_name' => $e['assigned_name'] ?? '',
     ];
 }, $existingEntries)) ?>;
 
-// TomSelect on staff dropdown (admin only)
+const isSupervisorOnly = <?= (!$canEdit) ? 'true' : 'false' ?>;
+const canEdit          = <?= $canEdit ? 'true' : 'false' ?>;
+
+// ── TomSelect: staff dropdown ──────────────────────────────────
 const assignedUserEl = document.getElementById('assignedUser');
 if (assignedUserEl) {
     new TomSelect(assignedUserEl, {
@@ -648,17 +806,15 @@ if (assignedUserEl) {
         searchField: ['text'],
         maxOptions: 200,
         render: {
-            option: function(data, escape) {
+            option: (data, escape) => {
                 const parts = data.text.split(' · ');
-                const name  = escape(parts[0].trim());
                 const empId = parts[1] ? `<span style="color:var(--muted);font-size:.75rem;margin-left:6px;">${escape(parts[1].trim())}</span>` : '';
-                return `<div>${name}${empId}</div>`;
+                return `<div>${escape(parts[0].trim())}${empId}</div>`;
             },
-            item: function(data, escape) {
+            item: (data, escape) => {
                 const parts = data.text.split(' · ');
-                const name  = escape(parts[0].trim());
                 const empId = parts[1] ? ` <span style="color:var(--muted);font-size:.75rem;">(${escape(parts[1].trim())})</span>` : '';
-                return `<div>${name}${empId}</div>`;
+                return `<div>${escape(parts[0].trim())}${empId}</div>`;
             }
         }
     });
@@ -671,6 +827,8 @@ function onWeekChange(sel) {
     wsEl.value = ws;
     weEl.value = we;
     document.querySelectorAll('.entry-date').forEach(d => { d.min = ws; d.max = we; });
+    // ✅ also constrain supervisor's editable date inputs
+    document.querySelectorAll('.sv-plan-date').forEach(d => { d.min = ws; d.max = we; });
     document.getElementById('wkInfo').innerHTML =
         ws ? '<i class="fas fa-calendar me-1"></i>' + fmtDate(ws) + ' – ' + fmtDate(we)
            : '<i class="fas fa-calendar me-1"></i>Select a week above';
@@ -681,7 +839,144 @@ function fmtDate(d) {
     return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
 }
 
+function fmtTime(t) {
+    if (!t) return '—';
+    // t is "HH:MM:SS" or "HH:MM"
+    const [h, m] = t.split(':');
+    const hr = parseInt(h), ampm = hr >= 12 ? 'PM' : 'AM';
+    return ((hr % 12) || 12) + ':' + m + ' ' + ampm;
+}
+
+// ── Add entry: supervisor sees schedule-only card ──────────────
 function addEntry(prefill) {
+    if (isSupervisorOnly && prefill) {
+        addSupervisorEntry(prefill);
+        return;
+    }
+    addFullEntry(prefill);
+}
+
+function addSupervisorEntry(prefill) {
+    const tpl  = document.getElementById('entryTemplateSupervisor').innerHTML;
+    const html = tpl.replaceAll('__IDX__', entIdx);
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const row = wrap.firstElementChild;
+
+    const isMySupervisedEntry = prefill?.supervisor_id == <?= $uid ?>;
+
+    // Always fill static fields
+    // Always fill staff name (readonly for all)
+const nameDiv = row.querySelector('[data-field="assigned_name"]');
+if (nameDiv) nameDiv.textContent = prefill?.assigned_name || '—';
+
+if (isMySupervisedEntry) {
+    // ── Replace date div with editable date input ──────────────
+    const dateDiv = row.querySelector('[data-field="plan_date"]');
+    if (dateDiv) {
+        const dateInput = document.createElement('input');
+        dateInput.type  = 'date';
+        dateInput.name  = `sv_entries[${prefill.entry_id}][plan_date]`;
+        dateInput.value = prefill?.plan_date || '';
+        dateInput.className = 'cn-input sv-plan-date';
+        dateInput.style.cssText = 'font-size:.8rem;padding:5px 8px;';
+        // Constrain to the plan's week range
+        if (wsEl?.value) dateInput.min = wsEl.value;
+        if (weEl?.value) dateInput.max = weEl.value;
+        dateDiv.replaceWith(dateInput);
+    }
+        // ── My entry: show client name + editable time/notes ───
+        row.setAttribute('data-entry-id', prefill.entry_id ?? '');
+        row.setAttribute('data-supervisor-editable', '1');
+
+        // Show client name
+        const clientSlot = row.querySelector('[data-field="client-slot"]');
+        if (clientSlot) {
+            clientSlot.style.display = '';
+            row.querySelector('[data-field="client_name"]').textContent = prefill.company_name || '—';
+        }
+
+        // Remove lock note
+        const lockNote = row.querySelector('.sv-lock-note');
+        if (lockNote) lockNote.remove();
+
+        // Replace schedule slot with time inputs
+        const scheduleSlot = row.querySelector('[data-field="schedule-slot"]');
+        if (scheduleSlot) {
+            scheduleSlot.innerHTML = `
+                <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;">
+                    <div>
+                        <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Time In</div>
+                        <input type="time" name="sv_entries[${prefill.entry_id}][time_in]"
+                               class="cn-input sv-time-in" value="${prefill.time_in || ''}"
+                               style="font-size:.8rem;padding:5px 8px;">
+                    </div>
+                    <div>
+                        <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Time Out</div>
+                        <input type="time" name="sv_entries[${prefill.entry_id}][time_out]"
+                               class="cn-input sv-time-out" value="${prefill.time_out || ''}"
+                               style="font-size:.8rem;padding:5px 8px;">
+                    </div>
+                    <div class="hrs-pill">
+                        <i class="fas fa-clock me-1" style="color:var(--gold);"></i>
+                        <span class="planned-hrs">0.00h</span>
+                    </div>
+                </div>`;
+        }
+
+        // Replace notes slot with input
+        const notesSlot = row.querySelector('[data-field="notes-slot"]');
+        if (notesSlot) {
+            notesSlot.innerHTML = `
+                <div style="font-size:.68rem;color:#6b7280;margin-bottom:2px;">Notes</div>
+                <input type="text" name="sv_entries[${prefill.entry_id}][notes]"
+                       class="cn-input sv-notes" value="${(prefill.notes || '').replace(/"/g, '&quot;')}"
+                       placeholder="Visit notes…" style="font-size:.8rem;padding:5px 8px;">`;
+        }
+
+        // Update badge
+        const badge = row.querySelector('.sv-role-badge');
+        if (badge) {
+            badge.innerHTML = '<i class="fas fa-pencil-alt me-1"></i>Your Entry — Editable';
+            badge.style.background = '#ecfdf5';
+            badge.style.color = '#10b981';
+        }
+
+        // Wire hours calculation — must happen after DOM insertion
+        // so we use a flag and do it after appendChild below
+        row._initHours = () => {
+            const tin  = row.querySelector('.sv-time-in');
+            const tout = row.querySelector('.sv-time-out');
+            if (tin && tout) {
+                [tin, tout].forEach(t => t.addEventListener('change', () => calcHours(row)));
+                if (tin.value && tout.value) calcHours(row);
+            }
+        };
+
+    } else {
+        // ── Other supervisor's entry: fully readonly ───────────
+        const schedule = prefill?.time_in && prefill?.time_out
+            ? fmtTime(prefill.time_in) + ' – ' + fmtTime(prefill.time_out)
+            : '— No time set —';
+
+        const scheduleEl = row.querySelector('[data-field="schedule"]');
+        if (scheduleEl) scheduleEl.textContent = schedule;
+
+        const notesEl = row.querySelector('[data-field="notes"]');
+        if (notesEl) notesEl.textContent = prefill?.notes || '—';
+    }
+
+    document.getElementById('entriesContainer').appendChild(row);
+    document.getElementById('emptyEntries').style.display = 'none';
+    if (row._initHours) row._initHours();
+    // Init hours after append so inputs exist in DOM
+    if (row._initHours) row._initHours();
+
+    entIdx++;
+    renumber();
+    updateSummary();
+}
+function addFullEntry(prefill) {
     const tpl  = document.getElementById('entryTemplate').innerHTML;
     const html = tpl.replaceAll('__IDX__', entIdx);
     const wrap = document.createElement('div');
@@ -691,7 +986,6 @@ function addEntry(prefill) {
     if (wsEl.value) row.querySelector('.entry-date').min = wsEl.value;
     if (weEl.value) row.querySelector('.entry-date').max = weEl.value;
 
-    // Prefill if loading existing
     if (prefill) {
         if (prefill.plan_date) row.querySelector('.entry-date').value = prefill.plan_date;
         if (prefill.time_in)   row.querySelector('.time-in').value    = prefill.time_in;
@@ -699,14 +993,14 @@ function addEntry(prefill) {
         if (prefill.notes)     row.querySelector('input[name$="[notes]"]').value = prefill.notes;
     }
 
-    // TomSelect on client dropdown
+    // ── TomSelect: client dropdown ─────────────────────────────
     const clientSel = row.querySelector('.entry-client');
     const ts = new TomSelect(clientSel, {
         placeholder: 'Search by name, code or PAN…',
         maxOptions: 500,
         searchField: ['text'],
         render: {
-            option: function(data, escape) {
+            option: (data, escape) => {
                 const code = data.$option?.dataset?.code || '';
                 const pan  = data.$option?.dataset?.pan  || '';
                 return `<div style="padding:4px 2px;">
@@ -717,7 +1011,7 @@ function addEntry(prefill) {
                     </div>
                 </div>`;
             },
-            item: function(data, escape) {
+            item: (data, escape) => {
                 const pan  = data.$option?.dataset?.pan || '';
                 const name = escape(data.text.split(' — ')[0]);
                 return pan
@@ -726,13 +1020,33 @@ function addEntry(prefill) {
             }
         }
     });
+    if (prefill?.client_id) ts.setValue(String(prefill.client_id), true);
 
-    // Set prefill value on TomSelect after init
-    if (prefill?.client_id) {
-        ts.setValue(String(prefill.client_id), true);
+    // ── TomSelect: supervisor dropdown ─────────────────────────
+    const supSel = row.querySelector('.entry-supervisor');
+    const tsSup = new TomSelect(supSel, {
+        placeholder: 'Search supervisor…',
+        searchField: ['text'],
+        maxOptions: 200,
+        allowEmptyOption: true,
+        render: {
+            option: (data, escape) => {
+                const parts = data.text.split(' · ');
+                const empId = parts[1] ? `<span style="color:var(--muted);font-size:.75rem;margin-left:6px;">${escape(parts[1].trim())}</span>` : '';
+                return `<div>${escape(parts[0].trim())}${empId}</div>`;
+            },
+            item: (data, escape) => {
+                const parts = data.text.split(' · ');
+                return `<div>${escape(parts[0].trim())}</div>`;
+            }
+        }
+    });
+    if (!prefill) {
+        tsSup.setValue('<?= $uid ?>', true);
     }
+    if (prefill?.supervisor_id) tsSup.setValue(String(prefill.supervisor_id), true);
 
-    // Time calculation
+    // ── Time calculation ────────────────────────────────────────
     row.querySelectorAll('.time-in,.time-out').forEach(t =>
         t.addEventListener('change', () => calcHours(row))
     );
@@ -742,7 +1056,6 @@ function addEntry(prefill) {
     entIdx++;
     renumber();
 
-    // Calculate hours for prefilled entries
     if (prefill?.time_in && prefill?.time_out) calcHours(row);
     else updateSummary();
 }
@@ -760,13 +1073,18 @@ function renumber() {
 }
 
 function calcHours(row) {
-    const tin  = row.querySelector('.time-in').value;
-    const tout = row.querySelector('.time-out').value;
+    // works for both full entries (.time-in/.time-out)
+    // and supervisor entries (.sv-time-in/.sv-time-out)
+    const tinEl  = row.querySelector('.time-in, .sv-time-in');
+    const toutEl = row.querySelector('.time-out, .sv-time-out');
+    const tin    = tinEl?.value;
+    const tout   = toutEl?.value;
+    const pill   = row.querySelector('.planned-hrs');
     if (tin && tout) {
         const diff = (new Date('1970-01-01T' + tout) - new Date('1970-01-01T' + tin)) / 3600000;
-        row.querySelector('.planned-hrs').textContent = (diff > 0 ? diff : 0).toFixed(2) + 'h';
+        if (pill) pill.textContent = (diff > 0 ? diff : 0).toFixed(2) + 'h';
     } else {
-        row.querySelector('.planned-hrs').textContent = '0.00h';
+        if (pill) pill.textContent = '0.00h';
     }
     updateSummary();
 }
@@ -775,14 +1093,14 @@ function updateSummary() {
     let total = 0, cnt = 0;
     document.querySelectorAll('.entry-row').forEach(row => {
         cnt++;
-        total += parseFloat(row.querySelector('.planned-hrs').textContent) || 0;
+        const pill = row.querySelector('.planned-hrs');
+        if (pill) total += parseFloat(pill.textContent) || 0;
     });
     document.getElementById('totHrs').textContent = total.toFixed(1) + 'h';
     document.getElementById('entCnt').textContent = cnt;
 }
 
 // ── On load: populate entries ──────────────────────────────────
-// If POST error, use POST data; otherwise use DB data
 <?php if (!empty($postData['entries'])): ?>
 const postEntries = <?= json_encode(array_values($postData['entries'])) ?>;
 postEntries.forEach(e => addEntry(e));
@@ -791,12 +1109,8 @@ existingEntries.forEach(e => addEntry(e));
 <?php endif; ?>
 
 // Restore week info on load
-const ws = document.getElementById('weekSelect');
-if (ws && ws.value) onWeekChange(ws);
-// Disable all inputs if view-only
-<?php if (!$canEdit): ?>
-document.querySelectorAll('#planForm input, #planForm select, #planForm textarea, #planForm button[type="submit"]')
-    .forEach(el => { el.disabled = true; el.style.pointerEvents = 'none'; el.style.opacity = '.65'; });
-<?php endif; ?>
+const wkSel = document.getElementById('weekSelect');
+if (wkSel && wkSel.value) onWeekChange(wkSel);
+
 </script>
 <?php include '../../includes/footer.php'; ?>

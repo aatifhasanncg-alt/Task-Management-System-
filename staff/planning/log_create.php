@@ -94,7 +94,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $timeOut = $_POST['time_out'] ?: null;
     $visitStatus = $_POST['visit_status'] ?? 'visited';
     $workDesc = trim($_POST['work_description'] ?? '');
-    $planEntryId = (int) ($_POST['plan_entry_id'] ?? 0) ?: null;
     $supervisorId = (int) ($_POST['supervisor_id'] ?? 0) ?: null;
     if (!$clientId)
         $errors[] = 'Please select a client.';
@@ -121,16 +120,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $clientName = $cnRow->fetchColumn() ?: 'Client #' . $clientId;
         $ins = $db->prepare("
             INSERT INTO work_logs
-            (user_id, client_id, supervisor_id, plan_entry_id, department_id, branch_id,
+            (user_id, client_id, supervisor_id, department_id, branch_id,
             log_date, day_of_week, week_number, month_year,
             time_in, time_out, duration_hours, work_description, visit_status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $ins->execute([
             $uid,
             $clientId,
             $supervisorId,
-            $planEntryId,
             $deptId,
             $branchId,
             $logDate,
@@ -229,7 +227,6 @@ include '../../includes/header.php';
 
             <form method="POST" id="logForm">
                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                <input type="hidden" name="plan_entry_id" id="planEntryId" value="">
 
                 <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start;">
 
@@ -299,26 +296,27 @@ include '../../includes/header.php';
                                         </select>
                                     </div>
                                     <div class="col-md-6">
-    <label class="cn-label">Supervisor <span
-            style="font-size:.7rem;color:#9ca3af;">(Consulting dept only)</span></label>
-    <select name="supervisor_id" id="supervisorSelect" class="cn-input">
-        <option value="">— None —</option>
-        <?php foreach ($supervisors as $sv):
-            $selected = '';
-            if (isset($_POST['supervisor_id'])) {
-                $selected = ($_POST['supervisor_id'] == $sv['id']) ? 'selected' : '';
-            } else {
-                $selected = ($defaultSupervisor && $defaultSupervisor == $sv['id']) ? 'selected' : '';
-            }
-            $label = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
-        ?>
-            <option value="<?= $sv['id'] ?>" <?= $selected ?>
-                data-empid="<?= htmlspecialchars($sv['employee_id'] ?? '') ?>">
-                <?= htmlspecialchars($label) ?>
-            </option>
-        <?php endforeach; ?>
-    </select>
-</div>
+                                        <label class="cn-label">Supervisor <span
+                                                style="font-size:.7rem;color:#9ca3af;">(Consulting dept
+                                                only)</span></label>
+                                        <select name="supervisor_id" id="supervisorSelect" class="cn-input">
+                                            <option value="">— None —</option>
+                                            <?php foreach ($supervisors as $sv):
+                                                $selected = '';
+                                                if (isset($_POST['supervisor_id'])) {
+                                                    $selected = ($_POST['supervisor_id'] == $sv['id']) ? 'selected' : '';
+                                                } else {
+                                                    $selected = ($defaultSupervisor && $defaultSupervisor == $sv['id']) ? 'selected' : '';
+                                                }
+                                                $label = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
+                                                ?>
+                                                <option value="<?= $sv['id'] ?>" <?= $selected ?>
+                                                    data-empid="<?= htmlspecialchars($sv['employee_id'] ?? '') ?>">
+                                                    <?= htmlspecialchars($label) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
                                     <div class="col-12">
                                         <label class="cn-label">Work Description</label>
                                         <textarea name="work_description" class="cn-input" rows="3"
@@ -399,21 +397,18 @@ include '../../includes/header.php';
         placeholder: 'Search by name, code or PAN...',
         maxOptions: 500,
         allowEmptyOption: true,
-        searchField: ['text']   // searches full option text including PAN
+        searchField: ['text']
     });
-new TomSelect('#supervisorSelect', {
-    placeholder: 'Search by name or employee ID...',
-    allowEmptyOption: true,
-    searchField: ['text'],
-    render: {
-        option: function(data, escape) {
-            return '<div>' + escape(data.text) + '</div>';
-        },
-        item: function(data, escape) {
-            return '<div>' + escape(data.text) + '</div>';
+    new TomSelect('#supervisorSelect', {
+        placeholder: 'Search by name or employee ID...',
+        allowEmptyOption: true,
+        searchField: ['text'],
+        render: {
+            option: function (data, escape) { return '<div>' + escape(data.text) + '</div>'; },
+            item: function (data, escape) { return '<div>' + escape(data.text) + '</div>'; }
         }
-    }
-});
+    });
+
     function calcDuration() {
         const tin = document.getElementById('timeIn').value;
         const tout = document.getElementById('timeOut').value;
@@ -432,16 +427,13 @@ new TomSelect('#supervisorSelect', {
     }
 
     function fillFromPlan(clientId, entryId, timeIn, timeOut) {
-        // Set client in TomSelect
         const ts = document.getElementById('clientSelect').tomselect;
-        if (ts) ts.setValue(clientId);
-        document.getElementById('planEntryId').value = entryId;
+        if (ts) ts.setValue(clientId, true); // silent — no change event needed
         if (timeIn) document.getElementById('timeIn').value = timeIn.substring(0, 5);
         if (timeOut) document.getElementById('timeOut').value = timeOut.substring(0, 5);
         calcDuration();
     }
 
-    // Init duration on load
     calcDuration();
 </script>
 <?php include '../../includes/footer.php'; ?>

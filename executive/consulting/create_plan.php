@@ -21,21 +21,60 @@ $now   = new DateTime();
 $today = $now->format('Y-m-d');
 $month = $_GET['month'] ?? $now->format('Y-m');
 
+// ── Build week blocks for selected month (same as admin) ──────
+$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthLabel = $monthDate->format('F Y');
+
+$weeks = [];
+$first = (clone $monthDate)->modify('first day of this month');
+$last  = (clone $monthDate)->modify('last day of this month');
+$cur   = clone $first;
+$wn    = 1;
+while ($cur <= $last && $wn <= 5) {
+    $ws  = clone $cur;
+    $dow = (int)$cur->format('w');       // 0=Sun, 6=Sat
+    $daysToSat = (6 - $dow + 7) % 7 ?: 6;
+    $we  = (clone $cur)->modify("+{$daysToSat} days");
+    if ($we > $last) $we = clone $last;
+    $weeks[] = [
+        'week_number'     => $wn,
+        'week_start_date' => $ws->format('Y-m-d'),
+        'week_end_date'   => $we->format('Y-m-d'),
+        'label'           => 'Week ' . $wn . ' (' . $ws->format('d M') . ' – ' . $we->format('d M') . ')',
+    ];
+    $cur = (clone $we)->modify('+1 day');
+    $wn++;
+}
+
 // ── Staff list ────────────────────────────────────────────────
 $staffList = $db->query("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     WHERE u.is_active = 1
       AND (
-          u.id = {$uid}
-          OR u.id IN (
-              SELECT u2.id FROM users u2
-              JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
-              WHERE u2.is_active = 1
-              UNION
-              SELECT uda.user_id FROM user_department_assignments uda
-              JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
-          )
+            -- Self
+            u.id = {$uid}
+
+            -- Users from CON department
+            OR u.id IN (
+                SELECT u2.id
+                FROM users u2
+                JOIN departments d 
+                    ON d.id = u2.department_id
+                WHERE d.dept_code = 'CON'
+                  AND u2.is_active = 1
+
+                UNION
+
+                SELECT uda.user_id
+                FROM user_department_assignments uda
+                JOIN departments d 
+                    ON d.id = uda.department_id
+                WHERE d.dept_code = 'CON'
+            )
+
+            -- Users from current user's own department
+            OR u.department_id = {$deptId}
       )
     ORDER BY u.full_name
 ")->fetchAll();
@@ -53,9 +92,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
     $targetUid  = (int)($_POST['target_user_id']  ?? 0);
-    $weekNumber = (int)($_POST['week_number']      ?? 0);
-    $weekStart  = trim($_POST['week_start_date']   ?? '');
-    $weekEnd    = trim($_POST['week_end_date']     ?? '');
+    $weekNumber = (int)($_POST['week_number']    ?? 0);
+    $weekStart  = trim($_POST['week_start_date'] ?? '');
+    $weekEnd    = trim($_POST['week_end_date']   ?? '');
+
+    // Auto-fill week dates from $weeks array if not posted (safety fallback)
+    if ($weekNumber && (empty($weekStart) || empty($weekEnd))) {
+        foreach ($weeks as $w) {
+            if ($w['week_number'] === $weekNumber) {
+                $weekStart = $w['week_start_date'];
+                $weekEnd   = $w['week_end_date'];
+                break;
+            }
+        }
+    }
 
     // BUG FIX 1: plan_month came in as "YYYY-MM"; we must NOT append '-01' twice.
     // Store the raw "YYYY-MM" value and build the DATE string separately.
@@ -347,26 +397,23 @@ include '../../includes/header.php';
                                         <input type="month" name="plan_month" class="cn-input" required
                                             value="<?= htmlspecialchars($_POST['plan_month'] ?? $month) ?>">
                                     </div>
-                                    <div class="col-md-3">
-                                        <label class="cn-label">Week Number <span class="required-star">*</span></label>
-                                        <select name="week_number" id="weekNumber" class="cn-input" required>
-                                            <option value="">—</option>
-                                            <?php for ($w = 1; $w <= 5; $w++): ?>
-                                            <option value="<?= $w ?>"
-                                                <?= ($_POST['week_number'] ?? '') == $w ? 'selected' : '' ?>>
-                                                Week <?= $w ?>
+                                    <div class="col-md-6">
+                                        <label class="cn-label">Week <span class="required-star">*</span></label>
+                                        <select name="week_number" id="weekSelect" class="cn-input" required
+                                                onchange="onWeekChange(this)">
+                                            <option value="">— Select Week —</option>
+                                            <?php foreach ($weeks as $w): ?>
+                                            <option value="<?= $w['week_number'] ?>"
+                                                    data-start="<?= $w['week_start_date'] ?>"
+                                                    data-end="<?= $w['week_end_date'] ?>"
+                                                    <?= ($_POST['week_number'] ?? '') == $w['week_number'] ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($w['label']) ?>
                                             </option>
-                                            <?php endfor; ?>
+                                            <?php endforeach; ?>
                                         </select>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="cn-label">Week Start <span class="required-star">*</span></label>
-                                        <input type="date" name="week_start_date" id="weekStart" class="cn-input" required
+                                        <input type="hidden" name="week_start_date" id="weekStart"
                                             value="<?= htmlspecialchars($_POST['week_start_date'] ?? '') ?>">
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="cn-label">Week End <span class="required-star">*</span></label>
-                                        <input type="date" name="week_end_date" id="weekEnd" class="cn-input" required
+                                        <input type="hidden" name="week_end_date" id="weekEnd"
                                             value="<?= htmlspecialchars($_POST['week_end_date'] ?? '') ?>">
                                     </div>
                                 </div>
@@ -480,26 +527,23 @@ const staffTS = new TomSelect('#staffSelect', {
     }
 });
 
-// ── Week-number → auto fill week dates ───────────────────────
-document.getElementById('weekNumber').addEventListener('change', function () {
-    const planMonth = document.querySelector('[name="plan_month"]').value;
-    if (!planMonth || !this.value) return;
-    const wn  = parseInt(this.value);
-    // First day of month
-    const d   = new Date(planMonth + '-01');
-    // Monday of the week that contains the 1st
-    const dow = d.getDay() || 7;         // 1=Mon … 7=Sun
-    const mondayOfFirst = new Date(d);
-    mondayOfFirst.setDate(d.getDate() - (dow - 1));
-    // Start of selected week
-    const start = new Date(mondayOfFirst);
-    start.setDate(mondayOfFirst.getDate() + (wn - 1) * 7);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    const fmt = d => d.toISOString().split('T')[0];
-    document.getElementById('weekStart').value = fmt(start);
-    document.getElementById('weekEnd').value   = fmt(end);
-});
+// ── Week dropdown → fill hidden date fields + constrain entry dates ──
+function onWeekChange(sel) {
+    const opt = sel.options[sel.selectedIndex];
+    const ws  = opt.dataset.start || '';
+    const we  = opt.dataset.end   || '';
+    document.getElementById('weekStart').value = ws;
+    document.getElementById('weekEnd').value   = we;
+    // Update min/max on all existing entry date inputs
+    document.querySelectorAll('.entry-date').forEach(d => {
+        d.min = ws;
+        d.max = we;
+    });
+}
+
+// Restore week dates on POST-error reload
+const _ws = document.getElementById('weekSelect');
+if (_ws && _ws.value) onWeekChange(_ws);
 
 // ── Add entry ─────────────────────────────────────────────────
 function addEntry() {
@@ -561,9 +605,12 @@ function addEntry() {
         </div>`;
     container.appendChild(div);
 
-    // Auto-fill date from week start if available
+    // Auto-fill date constraints from week hidden fields
     const ws = document.getElementById('weekStart').value;
-    if (ws) div.querySelector('.entry-date').value = ws;
+    const we = document.getElementById('weekEnd').value;
+    const dateInput = div.querySelector('.entry-date');
+    if (ws) { dateInput.min = ws; dateInput.value = ws; }
+    if (we) { dateInput.max = we; }
 
     // TomSelect for client
     new TomSelect(`#clientSelect_${idx}`, {

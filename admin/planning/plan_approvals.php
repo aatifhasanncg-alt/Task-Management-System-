@@ -41,25 +41,38 @@ if ($__isConsPrimary) {
 } elseif ($__udaCons) {
     $deptId = (int) $__udaCons['id'];
 }
-// Scope: all staff + self in same dept+branch
+// Scope: only staff managed by login user in consulting dept (users + UDA)
 $scopeStmt = $db->prepare("
     SELECT DISTINCT u.id
     FROM users u
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    LEFT JOIN departments d1 ON d1.id = u.department_id
+    LEFT JOIN departments d2 ON d2.id = uda.department_id
     WHERE u.is_active = 1
-      AND u.branch_id = ?
       AND (
-          u.id = ?
-          OR u.department_id = ?
-          OR uda.department_id = ?
+          -- managed_by in users table
+          u.managed_by = ?
+          OR
+          -- managed_by in UDA table
+          uda.managed_by = ?
+      )
+      AND (
+          -- must be in consulting dept (primary or UDA)
+          d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%'
+          OR d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%'
       )
 ");
-$scopeStmt->execute([$branchId, $uid, $deptId, $deptId]);
+$scopeStmt->execute([$uid, $uid]);
 $scopeIds = array_unique(array_column($scopeStmt->fetchAll(PDO::FETCH_ASSOC), 'id'));
-if (!in_array($uid, $scopeIds))
-    $scopeIds[] = $uid;
-$inList = implode(',', array_map('intval', $scopeIds)) ?: (string) $uid;
 
+// Never include self — approvals are only for staff under you
+$scopeIds = array_filter($scopeIds, fn($id) => (int)$id !== $uid);
+
+if (empty($scopeIds)) {
+    $inList = '0'; // no staff managed → show nothing
+} else {
+    $inList = implode(',', array_map('intval', $scopeIds));
+}
 // ── Month filter ───────────────────────────────────────────────
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');

@@ -1053,10 +1053,10 @@ $baseQ = [
                                             </div>
                                         </td>
                                         <td>
-    <div style="font-weight:600;">
-        <?= htmlspecialchars($l['supervisor_name'] ?? $user['full_name']) ?>
-    </div>
-</td>
+                                            <div style="font-weight:600;">
+                                                <?= htmlspecialchars($l['supervisor_name'] ?? $user['full_name']) ?>
+                                            </div>
+                                        </td>
                                         <td>
                                             <div style="font-weight:500;">
                                                 <?= htmlspecialchars(mb_strimwidth($l['company_name'] ?? '—', 0, 24, '…')) ?>

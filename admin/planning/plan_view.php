@@ -11,12 +11,12 @@ requireAdmin();
 $db = getDB();
 $user = currentUser();
 $uid = (int) $user['id'];
-
 $planId = (int) ($_GET['id'] ?? 0);
 if (!$planId) {
     header('Location: plan_list.php');
     exit;
 }
+
 // ── UDA consulting dept detection ─────────────────────────────
 $__deptMetaQ = $db->prepare("SELECT dept_code, dept_name FROM departments WHERE id = ?");
 $__deptMetaQ->execute([$user['department_id']]);
@@ -41,7 +41,8 @@ if ($__isConsPrimary) {
 } elseif ($__udaCons) {
     $deptId = (int) $__udaCons['id'];
 }
-// $branchId stays unchanged — always use user's actual branch
+
+// ── Load plan ─────────────────────────────────────────────────
 $planStmt = $db->prepare("
     SELECT wp.*, u.full_name AS planner_name, u.employee_id,
            ab.full_name AS approver_name,
@@ -51,49 +52,69 @@ $planStmt = $db->prepare("
     LEFT JOIN users ab ON ab.id = wp.approved_by
     LEFT JOIN departments d ON d.id = wp.department_id
     LEFT JOIN branches b ON b.id = wp.branch_id
-    WHERE wp.id=? AND wp.department_id=?
+    WHERE wp.id = ?
 ");
-$planStmt->execute([$planId, $deptId]);
+$planStmt->execute([$planId]);
 $plan = $planStmt->fetch();
 if (!$plan) {
     header('Location: plan_list.php');
     exit;
 }
 // ── Access check: only show if login user is managed_by of plan owner ──
-$accessStmt = $db->prepare("
-    SELECT 1 FROM work_plans wp
-    WHERE wp.id = ?
-      AND (
-          wp.user_id = ?
-          OR wp.user_id IN (
-              SELECT id FROM users WHERE managed_by = ?
-          )
-          OR wp.user_id IN (
-              SELECT user_id FROM user_department_assignments WHERE managed_by = ?
-          )
-      )
+// ── Access check: supervisor_id = login user OR managed_by = login user ──
+// ── Is login user a manager of the plan owner? ────────────────
+$canManageStmt = $db->prepare("
+    SELECT 1 FROM users
+    WHERE id = ? AND managed_by = ?
+    UNION
+    SELECT 1 FROM user_department_assignments
+    WHERE user_id = ? AND managed_by = ?
     LIMIT 1
 ");
-$accessStmt->execute([$planId, $uid, $uid, $uid]);
-if (!$accessStmt->fetch()) {
+$canManageStmt->execute([$plan['user_id'], $uid, $plan['user_id'], $uid]);
+$canManage = (bool) $canManageStmt->fetch();
+
+// ── Is login user supervisor on any entry of THIS plan? ───────
+$isSupervisorStmt = $db->prepare("
+    SELECT 1 FROM work_plan_entries
+    WHERE plan_id = ? AND supervisor_id = ?
+    LIMIT 1
+");
+$isSupervisorStmt->execute([$planId, $uid]);
+$isSupervisor = (bool) $isSupervisorStmt->fetch();
+
+$isOwner = ($plan['user_id'] === $uid);
+
+// ── Hard gate ─────────────────────────────────────────────────
+// ── Hard gate: ONLY manager (managed_by) can view ─────────────
+if (!$canManage) {
     setFlash('error', 'You do not have permission to view this plan.');
     header('Location: plan_list.php');
     exit;
 }
 $entries = $db->prepare("
     SELECT wpe.*, c.company_name, c.company_code,
-           u.full_name AS assigned_name
+           u.full_name  AS assigned_name,
+           sv.full_name AS supervisor_name
     FROM work_plan_entries wpe
-    LEFT JOIN companies c ON c.id = wpe.client_id
-    LEFT JOIN users u ON u.id = wpe.assigned_to
-    WHERE wpe.plan_id=?
+    LEFT JOIN companies c  ON c.id  = wpe.client_id
+    LEFT JOIN users u      ON u.id  = wpe.assigned_to
+    LEFT JOIN users sv     ON sv.id = wpe.supervisor_id
+    WHERE wpe.plan_id = ?
     ORDER BY wpe.plan_date ASC, wpe.planned_time_in ASC
 ");
 $entries->execute([$planId]);
 $entries = $entries->fetchAll();
-
+// Supervisor name for the summary sidebar (first entry that has one)
+$supervisorName = '—';
+foreach ($entries as $e) {
+    if (!empty($e['supervisor_name'])) {
+        $supervisorName = $e['supervisor_name'];
+        break;
+    }
+}
 // Check if there are actual logs linked to this plan
-$logCount = (int) $db->prepare("SELECT COUNT(*) FROM work_logs WHERE plan_entry_id IN (SELECT id FROM work_plan_entries WHERE plan_id=?)")->execute([$planId]) ? $db->query("SELECT COUNT(*) FROM work_logs WHERE plan_entry_id IN (SELECT id FROM work_plan_entries WHERE plan_id={$planId})")->fetchColumn() : 0;
+$logCount = 0;
 
 $byDate = [];
 foreach ($entries as $e) {
@@ -129,12 +150,6 @@ include '../../includes/header.php';
                         <a href="plan_list.php" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-arrow-left me-1"></i> Back
                         </a>
-
-                        <?php if ($plan['status'] === 'submitted'): ?>
-                            <a href="plan_approvals.php?id=<?= $planId ?>" class="btn btn-gold btn-sm">
-                                <i class="fas fa-check me-1"></i> Review
-                            </a>
-                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -179,7 +194,7 @@ include '../../includes/header.php';
                     <?php if ($plan['approved_at']): ?> on
                         <?= date('d M Y H:i', strtotime($plan['approved_at'])) ?>     <?php endif; ?>
                 </div>
-                
+
             <?php endif; ?>
 
             <div class="row g-4">
@@ -209,6 +224,7 @@ include '../../includes/header.php';
                                                     <th>Date</th>
                                                     <th>Client</th>
                                                     <th>Staff</th>
+                                                    <th>Supervisor</th>
                                                     <th>Time</th>
                                                     <th class="text-center">Hours</th>
                                                     <th>Notes</th>
@@ -233,6 +249,15 @@ include '../../includes/header.php';
 
                                                         <td><?= htmlspecialchars($e['assigned_name'] ?? '—') ?></td>
 
+                                                        <td style="font-size:.82rem;">
+                                                            <?php if (!empty($e['supervisor_name'])): ?>
+                                                                <span
+                                                                    style="font-weight:600;"><?= htmlspecialchars($e['supervisor_name']) ?></span>
+                                                            <?php else: ?>
+                                                                <span style="color:#d1d5db;">—</span>
+                                                            <?php endif; ?>
+                                                        </td>
+
                                                         <td style="font-size:.78rem;">
                                                             <?= $e['planned_time_in'] ? date('h:i A', strtotime($e['planned_time_in'])) : '—' ?>
                                                             -
@@ -245,8 +270,15 @@ include '../../includes/header.php';
                                                             </strong>
                                                         </td>
 
-                                                        <td style="font-size:.75rem;color:#6b7280;">
-                                                            <?= htmlspecialchars($e['notes'] ?? '—') ?>
+                                                        <td style="font-size:.75rem;color:#6b7280;max-width:200px;">
+                                                            <?php if (!empty($e['notes'])): ?>
+                                                                <span title="<?= htmlspecialchars($e['notes']) ?>"
+                                                                    style="display:block;white-space:pre-wrap;word-break:break-word;">
+                                                                    <?= nl2br(htmlspecialchars($e['notes'])) ?>
+                                                                </span>
+                                                            <?php else: ?>
+                                                                <span style="color:#d1d5db;">—</span>
+                                                            <?php endif; ?>
                                                         </td>
                                                     </tr>
                                                 <?php endforeach; ?>
@@ -298,6 +330,26 @@ include '../../includes/header.php';
                                     <span style="color:#9ca3af;">Total Entries</span>
                                     <strong><?= count($entries) ?></strong>
                                 </div>
+                                <!-- Add after the "Status" row in the summary table: -->
+                                <div style="display:flex;justify-content:space-between;font-size:.83rem;">
+                                    <span style="color:#9ca3af;">Your Access</span>
+                                    <?php if ($canManage): ?>
+                                        <span
+                                            style="background:#ecfdf5;color:#065f46;font-size:.72rem;padding:2px 8px;border-radius:6px;font-weight:700;">
+                                            <i class="fas fa-user-shield me-1"></i>Manager
+                                        </span>
+                                    <?php elseif ($isSupervisor): ?>
+                                        <span
+                                            style="background:#eff6ff;color:#1e40af;font-size:.72rem;padding:2px 8px;border-radius:6px;font-weight:700;">
+                                            <i class="fas fa-eye me-1"></i>Supervisor
+                                        </span>
+                                    <?php else: ?>
+                                        <span
+                                            style="background:#f3f4f6;color:#6b7280;font-size:.72rem;padding:2px 8px;border-radius:6px;font-weight:700;">
+                                            Owner
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
                                 <div style="display:flex;justify-content:space-between;font-size:.83rem;">
                                     <span style="color:#9ca3af;">Planned Hours</span>
                                     <strong
@@ -312,7 +364,7 @@ include '../../includes/header.php';
                         </div>
                     </div>
 
-                    <?php if ($plan['status'] === 'submitted'): ?>
+                    <?php if ($plan['status'] === 'submitted' && $canManage): ?>
                         <div class="card-mis p-3" style="border-left:3px solid #f59e0b;">
                             <p style="font-weight:700;font-size:.82rem;margin-bottom:10px;color:#b45309;">
                                 <i class="fas fa-hourglass-half me-1"></i>Quick Review

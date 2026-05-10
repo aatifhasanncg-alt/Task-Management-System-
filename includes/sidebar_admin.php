@@ -236,7 +236,7 @@ function conNavActive(string $file, string $dir = ''): string
 
             <a href="<?= APP_URL ?>admin/planning/dashboard.php"
                 class="nav-item<?= conNavActive('dashboard.php', 'planning') ?>">
-                <i class="fas fa-chart-bar"></i><span>Performance Report</span>
+                <i class="fas fa-chart-bar"></i><span>My Performance</span>
             </a>
 
             <a href="<?= APP_URL ?>admin/planning/staff_performance.php"

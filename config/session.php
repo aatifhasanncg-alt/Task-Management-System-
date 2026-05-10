@@ -236,8 +236,8 @@ function verifyCsrf(): void {
 
 // ── FLASH MESSAGES ───────────────────────────────────────────
 
-function setFlash(string $type, string $msg): void {
-    $_SESSION['flash'] = ['type' => $type, 'msg' => $msg];
+function setFlash(string $type, string $msg, bool $raw = false): void {
+    $_SESSION['flash'] = ['type' => $type, 'msg' => $msg, 'raw' => $raw];
 }
 
 function getFlash(): ?array {
@@ -247,20 +247,40 @@ function getFlash(): ?array {
 }
 
 function flashHtml(): string {
-    $f = getFlash();
-    if (!$f) return '';
     $map = [
         'success' => 'alert-success',
+        'danger'  => 'alert-danger',
         'error'   => 'alert-danger',
         'info'    => 'alert-info',
         'warning' => 'alert-warning',
     ];
-    $cls = $map[$f['type']] ?? 'alert-info';
-    $msg = htmlspecialchars($f['msg']);
-    return "<div class='alert {$cls} alert-dismissible fade show' role='alert'>
-        {$msg}
-        <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
-    </div>";
+
+    $out = '';
+
+    // ── Primary flash ─────────────────────────────────────────
+    $f = getFlash();
+    if ($f) {
+        $cls = $map[$f['type']] ?? 'alert-info';
+        $msg = !empty($f['raw']) ? $f['msg'] : htmlspecialchars($f['msg']);
+        $out .= "<div class='alert {$cls} alert-dismissible fade show' role='alert'>
+            {$msg}
+            <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
+        </div>";
+    }
+
+    // ── Secondary flash (partial duplicate warnings) ──────────
+    if (isset($_SESSION['flash_extra'])) {
+        $fe  = $_SESSION['flash_extra'];
+        unset($_SESSION['flash_extra']);
+        $cls = $map[$fe['type']] ?? 'alert-warning';
+        $msg = !empty($fe['raw']) ? $fe['msg'] : htmlspecialchars($fe['msg']);
+        $out .= "<div class='alert {$cls} alert-dismissible fade show' role='alert'>
+            {$msg}
+            <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
+        </div>";
+    }
+
+    return $out;
 }
 
 // ── ACTIVITY LOG ─────────────────────────────────────────────

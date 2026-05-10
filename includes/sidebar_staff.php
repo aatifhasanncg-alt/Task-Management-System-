@@ -326,6 +326,10 @@ if (!function_exists('conNavActive')) {
                     class="nav-item<?= conNavActive('office_log_create.php', 'planning') ?>">
                     <i class="fas fa-plus-square"></i><span>Create Office Log</span>
                 </a>
+                <a href="<?= APP_URL ?>staff/planning/my_performance.php"
+                    class="nav-item<?= conNavActive('my_performance.php', 'planning') ?>">
+                    <i class="fas fa-chart-bar"></i><span>My Performance</span>
+                </a>
             <?php endif; ?>
 
         <?php endif; ?>

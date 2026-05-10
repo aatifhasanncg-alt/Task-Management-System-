@@ -81,17 +81,31 @@ $companies = $db->query("
 
 // ── Staff list (admin only) ───────────────────────────────────
 // Admin can assign to: dept staff in same branch + managed staff
-$deptStaff  = [];
+$deptStaff = [];
 if ($isAdmin) {
     $st1 = $db->prepare("
-        SELECT DISTINCT u.id, u.full_name, u.employee_id
+        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id,
+               b.branch_name
         FROM users u
+        LEFT JOIN branches b ON b.id = u.branch_id
         LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+        LEFT JOIN departments d1 ON d1.id = u.department_id
+        LEFT JOIN departments d2 ON d2.id = uda.department_id
         WHERE u.is_active = 1
-          AND u.id != ?
           AND (
-              u.managed_by = ?
-              OR uda.managed_by = ?
+              u.id = ?
+              OR (
+                  u.managed_by = ?
+                  AND (
+                      (d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%')
+                      OR
+                      (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
+                  )
+              )
+              OR (
+                  uda.managed_by = ?
+                  AND (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
+              )
           )
         ORDER BY u.full_name
     ");
@@ -116,13 +130,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Admin: validate the chosen user belongs to their branch
     if ($isAdmin && $planUserId !== $uid) {
-        $chk = $db->prepare("
-            SELECT id FROM users
-            WHERE id=? AND branch_id=? AND is_active=1
-        ");
-        $chk->execute([$planUserId, $branchId]);
-        if (!$chk->fetch()) $errors[] = 'Invalid staff selection.';
-    }
+    $chk = $db->prepare("
+        SELECT id FROM users
+        WHERE id = ?
+          AND managed_by = ?
+          AND is_active = 1
+    ");
+    $chk->execute([$planUserId, $uid]);
+    if (!$chk->fetch()) $errors[] = 'You can only create plans for staff you manage.';
+}
 
     $weekNum   = (int)($_POST['week_number']    ?? 0);
     $weekStart = trim($_POST['week_start_date'] ?? '');
@@ -134,67 +150,210 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$weekStart)                        $errors[] = 'Week start date missing.';
     if (empty($entries) || !is_array($entries)) $errors[] = 'Add at least one plan entry.';
 
-    // Check duplicate: same user + month + week + dept
+    // Check duplicate plan header — but only store the existing plan id for later
+    // We only block if there are genuinely NEW entries (not injections into existing plans)
+    $existingPlanId = null;
     if (!$errors) {
         $dup = $db->prepare("
             SELECT id FROM work_plans
             WHERE user_id=? AND plan_month=? AND week_number=? AND department_id=?
         ");
         $dup->execute([$planUserId, $monthStart, $weekNum, $deptId]);
-        if ($dup->fetch()) $errors[] = 'A plan already exists for this staff member for Week ' . $weekNum . '.';
+        $existingPlanRow = $dup->fetch();
+        if ($existingPlanRow) {
+            $existingPlanId = (int)$existingPlanRow['id'];
+        }
     }
 
-    if (!$errors) {
+   if (!$errors) {
+
+        // ── Supervisor-aware duplicate entry check ─────────────────────────
+        // Categories:
+        //   $newEntries        → no duplicate at all, go into the NEW plan
+        //   $injectEntries     → duplicate exists but different supervisor
+        //                        → inject into existing plan + update supervisor
+        //   $blockedMsgs       → duplicate exists with SAME supervisor → block
+        $newEntries    = [];
+        $injectEntries = []; // ['entry'=>$e, 'plan_id'=>X]
+        $blockedMsgs   = [];
+
+        $ccMap = array_column($companies, 'company_code', 'id'); // needed later too
+
+        foreach ($entries as $e) {
+            $cid   = (int)($e['client_id'] ?? 0);
+            $pdate = trim($e['plan_date'] ?? '');
+            if (!$cid || !$pdate) continue;
+
+            $dupE = $db->prepare("
+                SELECT wp.id        AS plan_id,
+                       wp.week_number,
+                       wp.supervisor_id,
+                       c.company_name
+                FROM work_plan_entries wpe
+                JOIN work_plans wp ON wp.id = wpe.plan_id
+                JOIN companies  c  ON c.id  = wpe.client_id
+                WHERE wpe.client_id = ?
+                  AND wpe.plan_date = ?
+                  AND wp.user_id    = ?
+                  AND wp.plan_month = ?
+                LIMIT 1
+            ");
+            $dupE->execute([$cid, $pdate, $planUserId, $monthStart]);
+            $found = $dupE->fetch(PDO::FETCH_ASSOC);
+
+            if (!$found) {
+                // ── No duplicate anywhere → add to new plan ───────────────
+                $newEntries[] = $e;
+                continue;
+            }
+
+            $existingSupervisor = (int)($found['supervisor_id'] ?? 0);
+            $label = htmlspecialchars($found['company_name'])
+                   . ' on ' . date('d M Y', strtotime($pdate))
+                   . ' (Week ' . $found['week_number'] . ')';
+
+            if ($existingSupervisor === $uid) {
+                // ── Same supervisor created original → block ───────────────
+                $blockedMsgs[] = $label . ' — already assigned by you, skipped';
+            } else {
+                // ── Different/no supervisor → inject into existing plan ────
+                $injectEntries[] = [
+                    'entry'   => $e,
+                    'plan_id' => (int)$found['plan_id'],
+                    'label'   => $label,
+                ];
+            }
+        }
+
+        // ── If ALL entries are blocked and nothing else to do → stop ──────
+        if (!empty($blockedMsgs) && empty($newEntries) && empty($injectEntries)) {
+            $_SESSION['flash'] = [
+                'type' => 'danger',
+                'msg'  => '<strong><i class="fas fa-exclamation-circle me-1"></i>'
+                          . 'Nothing saved — all entries already exist under your supervision:</strong><br>• '
+                          . implode('<br>• ', $blockedMsgs),
+                'raw'  => true,
+            ];
+            header('Location: ' . APP_URL . '/admin/planning/plan_list.php?month=' . $month);
+            exit;
+        }
+
+        // ── Warn about blocked entries if some others will still save ─────
+        if (!empty($blockedMsgs)) {
+            $_SESSION['flash_extra'] = [
+                'type' => 'warning',
+                'msg'  => '<strong><i class="fas fa-exclamation-triangle me-1"></i>'
+                          . 'Some entries skipped (already exist under your supervision):</strong><br>• '
+                          . implode('<br>• ', $blockedMsgs),
+                'raw'  => true,
+            ];
+        }
+
         $db->beginTransaction();
         try {
-            // Insert plan header
-            $insP = $db->prepare("
-                INSERT INTO work_plans
-                  (user_id, supervisor_id, department_id, branch_id,
-                   plan_month, week_number, week_start_date, week_end_date,
-                   status, remarks)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-            ");
-            $insP->execute([
-                $planUserId,
-                $isAdmin && $planUserId !== $uid ? $uid : null,
-                $deptId, $branchId,
-                $monthStart, $weekNum, $weekStart, $weekEnd,
-                'draft', $remarks,
-            ]);
-            $planId = (int)$db->lastInsertId();
 
-            // Build company_code lookup map
-            $ccMap = array_column($companies, 'company_code', 'id');
+            // ── INJECT entries into existing plans (different supervisor) ──
+            if (!empty($injectEntries)) {
+                $insInject = $db->prepare("
+                    INSERT INTO work_plan_entries
+                      (plan_id, client_id, client_code, assigned_to,
+                       plan_date, day_of_week, planned_time_in, planned_time_out,
+                       planned_hours, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                ");
 
-            // Insert entries
-            $insE = $db->prepare("
-                INSERT INTO work_plan_entries
-                  (plan_id, client_id, client_code, assigned_to,
-                   plan_date, day_of_week, planned_time_in, planned_time_out,
-                   planned_hours, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-            ");
-
-            foreach ($entries as $e) {
-                $cid   = (int)($e['client_id'] ?? 0);
-                $pdate = trim($e['plan_date'] ?? '');
-                if (!$cid || !$pdate) continue;
-
-                $tin  = trim($e['time_in']  ?? '') ?: null;
-                $tout = trim($e['time_out'] ?? '') ?: null;
-                $hrs  = 0.0;
-                if ($tin && $tout) {
-                    $diff = strtotime($tout) - strtotime($tin);
-                    if ($diff > 0) $hrs = round($diff / 3600, 2);
+                $injectedPlanIds = [];
+                foreach ($injectEntries as $ie) {
+                    $e     = $ie['entry'];
+                    $pid   = $ie['plan_id'];
+                    $cid   = (int)($e['client_id'] ?? 0);
+                    $pdate = trim($e['plan_date'] ?? '');
+                    $tin   = trim($e['time_in']  ?? '') ?: null;
+                    $tout  = trim($e['time_out'] ?? '') ?: null;
+                    $hrs   = 0.0;
+                    if ($tin && $tout) {
+                        $diff = strtotime($tout) - strtotime($tin);
+                        if ($diff > 0) $hrs = round($diff / 3600, 2);
+                    }
+                    $insInject->execute([
+                        $pid, $cid, $ccMap[$cid] ?? '',
+                        $planUserId, $pdate, date('l', strtotime($pdate)),
+                        $tin, $tout, $hrs, trim($e['notes'] ?? ''),
+                    ]);
+                    $injectedPlanIds[] = $pid;
                 }
 
-                $insE->execute([
-                    $planId, $cid, $ccMap[$cid] ?? '',
-                    $planUserId, $pdate, date('l', strtotime($pdate)),
-                    $tin, $tout, $hrs, trim($e['notes'] ?? ''),
-                ]);
+                // Update supervisor_id on those existing plans to current user
+                foreach (array_unique($injectedPlanIds) as $pid) {
+                    $db->prepare("
+                        UPDATE work_plans
+                        SET supervisor_id = ?
+                        WHERE id = ?
+                    ")->execute([$uid, $pid]);
+                }
             }
+
+            // ── Only create a new plan header if there are new entries ─────
+            // ── Create new plan header OR reuse existing one ───────────────
+            if (!empty($newEntries)) {
+                if ($existingPlanId) {
+                    // Reuse existing plan for this week — just update supervisor
+                    $planId = $existingPlanId;
+                    $db->prepare("
+                        UPDATE work_plans
+                        SET supervisor_id = ?, remarks = COALESCE(NULLIF(?, ''), remarks)
+                        WHERE id = ?
+                    ")->execute([$uid, $remarks, $planId]);
+                } else {
+                    // No existing plan → create new header
+                    $insP = $db->prepare("
+                        INSERT INTO work_plans
+                          (user_id, supervisor_id, department_id, branch_id,
+                           plan_month, week_number, week_start_date, week_end_date,
+                           status, remarks)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ");
+                    $insP->execute([
+                        $planUserId,
+                        $uid,
+                        $deptId, $branchId,
+                        $monthStart, $weekNum, $weekStart, $weekEnd,
+                        'draft', $remarks,
+                    ]);
+                    $planId = (int)$db->lastInsertId();
+                }
+
+                // Insert new entries into the new plan
+                $insE = $db->prepare("
+                    INSERT INTO work_plan_entries
+                    (plan_id, client_id, client_code, assigned_to,
+                    plan_date, day_of_week, planned_time_in, planned_time_out,
+                    planned_hours, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                ");
+
+                foreach ($newEntries as $e) {
+                    $cid   = (int)($e['client_id'] ?? 0);
+                    $pdate = trim($e['plan_date'] ?? '');
+                    if (!$cid || !$pdate) continue;
+
+                    $tin  = trim($e['time_in']  ?? '') ?: null;
+                    $tout = trim($e['time_out'] ?? '') ?: null;
+                    $hrs  = 0.0;
+                    if ($tin && $tout) {
+                        $diff = strtotime($tout) - strtotime($tin);
+                        if ($diff > 0) $hrs = round($diff / 3600, 2);
+                    }
+
+                    $insE->execute([
+                        $planId, $cid, $ccMap[$cid] ?? '',
+                        $planUserId, $pdate, date('l', strtotime($pdate)),
+                        $tin, $tout, $hrs, trim($e['notes'] ?? ''),
+                    ]);
+                }
+
+            } // ── end if (!empty($newEntries)) ──────────────────────────
+            $planId = $planId ?? 0; // fallback if only injections happened
             notify(
                     $planUserId,
                     'Work Plan Created for You',
