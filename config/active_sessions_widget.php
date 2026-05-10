@@ -54,7 +54,7 @@ function handleSessionRevoke(): void
     }
 
     // Redirect back to same page
-    header('Location: ' . $_SERVER['REQUEST_URI']);
+    header('Location: ' . APP_URL . $_SERVER['REQUEST_URI']);
     exit;
 }
 
