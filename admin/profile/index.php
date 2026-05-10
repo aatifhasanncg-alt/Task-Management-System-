@@ -25,18 +25,55 @@ $profile = $profileStmt->fetch(PDO::FETCH_ASSOC);
 
 // Fetch all departments (primary + UDA)
 $udaStmt = $db->prepare("
-    SELECT d.dept_name, d.id,
-           CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+    SELECT 
+        d.dept_name,
+        d.id,
+
+        CASE 
+            WHEN uda.managed_by IS NOT NULL 
+            THEN CONCAT(mu.full_name, ' (', mu.employee_id, ')')
+            ELSE NULL
+        END AS managed_by,
+
+        CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+
     FROM user_department_assignments uda
-    JOIN departments d ON d.id = uda.department_id
+
+    JOIN departments d 
+        ON d.id = uda.department_id
+
+    LEFT JOIN users mu 
+        ON mu.id = uda.managed_by
+
     WHERE uda.user_id = ?
+
     UNION
-    SELECT d.dept_name, d.id, 1 AS is_primary
+
+    SELECT 
+        d.dept_name,
+        d.id,
+
+        (
+            SELECT CONCAT(pm.full_name, ' (', pm.employee_id, ')')
+            FROM users u2
+            LEFT JOIN users pm ON pm.id = u2.managed_by
+            WHERE u2.id = ?
+            LIMIT 1
+        ) AS managed_by,
+
+        1 AS is_primary
+
     FROM departments d
     WHERE d.id = ?
+
     ORDER BY is_primary DESC, dept_name ASC
 ");
-$udaStmt->execute([$profile['department_id'], $user['id'], $profile['department_id']]);
+$udaStmt->execute([
+    $profile['department_id'],
+    $user['id'],
+    $user['id'],
+    $profile['department_id']
+]);
 $allDepts = $udaStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Remove duplicates (in case primary dept also appears in UDA)
@@ -131,12 +168,24 @@ include '../../includes/header.php';
                                 <span
                                     class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
                                 <?php foreach ($allDepts as $dept): ?>
-                                    <span class="dept-chip">
-                                        <?= htmlspecialchars($dept['dept_name']) ?>
-                                        <?php if ($dept['is_primary']): ?>
-                                            <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                    <div class="dept-chip"
+                                        style="display:flex;flex-direction:column;align-items:flex-start;">
+
+                                        <div>
+                                            <?= htmlspecialchars($dept['dept_name']) ?>
+
+                                            <?php if ($dept['is_primary']): ?>
+                                                <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <?php if (!empty($dept['managed_by'])): ?>
+                                            <small style="font-size:.65rem;color:#9ca3af;">
+                                                Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
+                                            </small>
                                         <?php endif; ?>
-                                    </span>
+
+                                    </div>
                                 <?php endforeach; ?>
                             </div>
                             <?php if ($profile['employee_id']): ?>
@@ -199,13 +248,31 @@ include '../../includes/header.php';
                                             <?php if ($val === '__DEPTS__'): ?>
                                                 <div class="d-flex flex-wrap gap-1 mt-1">
                                                     <?php foreach ($allDepts as $dept): ?>
-                                                        <span
-                                                            style="background:#fef3c7;color:#92400e;font-size:.75rem;padding:.15rem .5rem;border-radius:99px;font-weight:600;">
-                                                            <?= htmlspecialchars($dept['dept_name']) ?>
-                                                            <?php if ($dept['is_primary']): ?>
-                                                                <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                        <div style="
+                                                            background:#fef3c7;
+                                                            color:#92400e;
+                                                            font-size:.75rem;
+                                                            padding:.35rem .6rem;
+                                                            border-radius:12px;
+                                                            font-weight:600;
+                                                            margin-bottom:.35rem;
+                                                            min-width:220px;
+                                                        ">
+                                                            <div>
+                                                                <?= htmlspecialchars($dept['dept_name']) ?>
+
+                                                                <?php if ($dept['is_primary']): ?>
+                                                                    <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                                <?php endif; ?>
+                                                            </div>
+
+                                                            <?php if (!empty($dept['managed_by'])): ?>
+                                                                <div style="font-size:.68rem;color:#6b7280;font-weight:500;">
+                                                                    Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
+                                                                </div>
                                                             <?php endif; ?>
-                                                        </span>
+                                                        </div>
+                                        
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else: ?>

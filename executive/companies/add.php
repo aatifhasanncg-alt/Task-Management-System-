@@ -210,7 +210,7 @@ include '../../includes/header.php';
                             <label class="form-label-mis">Return Type</label>
                             <select name="return_type" class="form-select">
                                 <option value="">-- Select --</option>
-                                <?php foreach (['D1','D2','D3','D4'] as $rt): ?>
+                                <?php foreach (['N/A', 'D1', 'D2', 'D3', 'D4'] as $rt): ?>
                                     <option value="<?= $rt ?>"
                                         <?= ($_POST['return_type'] ?? '') === $rt ? 'selected' : '' ?>>
                                         <?= $rt ?>
@@ -481,7 +481,7 @@ include '../../includes/header.php';
                 Return Types
             </div>
             <div style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
-                <?php foreach (['D1','D2','D3','D4'] as $rt): ?>
+                <?php foreach ([ 'N/A', 'D1', 'D2', 'D3', 'D4' ] as $rt): ?>
                     <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;margin:.1rem .1rem 0 0;display:inline-block;">
                         <?= $rt ?>
                     </span>

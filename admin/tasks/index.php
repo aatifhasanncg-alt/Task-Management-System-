@@ -244,30 +244,6 @@ include '../../includes/header.php';
                 </div>
             </div>
 
-            <!-- My Dept / Show All toggle (hidden for BM since they always see all) -->
-            <?php if (!$isBranchManager): ?>
-            <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
-                <div class="d-flex gap-2">
-                    <a href="?<?= http_build_query(array_diff_key($_GET, ['show_all'=>'','dept_id'=>'','page'=>''])) ?>"
-                        class="btn btn-sm <?= !$showAll ? 'btn-navy' : 'btn-outline-secondary' ?>">
-                        <i class="fas fa-building me-1"></i>My Dept Tasks
-                    </a>
-                    <a href="?<?= http_build_query(array_merge($_GET, ['show_all'=>'1','page'=>1])) ?>"
-                        class="btn btn-sm <?= $showAll ? 'btn-navy' : 'btn-outline-secondary' ?>">
-                        <i class="fas fa-globe me-1"></i>Show All Related
-                    </a>
-                </div>
-                <?php if ($showAll): ?>
-                    <span style="font-size:.73rem;color:#f59e0b;background:#fffbeb;padding:.2rem .7rem;border-radius:99px;border:1px solid #f59e0b33;">
-                        <i class="fas fa-info-circle me-1"></i>Own dept &amp; all transferred tasks (in/out)
-                    </span>
-                <?php else: ?>
-                    <span style="font-size:.73rem;color:#3b82f6;background:#eff6ff;padding:.2rem .7rem;border-radius:99px;border:1px solid #3b82f633;">
-                        <i class="fas fa-building me-1"></i>Tasks currently in your department
-                    </span>
-                <?php endif; ?>
-            </div>
-            <?php endif; ?>
 
             <!-- Status Tabs -->
             <div class="d-flex gap-2 flex-wrap mb-3">

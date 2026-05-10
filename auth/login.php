@@ -1,5 +1,5 @@
 <?php
-// auth/login.php — ASK Global Advisory MISPro
+// auth/login.php — ASK Global Advisory TaskHub
 require_once '../config/db.php';
 require_once '../config/config.php';
 require_once '../config/session.php';
@@ -219,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login — MISPro | ASK Global Advisory</title>
+    <title>Login — TaskHub | ASK Global Advisory</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link
@@ -589,7 +589,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <div class="brand-logo-lg"><span>ASK</span></div>
                 <h2>ASK Global<br>Advisory</h2>
-                <p>Management Information System for<br>Nepal's leading consulting firm.</p>
+                <p>Task Management System for<br>Nepal's leading consulting firm.</p>
 
                 <div class="role-cards">
                     <div class="role-card">
@@ -627,14 +627,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <div class="left-footer">
                 © <?= date('Y') ?> ASK Global Advisory Pvt. Ltd.<br>
-                "At ASK business problems end, solutions begin"
+                "You and Us working Together"
             </div>
         </div>
 
         <!-- ══ RIGHT ══════════════════════════════════════════════════════════ -->
         <div class="login-right">
             <h3>Welcome Back</h3>
-            <p class="subtitle">Sign in to continue to MISPro</p>
+            <p class="subtitle">Sign in to continue to TaskHub</p>
 
             <!-- Role tabs -->
             <div class="role-tabs" role="tablist" aria-label="Select your role">

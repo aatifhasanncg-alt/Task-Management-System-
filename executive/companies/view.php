@@ -602,7 +602,7 @@ include '../../includes/header.php';
                     <label class="form-label-mis">Return Type</label>
                     <select name="return_type" class="form-select form-select-sm">
                         <option value="">-- Select --</option>
-                        <?php foreach (['D1', 'D2', 'D3', 'D4'] as $rt): ?>
+                        <?php foreach (['N/A', 'D1', 'D2', 'D3', 'D4'] as $rt): ?>
                             <option value="<?= $rt ?>" <?= ($company['return_type'] ?? '') === $rt ? 'selected' : '' ?>>
                                 <?= $rt ?>
                             </option>

@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email      = strtolower(trim($_POST['contact_email'] ?? ''));
     $phone      = trim($_POST['contact_phone'] ?? '');
     $branchId   = (int)($_POST['branch_id'] ?? 0);
-    $returnType = $_POST['return_type'] ?? 'D1';
+    $returnType = $_POST['return_type'] ?? 'N/A';
 
     // Validation
     if (!$name)
@@ -155,6 +155,7 @@ include '../../includes/header.php';
                                     <div class="col-md-3">
                                         <label class="form-label-mis">Return Type</label>
                                         <select name="return_type" class="form-select">
+                                            <option value="N/A">N/A</option>
                                             <option value="D1">D1</option>
                                             <option value="D2">D2</option>
                                             <option value="D3">D3</option>

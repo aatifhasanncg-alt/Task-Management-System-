@@ -155,7 +155,7 @@ if (!function_exists('conNavActive')) {
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">MISPro</div>
+            <div class="brand-name">TaskHub</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>
@@ -255,22 +255,22 @@ if (!function_exists('conNavActive')) {
             -->
             <?php if (!$__isConsultingDept): ?>
                 <div class="nav-section-label">Main</div>
-                <a href="<?= APP_URL ?>/staff/dashboard/index.php" class="nav-item <?= isActiveStaff('/staff/dashboard') ?>">
+                <a href="<?= APP_URL ?>staff/dashboard/index.php" class="nav-item <?= isActiveStaff('/staff/dashboard') ?>">
                     <i class="fas fa-th-large"></i><span>Dashboard</span>
                 </a>
 
                 <div class="nav-section-label">My Tasks</div>
-                <a href="<?= APP_URL ?>/staff/tasks/today.php" class="nav-item <?= isActiveStaff('/staff/tasks/today') ?>">
+                <a href="<?= APP_URL ?>staff/tasks/today.php" class="nav-item <?= isActiveStaff('/staff/tasks/today') ?>">
                     <i class="fas fa-sun"></i><span>Today</span>
                     <?php if ($todayCnt > 0): ?>
                         <span class="nav-badge nav-badge-warning"><?= $todayCnt ?></span>
                     <?php endif; ?>
                 </a>
-                <a href="<?= APP_URL ?>/staff/tasks/tomorrow.php"
+                <a href="<?= APP_URL ?>staff/tasks/tomorrow.php"
                     class="nav-item <?= isActiveStaff('/staff/tasks/tomorrow') ?>">
                     <i class="fas fa-forward"></i><span>Tomorrow</span>
                 </a>
-                <a href="<?= APP_URL ?>/staff/tasks/index.php"
+                <a href="<?= APP_URL ?>staff/tasks/index.php"
                     class="nav-item <?= isActiveStaff('/staff/tasks/index') ?><?= isActiveStaff('/staff/tasks/view') ?>">
                     <i class="fas fa-list-check"></i><span>All My Tasks</span>
                     <?php if ($pendingCnt > 0): ?>
@@ -278,7 +278,7 @@ if (!function_exists('conNavActive')) {
                     <?php endif; ?>
                 </a>
                 <?php if ($__isMinu): ?>
-                    <a href="<?= APP_URL ?>/staff/tasks/assign.php" class="nav-item <?= isActiveStaff('/staff/tasks/assign') ?>">
+                    <a href="<?= APP_URL ?>staff/tasks/assign.php" class="nav-item <?= isActiveStaff('/staff/tasks/assign') ?>">
                         <i class="fas fa-plus-circle"></i><span>Assign Task</span>
                     </a>
                 <?php endif; ?>

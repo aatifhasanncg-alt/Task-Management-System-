@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MISPro — ASK Global Advisory Pvt. Ltd.</title>
+  <title>TaskHub — ASK Global Advisory Pvt. Ltd.</title>
   <link
     href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
     rel="stylesheet" />
@@ -758,7 +758,7 @@
     <div class="nav-brand">
       <div class="nav-logo"><span>ASK</span></div>
       <div class="nav-brand-text">
-        <div class="t1">MISPro</div>
+        <div class="t1">TaskHub</div>
         <div class="t2">ASK Global Advisory</div>
       </div>
     </div>
@@ -779,12 +779,12 @@
       <div class="hero-badge">
         <i class="fas fa-star"></i> ASK Global Advisory Pvt. Ltd.
       </div>
-      <h1>Management<br><span class="gold">Information System</span><br>for Modern Consulting</h1>
+      <h1>Task<br><span class="gold">Management System</span><br>for Modern Consulting</h1>
       <p>A unified platform to manage tasks, track workflows across departments and branches, and generate real-time
         reports — built for ASK Global Advisory's daily operations.</p>
       <div class="hero-btns">
         <a href="#" class="btn-hero-primary" onclick="openLogin(event)">
-          <i class="fas fa-sign-in-alt"></i> Access MISPro
+          <i class="fas fa-sign-in-alt"></i> Access TaskHub
         </a>
         <a href="#workflow" class="btn-hero-outline">
           <i class="fas fa-play-circle"></i> See How It Works
@@ -976,10 +976,10 @@
       <div class="nav-brand" style="margin-bottom:.4rem;">
         <div class="nav-logo" style="width:28px;height:28px;"><span style="font-size:.72rem;">ASK</span></div>
         <div class="nav-brand-text">
-          <div class="t1" style="font-size:.85rem;">MISPro</div>
+          <div class="t1" style="font-size:.85rem;">TaskHub</div>
         </div>
       </div>
-      <p>© <?= date('Y') ?> ASK Global Advisory Pvt. Ltd. · "At ASK business problems end, solutions begin"</p>
+      <p>© <?= date('Y') ?> ASK Global Advisory Pvt. Ltd. · "You and Us working Together"</p>
     </div>
     <div class="footer-links">
       <a href="auth/login.php?role=executive">Executive Login</a>
@@ -992,7 +992,7 @@
   <div class="modal-overlay" id="loginModal">
     <div class="modal-box">
       <div class="modal-header">
-        <h4><i class="fas fa-sign-in-alt me-2" style="color:#c9a84c;"></i> Login to MISPro</h4>
+        <h4><i class="fas fa-sign-in-alt me-2" style="color:#c9a84c;"></i> Login to TaskHub</h4>
         <button class="modal-close" onclick="closeLogin()"><i class="fas fa-times"></i></button>
       </div>
       <div class="modal-body">

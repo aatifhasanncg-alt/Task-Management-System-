@@ -100,13 +100,29 @@ $userStmt = $db->prepare("
     LEFT JOIN branches b     ON b.id  = u.branch_id
     LEFT JOIN departments d  ON d.id  = u.department_id
     LEFT JOIN users um       ON um.id = u.managed_by
+
+    -- 🔥 NEW: department assignment mapping
+    LEFT JOIN user_department_assignments uda 
+           ON uda.user_id = u.id 
+
     LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE {$ws} AND (r.role_name != 'executive' OR u.id = ?)
+
+    WHERE {$ws}
+      AND (
+            r.role_name != 'executive'
+            OR u.id = ?
+      )
+      AND (
+            u.department_id IS NOT NULL
+            OR uda.department_id IS NOT NULL
+      )
+
     GROUP BY u.id, u.full_name, u.username, u.email, u.employee_id,
              u.phone, u.branch_id, u.department_id, u.managed_by,
              u.is_active, u.joining_date, u.role_id,
              r.role_name, b.branch_name, d.dept_name, um.full_name
+
     ORDER BY r.role_name, b.branch_name, u.full_name
     LIMIT {$perPage} OFFSET {$offset}
 ");

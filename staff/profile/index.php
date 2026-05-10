@@ -16,24 +16,63 @@ $profile = $db->prepare("SELECT u.*,b.branch_name,d.dept_name FROM users u LEFT 
 $profile->execute([$user['id']]);
 $profile = $profile->fetch();
 $udaDeptStmt = $db->prepare("
-    SELECT d.dept_name, d.id,
-           CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+    SELECT 
+        d.dept_name,
+        d.id,
+
+        CASE 
+            WHEN uda.managed_by IS NOT NULL 
+            THEN CONCAT(mu.full_name, ' (', mu.employee_id, ')')
+            ELSE NULL
+        END AS managed_by,
+
+        CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_primary
+
     FROM user_department_assignments uda
-    JOIN departments d ON d.id = uda.department_id
+
+    JOIN departments d 
+        ON d.id = uda.department_id
+
+    LEFT JOIN users mu 
+        ON mu.id = uda.managed_by
+
     WHERE uda.user_id = ?
+
     UNION
-    SELECT d.dept_name, d.id, 1 AS is_primary
+
+    SELECT 
+        d.dept_name,
+        d.id,
+
+        (
+            SELECT CONCAT(pm.full_name, ' (', pm.employee_id, ')')
+            FROM users u2
+            LEFT JOIN users pm ON pm.id = u2.managed_by
+            WHERE u2.id = ?
+            LIMIT 1
+        ) AS managed_by,
+
+        1 AS is_primary
+
     FROM departments d
     WHERE d.id = ?
+
     ORDER BY is_primary DESC, dept_name ASC
 ");
-$udaDeptStmt->execute([$profile['department_id'], $user['id'], $profile['department_id']]);
+
+$udaDeptStmt->execute([
+    $profile['department_id'],
+    $user['id'],
+    $user['id'],
+    $profile['department_id']
+]);
 $allDepts = $udaDeptStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Remove duplicates
 $seen = [];
-$allDepts = array_filter($allDepts, function($d) use (&$seen) {
-    if (in_array($d['id'], $seen)) return false;
+$allDepts = array_filter($allDepts, function ($d) use (&$seen) {
+    if (in_array($d['id'], $seen))
+        return false;
     $seen[] = $d['id'];
     return true;
 });
@@ -41,7 +80,7 @@ $isConsultingUser = false;
 foreach ($allDepts as $dept) {
     $deptCodeQ = $db->prepare("SELECT dept_code FROM departments WHERE id=?");
     $deptCodeQ->execute([$dept['id']]);
-    $dCode = strtoupper((string)($deptCodeQ->fetchColumn() ?? ''));
+    $dCode = strtoupper((string) ($deptCodeQ->fetchColumn() ?? ''));
     if ($dCode === 'CON' || stripos($dept['dept_name'], 'consult') !== false) {
         $isConsultingUser = true;
         break;
@@ -146,12 +185,24 @@ include '../../includes/header.php';
                                 <span
                                     class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
                                 <?php foreach ($allDepts as $dept): ?>
-                                    <span class="dept-chip">
-                                        <?= htmlspecialchars($dept['dept_name']) ?>
-                                        <?php if ($dept['is_primary']): ?>
-                                            <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                    <div class="dept-chip"
+                                        style="display:flex;flex-direction:column;align-items:flex-start;">
+
+                                        <div>
+                                            <?= htmlspecialchars($dept['dept_name']) ?>
+
+                                            <?php if ($dept['is_primary']): ?>
+                                                <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <?php if (!empty($dept['managed_by'])): ?>
+                                            <small style="font-size:.65rem;color:#9ca3af;">
+                                                Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
+                                            </small>
                                         <?php endif; ?>
-                                    </span>
+
+                                    </div>
                                 <?php endforeach; ?>
                             </div>
                             <?php if ($profile['employee_id']): ?>
@@ -164,64 +215,68 @@ include '../../includes/header.php';
 
                     <!-- Task Stats -->
                     <?php if (!$isConsultingUser): ?>
-                    <div class="card-mis">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-chart-bar text-warning me-2"></i>My Stats</h5>
-                        </div>
-                        <div class="card-mis-body">
-                            <?php foreach ([
-                                ['Total Tasks', $stats['total'], '#3b82f6'],
-                                ['Completed', $stats['done'], '#10b981'],
-                                ['In Progress', $stats['wip'], '#f59e0b'],
-                                ['Pending', $stats['pending'], '#6b7280'],
-                                ['Overdue', $stats['overdue'], '#ef4444'],
-                            ] as [$lbl, $val, $col]):
-                                $pct = $stats['total'] ? round(($val / $stats['total']) * 100) : 0; ?>
-                                <div class="mb-3">
-                                    <div class="d-flex justify-content-between mb-1" style="font-size:.8rem;">
-                                        <span><?= $lbl ?></span>
-                                        <strong style="color:<?= $col ?>;"><?= $val ?></strong>
-                                    </div>
-                                    <div style="height:4px;background:#f3f4f6;border-radius:50px;overflow:hidden;">
-                                        <div
-                                            style="width:<?= $pct ?>%;background:<?= $col ?>;height:4px;border-radius:50px;">
+                        <div class="card-mis">
+                            <div class="card-mis-header">
+                                <h5><i class="fas fa-chart-bar text-warning me-2"></i>My Stats</h5>
+                            </div>
+                            <div class="card-mis-body">
+                                <?php foreach ([
+                                    ['Total Tasks', $stats['total'], '#3b82f6'],
+                                    ['Completed', $stats['done'], '#10b981'],
+                                    ['In Progress', $stats['wip'], '#f59e0b'],
+                                    ['Pending', $stats['pending'], '#6b7280'],
+                                    ['Overdue', $stats['overdue'], '#ef4444'],
+                                ] as [$lbl, $val, $col]):
+                                    $pct = $stats['total'] ? round(($val / $stats['total']) * 100) : 0; ?>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between mb-1" style="font-size:.8rem;">
+                                            <span><?= $lbl ?></span>
+                                            <strong style="color:<?= $col ?>;"><?= $val ?></strong>
+                                        </div>
+                                        <div style="height:4px;background:#f3f4f6;border-radius:50px;overflow:hidden;">
+                                            <div
+                                                style="width:<?= $pct ?>%;background:<?= $col ?>;height:4px;border-radius:50px;">
+                                            </div>
                                         </div>
                                     </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php if (count($allDepts) > 1): ?>
+                            <div class="card-mis mt-4">
+                                <div class="card-mis-header">
+                                    <h5><i class="fas fa-layer-group text-warning me-2"></i>Dept-wise Tasks</h5>
                                 </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php if (count($allDepts) > 1): ?>
-                    <div class="card-mis mt-4">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-layer-group text-warning me-2"></i>Dept-wise Tasks</h5>
-                        </div>
-                        <div class="card-mis-body">
-                            <?php foreach ($deptTaskStats as $ds): ?>
-                                <div class="mb-3">
-                                    <div style="font-size:.75rem;font-weight:700;color:#374151;margin-bottom:.4rem;">
-                                        <?= htmlspecialchars($ds['dept_name']) ?>
-                                        <?php if ($ds['is_primary']): ?>
-                                            <span style="font-size:.6rem;color:#c9a84c;">★ Primary</span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div class="d-flex justify-content-between" style="font-size:.78rem;">
-                                        <span style="color:#6b7280;">Total: <strong><?= (int)$ds['total'] ?></strong></span>
-                                        <span style="color:#10b981;">Done: <strong><?= (int)$ds['done'] ?></strong></span>
-                                        <span style="color:#ef4444;">Overdue: <strong><?= (int)$ds['overdue'] ?></strong></span>
-                                    </div>
-                                    <?php
-                                    $dpct = $ds['total'] > 0 ? round(($ds['done'] / $ds['total']) * 100) : 0;
-                                    ?>
-                                    <div style="height:4px;background:#f3f4f6;border-radius:50px;overflow:hidden;margin-top:.3rem;">
-                                        <div style="width:<?= $dpct ?>%;background:#10b981;height:4px;border-radius:50px;"></div>
-                                    </div>
+                                <div class="card-mis-body">
+                                    <?php foreach ($deptTaskStats as $ds): ?>
+                                        <div class="mb-3">
+                                            <div style="font-size:.75rem;font-weight:700;color:#374151;margin-bottom:.4rem;">
+                                                <?= htmlspecialchars($ds['dept_name']) ?>
+                                                <?php if ($ds['is_primary']): ?>
+                                                    <span style="font-size:.6rem;color:#c9a84c;">★ Primary</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="d-flex justify-content-between" style="font-size:.78rem;">
+                                                <span style="color:#6b7280;">Total:
+                                                    <strong><?= (int) $ds['total'] ?></strong></span>
+                                                <span style="color:#10b981;">Done: <strong><?= (int) $ds['done'] ?></strong></span>
+                                                <span style="color:#ef4444;">Overdue:
+                                                    <strong><?= (int) $ds['overdue'] ?></strong></span>
+                                            </div>
+                                            <?php
+                                            $dpct = $ds['total'] > 0 ? round(($ds['done'] / $ds['total']) * 100) : 0;
+                                            ?>
+                                            <div
+                                                style="height:4px;background:#f3f4f6;border-radius:50px;overflow:hidden;margin-top:.3rem;">
+                                                <div style="width:<?= $dpct ?>%;background:#10b981;height:4px;border-radius:50px;">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
                                 </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                     <?php endif; // end !$isConsultingUser ?>
+                            </div>
+                        <?php endif; ?>
+                    <?php endif; // end !$isConsultingUser ?>
                 </div>
 
                 <!-- Info + Password -->
@@ -252,12 +307,30 @@ include '../../includes/header.php';
                                             <?php if ($val === '__DEPTS__'): ?>
                                                 <div class="d-flex flex-wrap gap-1 mt-1">
                                                     <?php foreach ($allDepts as $dept): ?>
-                                                        <span style="background:#fef3c7;color:#92400e;font-size:.75rem;padding:.15rem .5rem;border-radius:99px;font-weight:600;">
-                                                            <?= htmlspecialchars($dept['dept_name']) ?>
-                                                            <?php if ($dept['is_primary']): ?>
-                                                                <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                        <div style="
+                                                                    background:#fef3c7;
+                                                                    color:#92400e;
+                                                                    font-size:.75rem;
+                                                                    padding:.35rem .6rem;
+                                                                    border-radius:12px;
+                                                                    font-weight:600;
+                                                                    margin-bottom:.35rem;
+                                                                    min-width:220px;
+                                                                ">
+                                                            <div>
+                                                                <?= htmlspecialchars($dept['dept_name']) ?>
+
+                                                                <?php if ($dept['is_primary']): ?>
+                                                                    <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                                <?php endif; ?>
+                                                            </div>
+
+                                                            <?php if (!empty($dept['managed_by'])): ?>
+                                                                <div style="font-size:.68rem;color:#6b7280;font-weight:500;">
+                                                                    Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
+                                                                </div>
                                                             <?php endif; ?>
-                                                        </span>
+                                                        </div>
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else: ?>

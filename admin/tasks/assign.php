@@ -544,14 +544,14 @@ include '../../includes/header.php';
                                                             data-code="<?= htmlspecialchars($d['dept_code']) ?>"
                                                             <?= (($_POST['department_id'] ?? $adminUser['department_id']) == $d['id']) ? 'selected' : '' ?>>
                                                             <?= htmlspecialchars($d['dept_name']) ?>
-                                                            <?= ($d['id'] == $adminUser['department_id']) ? ' ★' : ' · UDA' ?>
+                                                            <?= ($d['id'] == $adminUser['department_id']) ? ' ★' : ' · Other' ?>
                                                         </option>
                                                     <?php endforeach; ?>
                                                 </select>
                                                 <?php if ($hasUda): ?>
                                                     <small style="font-size:.65rem;color:#8b5cf6;">
                                                         <i class="fas fa-info-circle me-1"></i>
-                                                        Your dept ★ + UDA-assigned departments · UDA
+                                                        Your dept ★ + Other-assigned departments 
                                                     </small>
                                                 <?php endif; ?>
                                             <?php endif; ?>

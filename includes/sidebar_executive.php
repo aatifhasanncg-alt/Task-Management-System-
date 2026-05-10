@@ -55,7 +55,7 @@ if (!function_exists('isActiveExec')) {
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">MISPro</div>
+            <div class="brand-name">TaskHub</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>
@@ -80,7 +80,7 @@ if (!function_exists('isActiveExec')) {
         <!-- ── Overview ── -->
         <div class="nav-section-label">Overview</div>
 
-        <a href="<?= APP_URL ?>/executive/dashboard/index.php"
+        <a href="<?= APP_URL ?>executive/dashboard/index.php"
             class="nav-item <?= isActiveExec('/executive/dashboard') ?>">
             <i class="fas fa-th-large"></i><span>Dashboard</span>
         </a>
@@ -89,90 +89,90 @@ if (!function_exists('isActiveExec')) {
         <!-- ── Tasks ── -->
         <div class="nav-section-label">Tasks</div>
 
-        <a href="<?= APP_URL ?>/executive/tasks/index.php" class="nav-item <?= isActiveExec('/tasks/index') ?><?= isActiveExec('/tasks/view') ?><?= isActiveExec('/tasks/edit') ?>">
+        <a href="<?= APP_URL ?>executive/tasks/index.php" class="nav-item <?= isActiveExec('/executive/tasks/index') ?><?= isActiveExec('/executive/tasks/view') ?><?= isActiveExec('/executive/tasks/edit') ?>">
             <i class="fas fa-list-check"></i><span>All Tasks</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/tasks/assign.php" class="nav-item <?= isActiveExec('/tasks/assign') ?>">
+        <a href="<?= APP_URL ?>executive/tasks/assign.php" class="nav-item <?= isActiveExec('/executive/tasks/assign') ?>">
             <i class="fas fa-plus-circle"></i><span>Assign Task</span>
         </a>
 
         <!-- ── Directory ── -->
         <div class="nav-section-label">Directory</div>
 
-        <a href="<?= APP_URL ?>/executive/companies/index.php" class="nav-item <?= isActiveExec('/companies') ?>">
+        <a href="<?= APP_URL ?>executive/companies/index.php" class="nav-item <?= isActiveExec('/executive/companies') ?>">
             <i class="fas fa-building"></i><span>Companies</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/staff/index.php" class="nav-item <?= isActiveExec('/executive/staff') ?>">
+        <a href="<?= APP_URL ?>executive/staff/index.php" class="nav-item <?= isActiveExec('/executive/staff') ?>">
             <i class="fas fa-users"></i><span>All Staff</span>
         </a>
         <!-- ── Consulting ── -->
         <div class="nav-section-label">Consulting</div>
 
-        <a href="<?= APP_URL ?>/executive/consulting/dashboard.php"
+        <a href="<?= APP_URL ?>executive/consulting/dashboard.php"
         class="nav-item <?= isActiveExec('/executive/consulting/dashboard') ?>">
             <i class="fas fa-briefcase"></i><span>Consulting Dashboard</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/consulting/plans.php"
+        <a href="<?= APP_URL ?>executive/consulting/plans.php"
         class="nav-item <?= isActiveExec('/executive/consulting/plans') ?>">
             <i class="fas fa-tasks"></i><span>Work Plans</span>
         </a>
-        <a href="<?= APP_URL ?>/executive/consulting/create_plan.php"
+        <a href="<?= APP_URL ?>executive/consulting/create_plan.php"
         class="nav-item <?= isActiveExec('/executive/consulting/create_plan') ?>">
             <i class="fas fa-pencil-alt"></i><span>Create Plan</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/consulting/log_list.php"
+        <a href="<?= APP_URL ?>executive/consulting/log_list.php"
         class="nav-item <?= isActiveExec('/executive/consulting/log_list') ?>">
             <i class="fas fa-check-circle"></i><span>Log List</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/consulting/client_report.php"
+        <a href="<?= APP_URL ?>executive/consulting/client_report.php"
         class="nav-item <?= isActiveExec('/executive/consulting/client_report') ?>">
             <i class="fas fa-chart-line"></i><span>Client Reports</span>
         </a>
-        <a href="<?= APP_URL ?>/executive/consulting/staff_report.php"
+        <a href="<?= APP_URL ?>executive/consulting/staff_report.php"
         class="nav-item <?= isActiveExec('/executive/consulting/staff_report') ?>">
             <i class="fas fa-chart-bar"></i><span>Staff Reports</span>
         </a>
         <!-- ── Reports ── -->
         <div class="nav-section-label">Reports</div>
 
-        <a href="<?= APP_URL ?>/executive/reports/index.php"
+        <a href="<?= APP_URL ?>executive/reports/index.php"
             class="nav-item <?= isActiveExec('/executive/reports/index') ?>">
             <i class="fas fa-chart-pie"></i><span>Analytics Overview</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/reports/department_wise.php"
+        <a href="<?= APP_URL ?>executive/reports/department_wise.php"
             class="nav-item <?= isActiveExec('/executive/reports/department_wise') ?>">
             <i class="fas fa-layer-group"></i><span>Department-wise</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/reports/branch_wise.php"
+        <a href="<?= APP_URL ?>executive/reports/branch_wise.php"
             class="nav-item <?= isActiveExec('/executive/reports/branch_wise') ?>">
             <i class="fas fa-map-marker-alt"></i><span>Branch-wise</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/reports/staff_wise.php"
+        <a href="<?= APP_URL ?>executive/reports/staff_wise.php"
             class="nav-item <?= isActiveExec('/executive/reports/staff_wise') ?>">
             <i class="fas fa-chart-bar"></i><span>Staff Performance</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/reports/company_wise.php"
+        <a href="<?= APP_URL ?>executive/reports/company_wise.php"
             class="nav-item <?= isActiveExec('/executive/reports/company_wise') ?>">
             <i class="fas fa-sitemap"></i><span>Company Workflow</span>
         </a>
 
-        <a href="<?= APP_URL ?>/executive/reports/date_wise.php"
+        <a href="<?= APP_URL ?>executive/reports/date_wise.php"
             class="nav-item <?= isActiveExec('/executive/reports/date_wise') ?>">
             <i class="fas fa-calendar-alt"></i><span>Date Trends</span>
         </a>
-        <a href="<?= APP_URL ?>/executive/reports/summary.php" class="nav-item <?= isActiveExec('/executive/reports/summary') ?>">
+        <a href="<?= APP_URL ?>executive/reports/summary.php" class="nav-item <?= isActiveExec('/executive/reports/summary') ?>">
             <i class="fas fa-landmark"></i><span>Bank Summary</span>
         </a>
-        <a href="<?= APP_URL ?>/executive/reports/auditor_report.php"
+        <a href="<?= APP_URL ?>executive/reports/auditor_report.php"
             class="nav-item <?= isActiveExec('/executive/reports/auditor_report') ?>">
             <i class="fas fa-user-tie"></i>
             <span>Auditor Summary</span>

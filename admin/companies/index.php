@@ -217,10 +217,12 @@ include '../../includes/header.php';
                     <td>
                         <div class="d-flex gap-1 flex-wrap">
                             <!-- View Tasks -->
+                             <?php if($co['task_count'] > 0):?>
                             <a href="<?= APP_URL ?>/admin/tasks/index.php?company_id=<?= $co['id'] ?>"
                                class="btn btn-sm btn-outline-secondary" title="View Tasks">
                                 <i class="fas fa-tasks"></i>
                             </a>
+                                <?php endif;?>
                             <!-- View Company -->
                             <a href="view.php?id=<?= $co['id'] ?>"
                                class="btn btn-sm btn-outline-info" title="View Company">

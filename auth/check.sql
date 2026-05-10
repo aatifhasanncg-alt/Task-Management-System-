@@ -175,7 +175,8 @@ CREATE TABLE companies (
     FOREIGN KEY (branch_id) REFERENCES branches(id),
     FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE
 );
-
+ALTER TABLE companies
+MODIFY COLUMN return_type ENUM('D1','D2','D3','D4','N/A');
 -- Bank references & summary
 CREATE TABLE bank_references (
     id INT AUTO_INCREMENT PRIMARY KEY,

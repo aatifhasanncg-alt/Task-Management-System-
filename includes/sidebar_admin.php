@@ -153,7 +153,7 @@ function conNavActive(string $file, string $dir = ''): string
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">MISPro</div>
+            <div class="brand-name">TaskHub</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>
@@ -250,10 +250,10 @@ function conNavActive(string $file, string $dir = ''): string
             </a>
             <div class="nav-section-label">Management</div>
 
-            <a href="<?= APP_URL ?>/admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
+            <a href="<?= APP_URL ?>admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
                 <i class="fas fa-building"></i><span>Companies</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
+            <a href="<?= APP_URL ?>admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
                 <i class="fas fa-users"></i><span>Staff</span>
             </a>
             <!-- Office Work Section -->
@@ -279,16 +279,16 @@ function conNavActive(string $file, string $dir = ''): string
 
             <div class="nav-section-label">Main</div>
 
-            <a href="<?= APP_URL ?>/admin/dashboard/index.php" class="nav-item <?= isActive('/admin/dashboard') ?>">
+            <a href="<?= APP_URL ?>admin/dashboard/index.php" class="nav-item <?= isActive('/admin/dashboard') ?>">
                 <i class="fas fa-th-large"></i><span>Dashboard</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/profile/index.php" class="nav-item <?= isActive('/admin/profile') ?>">
+            <a href="<?= APP_URL ?>admin/profile/index.php" class="nav-item <?= isActive('/admin/profile') ?>">
                 <i class="fas fa-user"></i><span>My Profile</span>
             </a>
 
             <div class="nav-section-label">Tasks</div>
 
-            <a href="<?= APP_URL ?>/admin/tasks/index.php"
+            <a href="<?= APP_URL ?>admin/tasks/index.php"
                 class="nav-item <?= isActive('/admin/tasks/index') ?><?= isActive('/admin/tasks/view') ?><?= isActive('/admin/tasks/edit') ?>">
                 <i class="fas fa-list-check"></i>
                 <span>All Tasks</span>
@@ -298,34 +298,34 @@ function conNavActive(string $file, string $dir = ''): string
                     </span>
                 <?php endif; ?>
             </a>
-            <a href="<?= APP_URL ?>/admin/tasks/assign.php" class="nav-item <?= isActive('/admin/tasks/assign') ?>">
+            <a href="<?= APP_URL ?>admin/tasks/assign.php" class="nav-item <?= isActive('/admin/tasks/assign') ?>">
                 <i class="fas fa-plus-circle"></i><span>Assign Task</span>
             </a>
 
             <div class="nav-section-label">Management</div>
 
-            <a href="<?= APP_URL ?>/admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
+            <a href="<?= APP_URL ?>admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
                 <i class="fas fa-building"></i><span>Companies</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
+            <a href="<?= APP_URL ?>admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
                 <i class="fas fa-users"></i><span>Staff</span>
             </a>
 
             <div class="nav-section-label">Reports</div>
 
-            <a href="<?= APP_URL ?>/admin/reports/department_wise.php"
+            <a href="<?= APP_URL ?>admin/reports/department_wise.php"
                 class="nav-item <?= isActive('/admin/reports/department_wise') ?>">
                 <i class="fas fa-layer-group"></i><span>Department Wise</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/reports/staff_wise.php"
+            <a href="<?= APP_URL ?>admin/reports/staff_wise.php"
                 class="nav-item <?= isActive('/admin/reports/staff_wise') ?>">
                 <i class="fas fa-user-check"></i><span>Staff Wise</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/reports/company_workflow.php"
+            <a href="<?= APP_URL ?>admin/reports/company_workflow.php"
                 class="nav-item <?= isActive('/admin/reports/company_workflow') ?>">
                 <i class="fas fa-diagram-project"></i><span>Company Workflow</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/reports/bank_summary.php"
+            <a href="<?= APP_URL ?>admin/reports/bank_summary.php"
                 class="nav-item <?= isActive('/admin/reports/bank_summary') ?>">
                 <i class="fas fa-landmark"></i><span>Bank Summary</span>
             </a>
@@ -389,16 +389,16 @@ function conNavActive(string $file, string $dir = ''): string
 
             <div class="nav-section-label">Main</div>
 
-            <a href="<?= APP_URL ?>/admin/dashboard/index.php" class="nav-item <?= isActive('/admin/dashboard') ?>">
+            <a href="<?= APP_URL ?>admin/dashboard/index.php" class="nav-item <?= isActive('/admin/dashboard') ?>">
                 <i class="fas fa-th-large"></i><span>Dashboard</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/profile/index.php" class="nav-item <?= isActive('/admin/profile') ?>">
+            <a href="<?= APP_URL ?>admin/profile/index.php" class="nav-item <?= isActive('/admin/profile') ?>">
                 <i class="fas fa-user"></i><span>My Profile</span>
             </a>
 
             <div class="nav-section-label">Tasks</div>
 
-            <a href="<?= APP_URL ?>/admin/tasks/index.php"
+            <a href="<?= APP_URL ?>admin/tasks/index.php"
                 class="nav-item <?= isActive('/admin/tasks/index') ?><?= isActive('/admin/tasks/view') ?><?= isActive('/admin/tasks/edit') ?>">
                 <i class="fas fa-list-check"></i>
                 <span>All Tasks</span>
@@ -408,27 +408,27 @@ function conNavActive(string $file, string $dir = ''): string
                     </span>
                 <?php endif; ?>
             </a>
-            <a href="<?= APP_URL ?>/admin/tasks/assign.php" class="nav-item <?= isActive('/admin/tasks/assign') ?>">
+            <a href="<?= APP_URL ?>admin/tasks/assign.php" class="nav-item <?= isActive('/admin/tasks/assign') ?>">
                 <i class="fas fa-plus-circle"></i><span>Assign Task</span>
             </a>
 
             <div class="nav-section-label">Management</div>
 
-            <a href="<?= APP_URL ?>/admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
+            <a href="<?= APP_URL ?>admin/companies/index.php" class="nav-item <?= isActive('/admin/companies') ?>">
                 <i class="fas fa-building"></i><span>Companies</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
+            <a href="<?= APP_URL ?>admin/staff/index.php" class="nav-item <?= isActive('/admin/staff') ?>">
                 <i class="fas fa-users"></i><span>Staff</span>
             </a>
 
             <div class="nav-section-label">Analytics</div>
 
-            <a href="<?= APP_URL ?>/admin/reports/index.php" class="nav-item <?= isActive('/admin/reports/index') ?>">
+            <a href="<?= APP_URL ?>admin/reports/index.php" class="nav-item <?= isActive('/admin/reports/index') ?>">
                 <i class="fas fa-chart-bar"></i><span>Reports</span>
             </a>
 
             <?php if ($__deptCode === 'BANK'): ?>
-                <a href="<?= APP_URL ?>/admin/banking/summary.php" class="nav-item <?= isActive('/banking/summary') ?>">
+                <a href="<?= APP_URL ?>admin/banking/summary.php" class="nav-item <?= isActive('/banking/summary') ?>">
                     <i class="fas fa-landmark"></i><span>Bank Summary</span>
                 </a>
             <?php endif; ?>
@@ -502,11 +502,11 @@ function conNavActive(string $file, string $dir = ''): string
         <!-- ── User-id=2 Tax section (always shown regardless of dept) ── -->
         <?php if ($__userId == 2): ?>
             <div class="nav-section-label">Tax</div>
-            <a href="<?= APP_URL ?>/admin/reports/tax_staff.php"
+            <a href="<?= APP_URL ?>admin/reports/tax_staff.php"
                 class="nav-item <?= isActive('/admin/reports/tax_staff') ?>">
                 <i class="fas fa-user-tie"></i><span>Tax Staff</span>
             </a>
-            <a href="<?= APP_URL ?>/admin/reports/tax_task.php" class="nav-item <?= isActive('/admin/reports/tax_task') ?>">
+            <a href="<?= APP_URL ?>admin/reports/tax_task.php" class="nav-item <?= isActive('/admin/reports/tax_task') ?>">
                 <i class="fas fa-file-invoice-dollar"></i><span>Tax Task</span>
             </a>
         <?php endif; ?>
