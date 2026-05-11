@@ -247,7 +247,7 @@ if ($isBranchManager) {
 }
 $allStaff = $staffQuery->fetchAll();
 
-$allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
+$allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 AND dept_code NOT IN ('CON','CORE') ORDER BY dept_name")->fetchAll();
 
 // ── Status tab counts ─────────────────────────────────────────────────────────
 $allStatuses = $db->query("

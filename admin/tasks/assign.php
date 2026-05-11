@@ -48,7 +48,7 @@ $hasCrossDeptAccess = !empty($crossDepts) && !$isBranchManager && !isExecutive()
 
 // ── Dropdowns ─────────────────────────────────────────────────────────────
 if (isExecutive()) {
-    $depts = $db->query("SELECT * FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
+    $depts = $db->query("SELECT * FROM departments WHERE is_active=1 AND dept_code NOT IN ('CON','CORE') ORDER BY dept_name")->fetchAll();
     $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
     $companies = $db->query("
         SELECT id, company_name,
@@ -61,7 +61,7 @@ if (isExecutive()) {
     // Branch Manager: can pick ANY dept, but branch is locked to theirs
     $depts = $db->query("
         SELECT * FROM departments 
-        WHERE is_active=1 AND dept_name != 'Core Admin' 
+        WHERE is_active=1 AND dept_code NOT IN ('CON','CORE')
         ORDER BY dept_name
     ")->fetchAll();
     $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
@@ -110,6 +110,7 @@ if (isExecutive()) {
             CASE WHEN d.id = ? THEN 1 ELSE 0 END AS is_own_dept
         FROM departments d
         WHERE d.is_active = 1
+          AND d.dept_code NOT IN ('CON','CORE')
           AND (
               d.id = ?
               OR d.id IN (

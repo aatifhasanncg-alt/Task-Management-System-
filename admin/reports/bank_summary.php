@@ -150,9 +150,7 @@ include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
 <?php
-if ($userRole === 'executive') include '../../includes/sidebar_executive.php';
-elseif ($userRole === 'admin') include '../../includes/sidebar_admin.php';
-else                           include '../../includes/sidebar_staff.php';
+include '../../includes/sidebar_admin.php';
 ?>
 <div class="main-content">
 <?php include '../../includes/topbar.php'; ?>

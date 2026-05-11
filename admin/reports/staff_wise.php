@@ -40,7 +40,7 @@ $selfId = $user['id'];
 $userWhere  = [];
 $userParams = [];
 
-$userWhere[] = "u.is_active = 1";
+$userWhere[] = "(d.dept_code IS NULL OR d.dept_code NOT IN ('CON'))";
 
 if (isExecutive()) {
     if ($filterBranch) { $userWhere[] = 'u.branch_id = ?';     $userParams[] = $filterBranch; }
@@ -50,16 +50,33 @@ if (isExecutive()) {
     $userWhere[]  = 'u.branch_id = ?';
     $userParams[] = $adminBranchId;
     $userWhere[]  = "(d.dept_code IS NULL OR d.dept_code != 'CORE')";
-    if ($filterDept) { $userWhere[] = 'u.department_id = ?'; $userParams[] = $filterDept; }
+    if ($filterDept) {
+        // Include staff whose primary dept OR UDA dept matches the filter
+        $userWhere[] = "(u.department_id = ? OR EXISTS (
+            SELECT 1 FROM user_department_assignments uda_bm
+            WHERE uda_bm.user_id = u.id AND uda_bm.department_id = ?
+        ))";
+        $userParams[] = $filterDept;
+        $userParams[] = $filterDept;
+    }
 } else {
     $userWhere[]  = 'u.branch_id = ?';
     $userParams[] = $adminBranchId;
     if (!empty($udaDeptIds)) {
         $placeholders = implode(',', array_fill(0, count($udaDeptIds), '?'));
-        $userWhere[]  = "u.department_id IN ($placeholders)";
+        // Include staff whose PRIMARY dept OR UDA dept is in accessible list
+        $userWhere[]  = "(u.department_id IN ($placeholders) OR EXISTS (
+            SELECT 1 FROM user_department_assignments uda2
+            WHERE uda2.user_id = u.id AND uda2.department_id IN ($placeholders)
+        ))";
         foreach ($udaDeptIds as $did) $userParams[] = $did;
+        foreach ($udaDeptIds as $did) $userParams[] = $did; // twice for both IN()
     } else {
-        $userWhere[]  = 'u.department_id = ?';
+        $userWhere[]  = '(u.department_id = ? OR EXISTS (
+            SELECT 1 FROM user_department_assignments uda2
+            WHERE uda2.user_id = u.id AND uda2.department_id = ?
+        ))';
+        $userParams[] = $adminDeptId;
         $userParams[] = $adminDeptId;
     }
 }
@@ -83,8 +100,9 @@ foreach ($allStatuses as $st) {
 // Modified staff query to include both admins and staff
 $staffStmt = $db->prepare("
     SELECT u.id, u.full_name, u.employee_id,
+           u.department_id,
            b.branch_name, d.dept_name, d.color AS dept_color, r.role_name,
-           COUNT(t.id)                                                 AS total,
+           COUNT(DISTINCT t.id)                                        AS total,
            SUM(CASE WHEN ts.status_name='Done' THEN 1 ELSE 0 END)    AS done,
            SUM(CASE WHEN t.due_date < CURDATE()
                AND ts.status_name != 'Done' THEN 1 ELSE 0 END)       AS overdue,
@@ -98,6 +116,17 @@ $staffStmt = $db->prepare("
         ON  t.assigned_to = u.id
         AND t.is_active   = 1
         AND t.created_at BETWEEN ? AND ?
+        AND (
+            t.department_id = u.department_id
+            OR EXISTS (
+                SELECT 1 FROM user_department_assignments uda_t
+                WHERE uda_t.user_id = u.id
+                  AND uda_t.department_id = t.department_id
+                  AND uda_t.department_id NOT IN (
+                      SELECT id FROM departments WHERE dept_code IN ('CON','CORE')
+                  )
+            )
+        )
     LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE ({$uwStr} OR u.id = ?)
     GROUP BY u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name, d.color, r.role_name
@@ -111,7 +140,27 @@ $staffStmt->execute(array_merge(
     [$selfId]
 ));
 $staffReport = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
-
+// Prefetch UDA extra depts for all staff — avoids N+1
+$allStaffIds = array_column($staffReport, 'id');
+$udaMap = [];
+if (!empty($allStaffIds)) {
+    $inPh = implode(',', array_fill(0, count($allStaffIds), '?'));
+    $udaPre = $db->prepare("
+        SELECT uda.user_id, d.dept_name, d.color
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        JOIN users u ON u.id = uda.user_id
+        WHERE uda.user_id IN ({$inPh})
+          AND uda.department_id != u.department_id
+          AND d.dept_code NOT IN ('CON','CORE')
+          AND d.is_active = 1
+        ORDER BY uda.user_id, d.dept_name
+    ");
+    $udaPre->execute($allStaffIds);
+    foreach ($udaPre->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $udaMap[$row['user_id']][] = $row;
+    }
+}
 
 $totalStaff = count($staffReport);
 $totalTasks = array_sum(array_column($staffReport, 'total'));
@@ -129,7 +178,7 @@ foreach ($staffReport as $s) {
         $topPct = $pct;
     }
 }
-$allDepts    = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 AND dept_code != 'CORE' ORDER BY dept_name")->fetchAll();
+$allDepts    = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 AND dept_code NOT IN ('CON','CORE') ORDER BY dept_name")->fetchAll();
 $allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 
 include '../../includes/header.php';
@@ -360,24 +409,34 @@ include '../../includes/header.php';
                                         </div>
                                     </td>
                                     <td>
-    <?php
-    $role = strtolower($s['role_name'] ?? 'unknown');
-    $roleClass = 'role-default';
+                                        <?php
+                                        $role = strtolower($s['role_name'] ?? 'unknown');
+                                        $roleClass = 'role-default';
 
-    if ($role === 'admin') $roleClass = 'role-admin';
-    elseif ($role === 'executive') $roleClass = 'role-executive';
-    elseif ($role === 'staff') $roleClass = 'role-staff';
-    elseif (str_contains($role, 'branch')) $roleClass = 'role-branch_manager';
-    ?>
+                                        if ($role === 'admin') $roleClass = 'role-admin';
+                                        elseif ($role === 'executive') $roleClass = 'role-executive';
+                                        elseif ($role === 'staff') $roleClass = 'role-staff';
+                                        elseif (str_contains($role, 'branch')) $roleClass = 'role-branch_manager';
+                                        ?>
 
-    <span class="role-badge <?= $roleClass ?>">
-        <?= htmlspecialchars($s['role_name'] ?? 'Unknown') ?>
-    </span>
-</td>
+                                        <span class="role-badge <?= $roleClass ?>">
+                                            <?= htmlspecialchars($s['role_name'] ?? 'Unknown') ?>
+                                        </span>
+                                    </td>
                                     <td>
                                         <span
                                             style="font-size:.73rem;background:<?= htmlspecialchars($s['dept_color'] ?? '#ccc') ?>22;color:<?= htmlspecialchars($s['dept_color'] ?? '#666') ?>;padding:.2rem .55rem;border-radius:99px;display:inline-block;margin-bottom:.2rem;"><?= htmlspecialchars($s['dept_name'] ?? '—') ?></span>
-                                        <div style="font-size:.68rem;color:#9ca3af;">
+                                        <?php foreach (($udaMap[$s['id']] ?? []) as $ux): ?>
+                                            <span style="font-size:.65rem;
+                                                         background:<?= htmlspecialchars($ux['color'] ?? '#ccc') ?>22;
+                                                         color:<?= htmlspecialchars($ux['color'] ?? '#666') ?>;
+                                                         padding:.15rem .4rem;border-radius:99px;
+                                                         display:inline-block;margin-top:.1rem;
+                                                         border:1px dashed <?= htmlspecialchars($ux['color'] ?? '#ccc') ?>66;">
+                                                +<?= htmlspecialchars($ux['dept_name']) ?>
+                                            </span>
+                                        <?php endforeach; ?>
+                                        <div style="font-size:.68rem;color:#9ca3af;margin-top:.15rem;">
                                             <?= htmlspecialchars(strtok($s['branch_name'] ?? '—', ' ')) ?>
                                         </div>
                                     </td>

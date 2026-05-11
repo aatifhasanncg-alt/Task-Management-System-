@@ -57,7 +57,7 @@ $deptStmt = $db->prepare("
         {$branchFilter}
         {$deptFilter}
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE d.is_active = 1 AND d.dept_name != 'Core Admin'
+    WHERE d.is_active = 1 AND d.dept_code NOT IN ('CON','CORE')
     GROUP BY d.id, d.dept_name, d.color, d.icon
     ORDER BY total DESC
 ");

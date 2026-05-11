@@ -179,10 +179,10 @@ include '../../includes/header.php';
         display: block;
     }
     /* ADD inside the existing <style> tag: */
-.rt-table td { max-width: 0; }
-.rt-table td:first-child { max-width: none; }
-.rt-table td:last-child  { max-width: none; }
-</style>
+    .rt-table td { max-width: 0; }
+    .rt-table td:first-child { max-width: none; }
+    .rt-table td:last-child  { max-width: none; }
+    </style>
 
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>

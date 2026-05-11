@@ -663,10 +663,10 @@ include '../../includes/header.php';
                                 </div>
                             <?php endforeach; ?>
                         </div>
-                        <?php if ($selClient['field_staff_name']): ?>
+                        <?php if ($selClient['field_staff_names']): ?>
                             <div style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
                                 <i class="fas fa-user-friends me-1 text-warning"></i>
-                                <strong>Staff involved:</strong> <?= htmlspecialchars($selClient['field_staff_name']) ?>
+                                <strong>Staff involved:</strong> <?= htmlspecialchars($selClient['field_staff_names']) ?>
                             </div>
                         <?php endif; ?>
                     </div>

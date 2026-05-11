@@ -12,13 +12,8 @@ $toDate       = $_GET['to']        ?? date('Y-m-d');
 $filterDept   = (int)($_GET['dept_id']   ?? 0);
 $filterBranch = (int)($_GET['branch_id'] ?? 0);
 
-$where  = ['t.created_at BETWEEN ? AND ?', 't.is_active = 1'];
-$params = [$fromDate . ' 00:00:00', $toDate . ' 23:59:59'];
-
-if ($filterDept)   { $where[] = 'u.department_id = ?'; $params[] = $filterDept; }
-if ($filterBranch) { $where[] = 'u.branch_id = ?';     $params[] = $filterBranch; }
-
-$ws = implode(' AND ', $where);
+// $ws no longer used for staff query; kept for compatibility if used elsewhere
+$ws = 't.created_at BETWEEN ? AND ? AND t.is_active = 1';
 
 // Fetch all task statuses for dynamic status columns
 $allStatuses = $db->query("
@@ -37,10 +32,18 @@ foreach ($allStatuses as $st) {
     $sumCols .= "SUM(CASE WHEN ts.status_name = '{$escaped}' THEN 1 ELSE 0 END) AS `status_{$safe}`,\n";
 }
 
+// Build dept filter for WHERE (excluding CON dept)
+$deptExcludeStr = '';
+if ($filterDept) {
+    // filterDept applied via $ws already through u.department_id,
+    // but we also need UDA match — handled in JOIN below
+}
+
 $staffStmt = $db->prepare("
-    SELECT u.id, u.full_name, u.employee_id,
+        SELECT u.id, u.full_name, u.employee_id,
+           u.department_id,
            b.branch_name, d.dept_name, d.color AS dept_color,
-           COUNT(t.id)                                            AS total,
+           COUNT(DISTINCT t.id)                                       AS total,
            SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END) AS done,
            SUM(CASE WHEN t.due_date < CURDATE()
                AND ts.status_name != 'Done'      THEN 1 ELSE 0 END) AS overdue,
@@ -50,15 +53,65 @@ $staffStmt = $db->prepare("
     LEFT JOIN roles r        ON r.id  = u.role_id
     LEFT JOIN branches b     ON b.id  = u.branch_id
     LEFT JOIN departments d  ON d.id  = u.department_id
-    LEFT JOIN tasks t        ON t.assigned_to = u.id AND {$ws}
+    LEFT JOIN tasks t
+        ON  t.assigned_to = u.id
+        AND t.is_active   = 1
+        AND t.created_at BETWEEN ? AND ?
+        AND (
+            t.department_id = u.department_id
+            OR EXISTS (
+                SELECT 1 FROM user_department_assignments uda_ex
+                WHERE uda_ex.user_id = u.id
+                  AND uda_ex.department_id = t.department_id
+                  AND uda_ex.department_id NOT IN (
+                      SELECT id FROM departments WHERE dept_code = 'CON'
+                  )
+            )
+        )
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE r.role_name = 'staff' AND u.is_active = 1
+    WHERE r.role_name IN ('staff','admin')
+      AND u.is_active = 1
+      AND (dept_code IS NULL OR dept_code NOT IN ('CON','CORE'))
+      " . ($filterDept ? "AND (u.department_id = ? OR EXISTS (
+          SELECT 1 FROM user_department_assignments uda_f
+          WHERE uda_f.user_id = u.id AND uda_f.department_id = ?
+          AND uda_f.department_id NOT IN (SELECT id FROM departments WHERE dept_code='CON')
+      ))" : "") . "
+      " . ($filterBranch ? "AND u.branch_id = ?" : "") . "
     GROUP BY u.id, u.full_name, u.employee_id,
              b.branch_name, d.dept_name, d.color
     ORDER BY done DESC, total DESC
 ");
-$staffStmt->execute($params);
+
+// Build params: date range first (for JOIN), then filters
+$execParams = [$fromDate . ' 00:00:00', $toDate . ' 23:59:59'];
+if ($filterDept)   { $execParams[] = $filterDept; $execParams[] = $filterDept; }
+if ($filterBranch) { $execParams[] = $filterBranch; }
+
+$staffStmt->execute($execParams);
 $staffReport = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
+// Prefetch UDA extra depts for all staff — avoids N+1 in the table loop
+$allStaffIds = array_column($staffReport, 'id');
+$udaMap = [];
+if (!empty($allStaffIds)) {
+    $inPh = implode(',', array_fill(0, count($allStaffIds), '?'));
+    $udaPre = $db->prepare("
+        SELECT uda.user_id, d.dept_name, d.color
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        JOIN users u ON u.id = uda.user_id
+        WHERE uda.user_id IN ({$inPh})
+          AND uda.department_id != u.department_id
+          AND d.dept_code NOT IN ('CON','CORE')
+          AND d.is_active = 1
+        ORDER BY uda.user_id, d.dept_name
+    ");
+    $udaPre->execute($allStaffIds);
+    foreach ($udaPre->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $udaMap[$row['user_id']][] = $row;
+    }
+}
+
 
 // Summary stats
 $totalStaff    = count($staffReport);
@@ -344,7 +397,17 @@ include '../../includes/header.php';
                                      display:inline-block;margin-bottom:.2rem;">
                             <?= htmlspecialchars($s['dept_name'] ?? '—') ?>
                         </span>
-                        <div style="font-size:.68rem;color:#9ca3af;">
+                        <?php foreach (($udaMap[$s['id']] ?? []) as $ux): ?>
+                            <span style="font-size:.65rem;
+                                         background:<?= htmlspecialchars($ux['color'] ?? '#ccc') ?>22;
+                                         color:<?= htmlspecialchars($ux['color'] ?? '#666') ?>;
+                                         padding:.15rem .4rem;border-radius:99px;
+                                         display:inline-block;margin-top:.1rem;
+                                         border:1px dashed <?= htmlspecialchars($ux['color'] ?? '#ccc') ?>66;">
+                                +<?= htmlspecialchars($ux['dept_name']) ?>
+                            </span>
+                        <?php endforeach; ?>
+                        <div style="font-size:.68rem;color:#9ca3af;margin-top:.15rem;">
                             <?= htmlspecialchars(strtok($s['branch_name'] ?? '—', ' ')) ?>
                         </div>
                     </td>
