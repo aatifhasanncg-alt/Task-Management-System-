@@ -4,7 +4,7 @@ require_once '../../config/config.php';
 require_once '../../config/session.php';
 requireAdmin();
 
-$db   = getDB();
+$db = getDB();
 $user = currentUser();
 $pageTitle = 'Reports';
 
@@ -17,27 +17,60 @@ $adminStmt = $db->prepare("
     WHERE u.id = ?
 ");
 $adminStmt->execute([$user['id']]);
-$adminUser       = $adminStmt->fetch();
-$adminBranchId   = (int)($adminUser['branch_id']     ?? 0);
-$adminDeptId     = (int)($adminUser['department_id'] ?? 0);
+$adminUser = $adminStmt->fetch();
+$adminBranchId = (int) ($adminUser['branch_id'] ?? 0);
+$adminDeptId = (int) ($adminUser['department_id'] ?? 0);
 $isCoreAdminDept = (($adminUser['dept_code'] ?? '') === 'CORE');
-$deptColor       = $adminUser['dept_color'] ?: '#c9a84c';
+$deptColor = $adminUser['dept_color'] ?: '#c9a84c';
 
 // ── Active tab ────────────────────────────────────────────────────────────────
 $activeTab = $_GET['tab'] ?? 'dept';   // dept | self | allbranch
 
 // ── Branch access control ─────────────────────────────────────────────────────
-$userBranchLower  = strtolower(trim($adminUser['branch_name'] ?? ''));
-$canSeeAllBranch  = str_contains($userBranchLower, 'head office')
-                 || str_contains($userBranchLower, 'hetauda');
+$userBranchLower = strtolower(trim($adminUser['branch_name'] ?? ''));
+$canSeeAllBranch = str_contains($userBranchLower, 'head office')
+    || str_contains($userBranchLower, 'hetauda');
 
 // ── Filters ───────────────────────────────────────────────────────────────────
-$fromDate     = $_GET['from']           ?? date('Y-m-01');
-$toDate       = $_GET['to']             ?? date('Y-m-d');
+$fromDate = $_GET['from'] ?? date('Y-m-01');
+$toDate = $_GET['to'] ?? date('Y-m-d');
 $employeeName = trim($_GET['employee_name'] ?? '');
-$dateFrom     = $fromDate . ' 00:00:00';
-$dateTo       = $toDate   . ' 23:59:59';
+$filterReportDept = (int) ($_GET['report_dept'] ?? 0);
+$dateFrom = $fromDate . ' 00:00:00';
+$dateTo = $toDate . ' 23:59:59';
+// ── UDA dept tabs for report staff table ──────────────────────────────────────
+$reportDeptTabs = [];
+$activeReportDeptTab = $adminDeptId;
+if (!$isCoreAdminDept) {
+    $rptUdaStmt = $db->prepare("
+        SELECT d.id, d.dept_name, d.color
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id = ?
+        ORDER BY d.dept_name
+    ");
+    $rptUdaStmt->execute([$user['id']]);
+    $rptUdaDepts = $rptUdaStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    $rptPrimaryStmt = $db->prepare("SELECT id, dept_name, color FROM departments WHERE id = ?");
+    $rptPrimaryStmt->execute([$adminDeptId]);
+    $rptPrimary = $rptPrimaryStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($rptPrimary) {
+        $reportDeptTabs[] = array_merge($rptPrimary, ['is_primary' => true]);
+    }
+    foreach ($rptUdaDepts as $rdt) {
+        if ($rdt['id'] != $adminDeptId) {
+            $reportDeptTabs[] = array_merge($rdt, ['is_primary' => false]);
+        }
+    }
+
+    $activeReportDeptTab = (int) ($_GET['rpt_dept'] ?? $adminDeptId);
+    $validRptIds = array_column($reportDeptTabs, 'id');
+    if (!in_array($activeReportDeptTab, $validRptIds)) {
+        $activeReportDeptTab = $adminDeptId;
+    }
+}
 // ── Statuses ──────────────────────────────────────────────────────────────────
 $allStatuses = $db->query("
     SELECT id, status_name, color, bg_color, icon
@@ -69,9 +102,12 @@ $scopeWhere = '(
     OR t.assigned_to = ?
 )';
 $scopeParams = [
-    $adminBranchId, $adminDeptId,
-    $adminDeptId,   $adminDeptId,
-    $user['id'],    $user['id'],
+    $adminBranchId,
+    $adminDeptId,
+    $adminDeptId,
+    $adminDeptId,
+    $user['id'],
+    $user['id'],
 ];
 
 // ════════════════════════════════════════════════════════════════════════
@@ -89,11 +125,14 @@ $statusStmt = $db->prepare("
     GROUP BY ts.id, ts.status_name ORDER BY ts.id
 ");
 $statusStmt->execute(array_merge($scopeParams, [$dateFrom, $dateTo]));
-$statusReport    = array_column($statusStmt->fetchAll(), 'cnt', 'status');
-$totalDeptTasks  = array_sum($statusReport);
-$doneCount       = 0;
+$statusReport = array_column($statusStmt->fetchAll(), 'cnt', 'status');
+$totalDeptTasks = array_sum($statusReport);
+$doneCount = 0;
 foreach ($statusMeta as $sn => $sm) {
-    if (strtolower($sn) === 'done') { $doneCount = $statusReport[$sn] ?? 0; break; }
+    if (strtolower($sn) === 'done') {
+        $doneCount = $statusReport[$sn] ?? 0;
+        break;
+    }
 }
 $completionRate = $totalDeptTasks ? round(($doneCount / $totalDeptTasks) * 100) : 0;
 
@@ -104,33 +143,42 @@ try {
         JOIN tasks t ON t.id=tw.task_id AND t.is_active=1 AND t.branch_id=?
         WHERE tw.action='transferred_dept' AND tw.to_dept_id=? AND tw.created_at BETWEEN ? AND ?");
     $tIn->execute([$adminBranchId, $adminDeptId, $dateFrom, $dateTo]);
-    $transferIn = (int)$tIn->fetchColumn();
+    $transferIn = (int) $tIn->fetchColumn();
 
     $tOut = $db->prepare("SELECT COUNT(DISTINCT tw.task_id) FROM task_workflow tw
         JOIN tasks t ON t.id=tw.task_id AND t.is_active=1 AND t.branch_id=?
         WHERE tw.action='transferred_dept' AND tw.from_dept_id=? AND tw.created_at BETWEEN ? AND ?");
     $tOut->execute([$adminBranchId, $adminDeptId, $dateFrom, $dateTo]);
-    $transferOut = (int)$tOut->fetchColumn();
-} catch (Exception $e) {}
+    $transferOut = (int) $tOut->fetchColumn();
+} catch (Exception $e) {
+}
 
 // Staff performance (dept tab) — same branch + dept
 $statusCols = '';
 foreach ($allStatuses as $st) {
-    $safe   = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+    $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
     $quoted = $db->quote($st['status_name']);
     $statusCols .= "SUM(CASE WHEN ut.status_name = {$quoted} THEN 1 ELSE 0 END) AS `{$safe}`,\n        ";
 }
 
-$nameWhere  = '';
+$nameWhere = '';
 $nameParams = [];
 if ($employeeName) {
-    $nameWhere    = 'AND u.full_name LIKE ?';
+    $nameWhere .= ' AND u.full_name LIKE ?';
     $nameParams[] = "%{$employeeName}%";
 }
+if ($filterReportDept) {
+    $nameWhere .= ' AND (u.department_id = ? OR EXISTS (SELECT 1 FROM user_department_assignments uda WHERE uda.user_id=u.id AND uda.department_id=?))';
+    $nameParams[] = $filterReportDept;
+    $nameParams[] = $filterReportDept;
+}
+// Use active tab dept if set, else primary dept
+$reportActiveDept = $activeReportDeptTab ?: $adminDeptId;
+
 $staffParams = array_merge(
-    [$adminBranchId, $adminDeptId, $dateFrom, $dateTo],
-    [$adminBranchId, $adminDeptId, $dateFrom, $dateTo],
-    [$adminBranchId, $adminDeptId, $adminDeptId],
+    [$adminBranchId, $reportActiveDept, $dateFrom, $dateTo],
+    [$adminBranchId, $reportActiveDept, $dateFrom, $dateTo],
+    [$adminBranchId, $reportActiveDept, $reportActiveDept],
     $nameParams
 );
 
@@ -188,7 +236,7 @@ if (!empty($staffReport)) {
 
 $selfStatusCols = '';
 foreach ($allStatuses as $st) {
-    $safe   = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+    $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
     $quoted = $db->quote($st['status_name']);
     $selfStatusCols .= "SUM(CASE WHEN ts.status_name = {$quoted} THEN 1 ELSE 0 END) AS `{$safe}`,\n        ";
 }
@@ -227,9 +275,9 @@ $selfTaskStmt = $db->prepare("
 $selfTaskStmt->execute([$user['id'], $adminDeptId, $dateFrom, $dateTo]);
 $selfTasks = $selfTaskStmt->fetchAll();
 
-$selfTotal      = (int)($selfStats['total'] ?? 0);
-$selfDoneKey    = $doneKey;
-$selfDone       = (int)($selfStats[$selfDoneKey] ?? 0);
+$selfTotal = (int) ($selfStats['total'] ?? 0);
+$selfDoneKey = $doneKey;
+$selfDone = (int) ($selfStats[$selfDoneKey] ?? 0);
 $selfCompletion = $selfTotal > 0 ? round(($selfDone / $selfTotal) * 100) : 0;
 
 // ════════════════════════════════════════════════════════════════════════
@@ -238,11 +286,16 @@ $selfCompletion = $selfTotal > 0 ? round(($selfDone / $selfTotal) * 100) : 0;
 
 $allBranchStatusCols = $statusCols; // reuse same cols
 
-$allBranchNameWhere  = '';
+$allBranchNameWhere = '';
 $allBranchNameParams = [];
 if ($employeeName) {
-    $allBranchNameWhere    = 'AND u.full_name LIKE ?';
+    $allBranchNameWhere .= ' AND u.full_name LIKE ?';
     $allBranchNameParams[] = "%{$employeeName}%";
+}
+if ($filterReportDept) {
+    $allBranchNameWhere .= ' AND (u.department_id = ? OR EXISTS (SELECT 1 FROM user_department_assignments uda WHERE uda.user_id=u.id AND uda.department_id=?))';
+    $allBranchNameParams[] = $filterReportDept;
+    $allBranchNameParams[] = $filterReportDept;
 }
 
 // Scope for all branches: dept only (no branch restriction)
@@ -264,11 +317,14 @@ $abStatusStmt = $db->prepare("
     GROUP BY ts.id, ts.status_name ORDER BY ts.id
 ");
 $abStatusStmt->execute(array_merge($allBranchScopeParams, [$dateFrom, $dateTo]));
-$abStatusReport   = array_column($abStatusStmt->fetchAll(), 'cnt', 'status');
-$abTotalTasks     = array_sum($abStatusReport);
-$abDoneCount      = 0;
+$abStatusReport = array_column($abStatusStmt->fetchAll(), 'cnt', 'status');
+$abTotalTasks = array_sum($abStatusReport);
+$abDoneCount = 0;
 foreach ($statusMeta as $sn => $sm) {
-    if (strtolower($sn) === 'done') { $abDoneCount = $abStatusReport[$sn] ?? 0; break; }
+    if (strtolower($sn) === 'done') {
+        $abDoneCount = $abStatusReport[$sn] ?? 0;
+        break;
+    }
 }
 $abCompletionRate = $abTotalTasks ? round(($abDoneCount / $abTotalTasks) * 100) : 0;
 
@@ -326,10 +382,10 @@ $abStaffReport = $abStaffStmt->fetchAll();
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function donut(int $pct, string $color, int $size = 42): string
 {
-    $r    = ($size / 2) - 5;
+    $r = ($size / 2) - 5;
     $circ = round(2 * M_PI * $r, 2);
     $dash = round($circ * $pct / 100, 2);
-    $cx   = $size / 2;
+    $cx = $size / 2;
     return <<<SVG
 <svg width="{$size}" height="{$size}" viewBox="0 0 {$size} {$size}">
   <circle cx="{$cx}" cy="{$cx}" r="{$r}" fill="none" stroke="#f3f4f6" stroke-width="4"/>
@@ -359,7 +415,7 @@ function staffTable(array $staffReport, array $allStatuses, ?string $doneKey, st
                 <tr>
                     <th style="min-width:160px;">Staff Member</th>
                     <?php if ($showBranch): ?>
-                    <th style="min-width:90px;font-size:.65rem;">Branch</th>
+                        <th style="min-width:90px;font-size:.65rem;">Branch</th>
                     <?php endif; ?>
                     <th class="text-center" style="width:52px;">Total</th>
                     <?php foreach ($allStatuses as $st):
@@ -377,87 +433,89 @@ function staffTable(array $staffReport, array $allStatuses, ?string $doneKey, st
             </thead>
             <tbody>
                 <?php foreach ($staffReport as $idx => $s):
-                    $doneCnt = (int)($s[$doneKey] ?? 0);
+                    $doneCnt = (int) ($s[$doneKey] ?? 0);
                     $donePct = $s['total'] > 0 ? round(($doneCnt / $s['total']) * 100) : 0;
-                    $xferIn  = (int)($s['transferred_in_count'] ?? 0);
-                    $origCnt = (int)($s['original_count']      ?? 0);
-                    $grandTotal += (int)$s['total'];
-                    $grandXfer  += $xferIn;
-                    $grandOrig  += $origCnt;
+                    $xferIn = (int) ($s['transferred_in_count'] ?? 0);
+                    $origCnt = (int) ($s['original_count'] ?? 0);
+                    $grandTotal += (int) $s['total'];
+                    $grandXfer += $xferIn;
+                    $grandOrig += $origCnt;
                     $odd = $idx % 2 === 0;
-                ?>
-                <tr style="<?= $odd ? '' : 'background:#fafafa;' ?>">
-                    <td>
-                        <div class="d-flex align-items-center gap-2">
-                            <div class="avatar-circle avatar-sm flex-shrink-0"
-                                 style="width:30px;height:30px;font-size:.65rem;background:<?= $deptColor ?>22;color:<?= $deptColor ?>;">
-                                <?= strtoupper(substr($s['full_name'] ?? '?', 0, 2)) ?>
-                            </div>
-                            <div>
-                                <div style="font-weight:600;font-size:.85rem;color:#1f2937;">
-                                    <?= htmlspecialchars($s['full_name'] ?? '—') ?>
-                                </div>
-                                <div style="font-size:.68rem;color:#9ca3af;">
-                                    <?= htmlspecialchars($s['employee_id'] ?? '') ?>
-                                </div>
-                            </div>
-                        </div>
-                    </td>
-                    <?php if ($showBranch): ?>
-                    <td style="font-size:.75rem;color:#6b7280;">
-                        <?= htmlspecialchars($s['branch_name'] ?? '—') ?>
-                    </td>
-                    <?php endif; ?>
-                    <td class="text-center">
-                        <span style="font-size:1rem;font-weight:800;color:#1f2937;"><?= $s['total'] ?></span>
-                    </td>
-                    <?php foreach ($allStatuses as $st):
-                        $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-                        $cnt  = (int)($s[$safe] ?? 0);
-                        $sc   = $st['color']    ?: '#9ca3af';
-                        $sbg  = $st['bg_color'] ?: '#f3f4f6';
-                        $grandStatusTotals[$safe] = ($grandStatusTotals[$safe] ?? 0) + $cnt;
                     ?>
-                    <td class="text-center">
-                        <?php if ($cnt > 0): ?>
-                            <span style="background:<?= $sbg ?>;color:<?= $sc ?>;
+                    <tr style="<?= $odd ? '' : 'background:#fafafa;' ?>">
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="avatar-circle avatar-sm flex-shrink-0"
+                                    style="width:30px;height:30px;font-size:.65rem;background:<?= $deptColor ?>22;color:<?= $deptColor ?>;">
+                                    <?= strtoupper(substr($s['full_name'] ?? '?', 0, 2)) ?>
+                                </div>
+                                <div>
+                                    <div style="font-weight:600;font-size:.85rem;color:#1f2937;">
+                                        <?= htmlspecialchars($s['full_name'] ?? '—') ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#9ca3af;">
+                                        <?= htmlspecialchars($s['employee_id'] ?? '') ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                        <?php if ($showBranch): ?>
+                            <td style="font-size:.75rem;color:#6b7280;">
+                                <?= htmlspecialchars($s['branch_name'] ?? '—') ?>
+                            </td>
+                        <?php endif; ?>
+                        <td class="text-center">
+                            <span style="font-size:1rem;font-weight:800;color:#1f2937;"><?= $s['total'] ?></span>
+                        </td>
+                        <?php foreach ($allStatuses as $st):
+                            $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                            $cnt = (int) ($s[$safe] ?? 0);
+                            $sc = $st['color'] ?: '#9ca3af';
+                            $sbg = $st['bg_color'] ?: '#f3f4f6';
+                            $grandStatusTotals[$safe] = ($grandStatusTotals[$safe] ?? 0) + $cnt;
+                            ?>
+                            <td class="text-center">
+                                <?php if ($cnt > 0): ?>
+                                    <span style="background:<?= $sbg ?>;color:<?= $sc ?>;
                                          font-size:.68rem;font-weight:700;
                                          padding:.15rem .45rem;border-radius:99px;
                                          display:inline-block;min-width:22px;text-align:center;">
-                                <?= $cnt ?>
-                            </span>
-                        <?php else: ?>
-                            <span style="color:#e5e7eb;font-size:.7rem;">—</span>
-                        <?php endif; ?>
-                    </td>
-                    <?php endforeach; ?>
-                    <td class="text-center">
-                        <span style="background:#f0fdf4;color:#16a34a;font-size:.68rem;
+                                        <?= $cnt ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span style="color:#e5e7eb;font-size:.7rem;">—</span>
+                                <?php endif; ?>
+                            </td>
+                        <?php endforeach; ?>
+                        <td class="text-center">
+                            <span style="background:#f0fdf4;color:#16a34a;font-size:.68rem;
                                      font-weight:700;padding:.15rem .45rem;border-radius:99px;">
-                            <?= $origCnt ?>
-                        </span>
-                    </td>
-                    <td class="text-center">
-                        <?php if ($xferIn > 0): ?>
-                            <span style="background:#eff6ff;color:#3b82f6;font-size:.68rem;
-                                         font-weight:700;padding:.15rem .45rem;border-radius:99px;">
-                                +<?= $xferIn ?>
+                                <?= $origCnt ?>
                             </span>
-                        <?php else: ?>
-                            <span style="color:#e5e7eb;font-size:.7rem;">—</span>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-                        <div class="d-flex align-items-center gap-2">
-                            <?= donut($donePct, $deptColor) ?>
-                            <div style="flex:1;min-width:0;">
-                                <div style="background:#f3f4f6;border-radius:99px;height:5px;overflow:hidden;">
-                                    <div style="width:<?= $donePct ?>%;background:<?= $deptColor ?>;height:5px;border-radius:99px;"></div>
+                        </td>
+                        <td class="text-center">
+                            <?php if ($xferIn > 0): ?>
+                                <span style="background:#eff6ff;color:#3b82f6;font-size:.68rem;
+                                         font-weight:700;padding:.15rem .45rem;border-radius:99px;">
+                                    +<?= $xferIn ?>
+                                </span>
+                            <?php else: ?>
+                                <span style="color:#e5e7eb;font-size:.7rem;">—</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <?= donut($donePct, $deptColor) ?>
+                                <div style="flex:1;min-width:0;">
+                                    <div style="background:#f3f4f6;border-radius:99px;height:5px;overflow:hidden;">
+                                        <div
+                                            style="width:<?= $donePct ?>%;background:<?= $deptColor ?>;height:5px;border-radius:99px;">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </td>
-                </tr>
+                        </td>
+                    </tr>
                 <?php endforeach; ?>
 
                 <!-- Grand total row -->
@@ -477,19 +535,19 @@ function staffTable(array $staffReport, array $allStatuses, ?string $doneKey, st
                         </div>
                     </td>
                     <?php if ($showBranch): ?>
-                    <td></td>
+                        <td></td>
                     <?php endif; ?>
                     <td class="text-center">
                         <span style="font-size:1rem;font-weight:800;color:<?= $deptColor ?>;"><?= $grandTotal ?></span>
                     </td>
                     <?php foreach ($allStatuses as $st):
-                        $safe     = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                        $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
                         $colTotal = $grandStatusTotals[$safe] ?? 0;
-                        $sc       = $st['color'] ?: '#9ca3af';
-                    ?>
-                    <td class="text-center" style="font-size:.82rem;font-weight:700;color:<?= $sc ?>;">
-                        <?= $colTotal ?: '—' ?>
-                    </td>
+                        $sc = $st['color'] ?: '#9ca3af';
+                        ?>
+                        <td class="text-center" style="font-size:.82rem;font-weight:700;color:<?= $sc ?>;">
+                            <?= $colTotal ?: '—' ?>
+                        </td>
                     <?php endforeach; ?>
                     <td class="text-center" style="color:#16a34a;"><?= $grandOrig ?></td>
                     <td class="text-center" style="color:#3b82f6;"><?= $grandXfer ? '+' . $grandXfer : '—' ?></td>
@@ -498,7 +556,9 @@ function staffTable(array $staffReport, array $allStatuses, ?string $doneKey, st
                             <?= donut($grandDonePct, $deptColor) ?>
                             <div style="flex:1;">
                                 <div style="background:#f3f4f6;border-radius:99px;height:5px;overflow:hidden;">
-                                    <div style="width:<?= $grandDonePct ?>%;background:<?= $deptColor ?>;height:5px;border-radius:99px;"></div>
+                                    <div
+                                        style="width:<?= $grandDonePct ?>%;background:<?= $deptColor ?>;height:5px;border-radius:99px;">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -514,66 +574,187 @@ include '../../includes/header.php';
 ?>
 
 <style>
-.rpt-hero {
-    background: linear-gradient(135deg, #0a0f1e 0%, #111827 60%, #1a2235 100%);
-    border-radius: 16px; padding: 1.75rem 2rem; margin-bottom: 1.5rem;
-    position: relative; overflow: hidden;
-}
-.rpt-hero::before {
-    content: ''; position: absolute; inset: 0;
-    background: radial-gradient(ellipse at 80% 50%, <?= $deptColor ?>18 0%, transparent 60%);
-    pointer-events: none;
-}
-.rpt-stat {
-    background: #fff; border-radius: 14px; border: 1px solid #f3f4f6;
-    padding: 1.1rem 1rem 1rem; position: relative; overflow: hidden;
-    transition: transform .15s, box-shadow .15s;
-}
-.rpt-stat:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.08); }
-.rpt-stat::after {
-    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-    border-radius: 14px 14px 0 0; background: var(--sc);
-}
-.rpt-stat-val { font-size: 2rem; font-weight: 800; line-height: 1; color: var(--sc); }
-.rpt-stat-label { font-size: .72rem; font-weight: 700; text-transform: uppercase;
-                  letter-spacing: .06em; color: #9ca3af; margin-top: .25rem; }
-.rpt-stat-bar { background: #f3f4f6; border-radius: 99px; height: 4px; margin-top: .75rem; overflow: hidden; }
-.rpt-stat-fill { height: 100%; border-radius: 99px; background: var(--sc); }
-.chart-card { background: #fff; border-radius: 14px; border: 1px solid #f3f4f6; overflow: hidden; }
-.chart-card-header {
-    padding: 1rem 1.25rem; border-bottom: 1px solid #f3f4f6;
-    display: flex; align-items: center; justify-content: space-between;
-}
-.rpt-filter { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-              padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
-.completion-ring-card {
-    background: linear-gradient(135deg, <?= $deptColor ?>10, <?= $deptColor ?>05);
-    border: 1px solid <?= $deptColor ?>33; border-radius: 14px; padding: 1.25rem;
-    display: flex; align-items: center; gap: 1.25rem; height: 100%;
-}
-/* Tabs */
-.rpt-tab-bar {
-    display: flex; gap: 0; border-bottom: 2px solid #f3f4f6;
-    margin-bottom: 1.5rem; overflow-x: auto;
-}
-.rpt-tab {
-    padding: .65rem 1.4rem; font-size: .85rem; font-weight: 600; cursor: pointer;
-    border: none; background: none; border-bottom: 2px solid transparent;
-    margin-bottom: -2px; color: #9ca3af; white-space: nowrap; transition: .15s;
-    text-decoration: none; display: inline-flex; align-items: center; gap: .4rem;
-}
-.rpt-tab:hover { color: <?= $deptColor ?>; }
-.rpt-tab.active { color: <?= $deptColor ?>; border-bottom-color: <?= $deptColor ?>; }
-/* Self perf cards */
-.self-stat-card {
-    background: #fff; border-radius: 12px; border: 1px solid #f3f4f6;
-    padding: 1rem; text-align: center; transition: .15s;
-}
-.self-stat-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.07); transform: translateY(-1px); }
-.xfer-badge {
-    display: inline-flex; align-items: center; gap: .35rem;
-    font-size: .72rem; font-weight: 700; padding: .3rem .75rem; border-radius: 99px;
-}
+    .rpt-hero {
+        background: linear-gradient(135deg, #0a0f1e 0%, #111827 60%, #1a2235 100%);
+        border-radius: 16px;
+        padding: 1.75rem 2rem;
+        margin-bottom: 1.5rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .rpt-hero::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at 80% 50%,
+                <?= $deptColor ?>
+                18 0%, transparent 60%);
+        pointer-events: none;
+    }
+
+    .rpt-stat {
+        background: #fff;
+        border-radius: 14px;
+        border: 1px solid #f3f4f6;
+        padding: 1.1rem 1rem 1rem;
+        position: relative;
+        overflow: hidden;
+        transition: transform .15s, box-shadow .15s;
+    }
+
+    .rpt-stat:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .08);
+    }
+
+    .rpt-stat::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        border-radius: 14px 14px 0 0;
+        background: var(--sc);
+    }
+
+    .rpt-stat-val {
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1;
+        color: var(--sc);
+    }
+
+    .rpt-stat-label {
+        font-size: .72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        color: #9ca3af;
+        margin-top: .25rem;
+    }
+
+    .rpt-stat-bar {
+        background: #f3f4f6;
+        border-radius: 99px;
+        height: 4px;
+        margin-top: .75rem;
+        overflow: hidden;
+    }
+
+    .rpt-stat-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--sc);
+    }
+
+    .chart-card {
+        background: #fff;
+        border-radius: 14px;
+        border: 1px solid #f3f4f6;
+        overflow: hidden;
+    }
+
+    .chart-card-header {
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid #f3f4f6;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .rpt-filter {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .completion-ring-card {
+        background: linear-gradient(135deg,
+                <?= $deptColor ?>
+                10,
+                <?= $deptColor ?>
+                05);
+        border: 1px solid
+            <?= $deptColor ?>
+            33;
+        border-radius: 14px;
+        padding: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 1.25rem;
+        height: 100%;
+    }
+
+    /* Tabs */
+    .rpt-tab-bar {
+        display: flex;
+        gap: 0;
+        border-bottom: 2px solid #f3f4f6;
+        margin-bottom: 1.5rem;
+        overflow-x: auto;
+    }
+
+    .rpt-tab {
+        padding: .65rem 1.4rem;
+        font-size: .85rem;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
+        background: none;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        color: #9ca3af;
+        white-space: nowrap;
+        transition: .15s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: .4rem;
+    }
+
+    .rpt-tab:hover {
+        color:
+            <?= $deptColor ?>
+        ;
+    }
+
+    .rpt-tab.active {
+        color:
+            <?= $deptColor ?>
+        ;
+        border-bottom-color:
+            <?= $deptColor ?>
+        ;
+    }
+
+    /* Self perf cards */
+    .self-stat-card {
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid #f3f4f6;
+        padding: 1rem;
+        text-align: center;
+        transition: .15s;
+    }
+
+    .self-stat-card:hover {
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .07);
+        transform: translateY(-1px);
+    }
+
+    .xfer-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+        font-size: .72rem;
+        font-weight: 700;
+        padding: .3rem .75rem;
+        border-radius: 99px;
+    }
 </style>
 
 <div class="app-wrapper">
@@ -590,7 +771,7 @@ include '../../includes/header.php';
                             border-radius:50%;background:<?= $deptColor ?>0d;
                             border:1px solid <?= $deptColor ?>22;"></div>
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3"
-                     style="position:relative;">
+                    style="position:relative;">
                     <div>
                         <div style="display:inline-flex;align-items:center;gap:.5rem;
                                     background:<?= $deptColor ?>22;border:1px solid <?= $deptColor ?>44;
@@ -611,13 +792,13 @@ include '../../includes/header.php';
                     </div>
                     <div class="d-flex gap-2 flex-wrap">
                         <a href="<?= APP_URL ?>/exports/export_pdf.php?module=report&<?= http_build_query(array_merge($_GET, ['branch_id' => $adminBranchId, 'dept_id' => $adminDeptId])) ?>"
-                           style="background:#dc2626;color:#fff;border-radius:8px;padding:.45rem 1rem;
+                            style="background:#dc2626;color:#fff;border-radius:8px;padding:.45rem 1rem;
                                   font-size:.8rem;font-weight:600;display:inline-flex;
                                   align-items:center;gap:.4rem;text-decoration:none;">
                             <i class="fas fa-file-pdf"></i> Export PDF
                         </a>
                         <a href="<?= APP_URL ?>/exports/export_excel.php?module=report&<?= http_build_query(array_merge($_GET, ['branch_id' => $adminBranchId, 'dept_id' => $adminDeptId])) ?>"
-                           style="background:#16a34a;color:#fff;border-radius:8px;padding:.45rem 1rem;
+                            style="background:#16a34a;color:#fff;border-radius:8px;padding:.45rem 1rem;
                                   font-size:.8rem;font-weight:600;display:inline-flex;
                                   align-items:center;gap:.4rem;text-decoration:none;">
                             <i class="fas fa-file-excel"></i> Export Excel
@@ -639,17 +820,34 @@ include '../../includes/header.php';
                         <input type="date" name="to" class="form-control form-control-sm" value="<?= $toDate ?>">
                     </div>
                     <?php if ($activeTab !== 'self'): ?>
-                    <div class="col-md-3">
-                        <label class="form-label-mis">Search Staff</label>
-                        <input type="text" name="employee_name" class="form-control form-control-sm"
-                               value="<?= htmlspecialchars($employeeName) ?>" placeholder="Name…">
-                    </div>
+                        <div class="col-md-2">
+                            <label class="form-label-mis">Search Staff</label>
+                            <input type="text" name="employee_name" class="form-control form-control-sm"
+                                value="<?= htmlspecialchars($employeeName) ?>" placeholder="Name…">
+                        </div>
+                        <?php if ($isCoreAdminDept): ?>
+                            <div class="col-md-2">
+                                <label class="form-label-mis">Department</label>
+                                <select name="report_dept" class="form-select form-select-sm" onchange="this.form.submit()">
+                                    <option value="">All Depts</option>
+                                    <?php
+                                    $rptDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
+                                    foreach ($rptDepts as $rd):
+                                        ?>
+                                        <option value="<?= $rd['id'] ?>" <?= $filterReportDept == $rd['id'] ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($rd['dept_name']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        <?php endif; ?>
                     <?php endif; ?>
                     <div class="col-auto d-flex gap-1">
                         <button type="submit" class="btn btn-gold btn-sm">
                             <i class="fas fa-filter me-1"></i>Filter
                         </button>
-                        <a href="index.php?tab=<?= $activeTab ?>" class="btn btn-outline-secondary btn-sm" title="Reset">
+                        <a href="index.php?tab=<?= $activeTab ?>" class="btn btn-outline-secondary btn-sm"
+                            title="Reset">
                             <i class="fas fa-times"></i>
                         </a>
                     </div>
@@ -659,7 +857,7 @@ include '../../includes/header.php';
             <!-- ── TABS ── -->
             <div class="rpt-tab-bar">
                 <a href="?tab=dept&from=<?= $fromDate ?>&to=<?= $toDate ?>"
-                   class="rpt-tab <?= $activeTab==='dept'?'active':'' ?>">
+                    class="rpt-tab <?= $activeTab === 'dept' ? 'active' : '' ?>">
                     <i class="fas fa-building"></i>
                     My Department
                     <span style="background:<?= $deptColor ?>22;color:<?= $deptColor ?>;
@@ -668,7 +866,7 @@ include '../../includes/header.php';
                     </span>
                 </a>
                 <a href="?tab=self&from=<?= $fromDate ?>&to=<?= $toDate ?>"
-                   class="rpt-tab <?= $activeTab==='self'?'active':'' ?>">
+                    class="rpt-tab <?= $activeTab === 'self' ? 'active' : '' ?>">
                     <i class="fas fa-user-circle"></i>
                     My Performance
                     <span style="background:#eff6ff;color:#3b82f6;
@@ -677,69 +875,72 @@ include '../../includes/header.php';
                     </span>
                 </a>
                 <?php if ($canSeeAllBranch): ?>
-                <a href="?tab=allbranch&from=<?= $fromDate ?>&to=<?= $toDate ?>"
-                   class="rpt-tab <?= $activeTab==='allbranch'?'active':'' ?>">
-                    <i class="fas fa-globe"></i>
-                    All Branches — <?= htmlspecialchars($adminUser['dept_name'] ?? 'Dept') ?>
-                    <span style="background:#f0fdf4;color:#16a34a;
+                    <a href="?tab=allbranch&from=<?= $fromDate ?>&to=<?= $toDate ?>"
+                        class="rpt-tab <?= $activeTab === 'allbranch' ? 'active' : '' ?>">
+                        <i class="fas fa-globe"></i>
+                        All Branches — <?= htmlspecialchars($adminUser['dept_name'] ?? 'Dept') ?>
+                        <span style="background:#f0fdf4;color:#16a34a;
                                  padding:.1rem .45rem;border-radius:99px;font-size:.65rem;">
-                        <?= $abTotalTasks ?>
-                    </span>
-                </a>
+                            <?= $abTotalTasks ?>
+                        </span>
+                    </a>
                 <?php endif; ?>
             </div>
 
             <?php /* ══════════════════════════════════════════════
-                   TAB 1 — DEPT REPORT
-                   ══════════════════════════════════════════════ */
+              TAB 1 — DEPT REPORT
+              ══════════════════════════════════════════════ */
             if ($activeTab === 'dept'): ?>
 
                 <!-- Transfer banner -->
                 <?php if ($transferIn > 0 || $transferOut > 0): ?>
-                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1.25rem;">
-                    <span style="font-size:.72rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
-                        <i class="fas fa-exchange-alt me-1"></i>Transfer Activity
-                    </span>
-                    <?php if ($transferIn > 0): ?>
-                    <span class="xfer-badge" style="background:#ecfdf5;color:#16a34a;border:1px solid #a7f3d0;">
-                        <i class="fas fa-arrow-down" style="font-size:.6rem;"></i> <?= $transferIn ?> received
-                    </span>
-                    <?php endif; ?>
-                    <?php if ($transferOut > 0): ?>
-                    <span class="xfer-badge" style="background:#fef2f2;color:#ef4444;border:1px solid #fecaca;">
-                        <i class="fas fa-arrow-up" style="font-size:.6rem;"></i> <?= $transferOut ?> sent out
-                    </span>
-                    <?php endif; ?>
-                </div>
+                    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1.25rem;">
+                        <span style="font-size:.72rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                            <i class="fas fa-exchange-alt me-1"></i>Transfer Activity
+                        </span>
+                        <?php if ($transferIn > 0): ?>
+                            <span class="xfer-badge" style="background:#ecfdf5;color:#16a34a;border:1px solid #a7f3d0;">
+                                <i class="fas fa-arrow-down" style="font-size:.6rem;"></i> <?= $transferIn ?> received
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($transferOut > 0): ?>
+                            <span class="xfer-badge" style="background:#fef2f2;color:#ef4444;border:1px solid #fecaca;">
+                                <i class="fas fa-arrow-up" style="font-size:.6rem;"></i> <?= $transferOut ?> sent out
+                            </span>
+                        <?php endif; ?>
+                    </div>
                 <?php endif; ?>
 
                 <!-- Status cards + completion ring -->
                 <div class="row g-3 mb-4">
                     <?php foreach ($allStatuses as $st):
-                        $sn  = $st['status_name'];
+                        $sn = $st['status_name'];
                         $cnt = $statusReport[$sn] ?? 0;
                         $pct = $totalDeptTasks ? round(($cnt / $totalDeptTasks) * 100) : 0;
-                        $sc  = $st['color']    ?: '#9ca3af';
+                        $sc = $st['color'] ?: '#9ca3af';
                         $sbg = $st['bg_color'] ?: '#f3f4f6';
                         $rawI = trim($st['icon'] ?: 'fa-circle');
-                        $ico  = str_starts_with($rawI, 'fa') ? $rawI : 'fa-' . $rawI;
-                    ?>
-                    <div class="col-6 col-md-3 col-xl-2">
-                        <a href="<?= APP_URL ?>/admin/tasks/index.php?status=<?= urlencode($sn) ?>"
-                           style="text-decoration:none;display:block;">
-                            <div class="rpt-stat" style="--sc:<?= $sc ?>;">
-                                <div style="position:absolute;top:.85rem;right:.85rem;width:30px;height:30px;
+                        $ico = str_starts_with($rawI, 'fa') ? $rawI : 'fa-' . $rawI;
+                        ?>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <a href="<?= APP_URL ?>/admin/tasks/index.php?status=<?= urlencode($sn) ?>"
+                                style="text-decoration:none;display:block;">
+                                <div class="rpt-stat" style="--sc:<?= $sc ?>;">
+                                    <div style="position:absolute;top:.85rem;right:.85rem;width:30px;height:30px;
                                             border-radius:8px;background:<?= $sbg ?>;
                                             display:flex;align-items:center;justify-content:center;">
-                                    <i class="fas <?= htmlspecialchars($ico) ?>" style="font-size:.75rem;color:<?= $sc ?>;"></i>
+                                        <i class="fas <?= htmlspecialchars($ico) ?>"
+                                            style="font-size:.75rem;color:<?= $sc ?>;"></i>
+                                    </div>
+                                    <div class="rpt-stat-val"><?= $cnt ?></div>
+                                    <div class="rpt-stat-label"><?= htmlspecialchars($sn) ?></div>
+                                    <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;"><?= $pct ?>% of total</div>
+                                    <div class="rpt-stat-bar">
+                                        <div class="rpt-stat-fill" style="width:<?= $pct ?>%;"></div>
+                                    </div>
                                 </div>
-                                <div class="rpt-stat-val"><?= $cnt ?></div>
-                                <div class="rpt-stat-label"><?= htmlspecialchars($sn) ?></div>
-                                <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;"><?= $pct ?>% of total</div>
-                                <div class="rpt-stat-bar"><div class="rpt-stat-fill" style="width:<?= $pct ?>%;"></div></div>
-                            </div>
-                        </a>
-                    </div>
+                            </a>
+                        </div>
                     <?php endforeach; ?>
 
                     <!-- Total card -->
@@ -753,7 +954,9 @@ include '../../includes/header.php';
                             <div class="rpt-stat-val"><?= $totalDeptTasks ?></div>
                             <div class="rpt-stat-label">Total Tasks</div>
                             <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;">This branch &amp; dept</div>
-                            <div class="rpt-stat-bar"><div class="rpt-stat-fill" style="width:100%;"></div></div>
+                            <div class="rpt-stat-bar">
+                                <div class="rpt-stat-fill" style="width:100%;"></div>
+                            </div>
                         </div>
                     </div>
 
@@ -761,22 +964,24 @@ include '../../includes/header.php';
                     <div class="col-12 col-md-6 col-xl-3">
                         <div class="completion-ring-card">
                             <?php
-                            $rc    = 48; $rcirc = round(2 * M_PI * $rc, 2);
-                            $rdsh  = round($rcirc * $completionRate / 100, 2);
+                            $rc = 48;
+                            $rcirc = round(2 * M_PI * $rc, 2);
+                            $rdsh = round($rcirc * $completionRate / 100, 2);
                             ?>
                             <div style="position:relative;flex-shrink:0;">
                                 <svg width="110" height="110" viewBox="0 0 110 110">
-                                    <circle cx="55" cy="55" r="<?= $rc ?>" fill="none" stroke="#e5e7eb" stroke-width="8"/>
+                                    <circle cx="55" cy="55" r="<?= $rc ?>" fill="none" stroke="#e5e7eb" stroke-width="8" />
                                     <circle cx="55" cy="55" r="<?= $rc ?>" fill="none" stroke="<?= $deptColor ?>"
-                                            stroke-width="8" stroke-dasharray="<?= $rdsh ?> <?= $rcirc ?>"
-                                            stroke-linecap="round" transform="rotate(-90 55 55)"/>
+                                        stroke-width="8" stroke-dasharray="<?= $rdsh ?> <?= $rcirc ?>"
+                                        stroke-linecap="round" transform="rotate(-90 55 55)" />
                                 </svg>
                                 <div style="position:absolute;inset:0;display:flex;flex-direction:column;
                                             align-items:center;justify-content:center;">
                                     <div style="font-size:1.4rem;font-weight:800;color:<?= $deptColor ?>;line-height:1;">
                                         <?= $completionRate ?>%
                                     </div>
-                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">done</div>
+                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                        done</div>
                                 </div>
                             </div>
                             <div>
@@ -788,7 +993,27 @@ include '../../includes/header.php';
                         </div>
                     </div>
                 </div>
-
+                <!-- UDA Dept Tabs for Staff Table -->
+                <?php if (count($reportDeptTabs) > 1): ?>
+                    <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;">
+                        <?php foreach ($reportDeptTabs as $rdtab):
+                            $isActive = ($activeReportDeptTab == $rdtab['id']);
+                            $rtCol = $rdtab['color'] ?: '#c9a84c';
+                            ?>
+                            <a href="?<?= http_build_query(array_merge($_GET, ['tab' => 'dept', 'rpt_dept' => $rdtab['id']])) ?>" style="padding:.35rem .9rem;border-radius:99px;font-size:.78rem;font-weight:600;
+                              text-decoration:none;
+                              background:<?= $isActive ? $rtCol : '#f3f4f6' ?>;
+                              color:<?= $isActive ? '#fff' : '#6b7280' ?>;
+                              border:1px solid <?= $isActive ? $rtCol : '#e5e7eb' ?>;">
+                                <i class="fas fa-layer-group me-1" style="font-size:.65rem;"></i>
+                                <?= htmlspecialchars($rdtab['dept_name']) ?>
+                                <?php if ($rdtab['is_primary']): ?>
+                                    <span style="font-size:.6rem;opacity:.8;margin-left:.2rem;">★</span>
+                                <?php endif; ?>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
                 <!-- Staff table -->
                 <div class="chart-card mb-4">
                     <div class="chart-card-header">
@@ -812,24 +1037,24 @@ include '../../includes/header.php';
 
                 <!-- Bar chart -->
                 <?php if (!empty($staffReport)): ?>
-                <div class="chart-card mb-4">
-                    <div class="chart-card-header">
-                        <h5 style="margin:0;font-size:.95rem;font-weight:700;">
-                            <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>Staff Task Breakdown
-                        </h5>
-                        <span style="font-size:.7rem;color:#9ca3af;">Stacked by status</span>
-                    </div>
-                    <div style="padding:1.25rem;">
-                        <div style="height:300px;position:relative;">
-                            <canvas id="staffChartDept"></canvas>
+                    <div class="chart-card mb-4">
+                        <div class="chart-card-header">
+                            <h5 style="margin:0;font-size:.95rem;font-weight:700;">
+                                <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>Staff Task Breakdown
+                            </h5>
+                            <span style="font-size:.7rem;color:#9ca3af;">Stacked by status</span>
+                        </div>
+                        <div style="padding:1.25rem;">
+                            <div style="height:300px;position:relative;">
+                                <canvas id="staffChartDept"></canvas>
+                            </div>
                         </div>
                     </div>
-                </div>
                 <?php endif; ?>
 
             <?php /* ══════════════════════════════════════════════
-                   TAB 2 — SELF PERFORMANCE
-                   ══════════════════════════════════════════════ */
+              TAB 2 — SELF PERFORMANCE
+              ══════════════════════════════════════════════ */
             elseif ($activeTab === 'self'): ?>
 
                 <!-- Self summary cards -->
@@ -838,54 +1063,58 @@ include '../../includes/header.php';
                     <div class="col-6 col-md-3">
                         <div class="self-stat-card" style="border-top:3px solid <?= $deptColor ?>;">
                             <div style="font-size:2rem;font-weight:800;color:<?= $deptColor ?>;"><?= $selfTotal ?></div>
-                            <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">Total Assigned</div>
+                            <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">Total
+                                Assigned</div>
                         </div>
                     </div>
                     <!-- Per status -->
                     <?php foreach ($allStatuses as $st):
                         $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-                        $cnt  = (int)($selfStats[$safe] ?? 0);
-                        $sc   = $st['color']    ?: '#9ca3af';
-                        $sbg  = $st['bg_color'] ?: '#f9fafb';
-                    ?>
-                    <div class="col-6 col-md-3 col-xl-2">
-                        <div class="self-stat-card" style="border-top:3px solid <?= $sc ?>;">
-                            <div style="font-size:2rem;font-weight:800;color:<?= $sc ?>;"><?= $cnt ?></div>
-                            <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">
-                                <?= htmlspecialchars($st['status_name']) ?>
+                        $cnt = (int) ($selfStats[$safe] ?? 0);
+                        $sc = $st['color'] ?: '#9ca3af';
+                        $sbg = $st['bg_color'] ?: '#f9fafb';
+                        ?>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="self-stat-card" style="border-top:3px solid <?= $sc ?>;">
+                                <div style="font-size:2rem;font-weight:800;color:<?= $sc ?>;"><?= $cnt ?></div>
+                                <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">
+                                    <?= htmlspecialchars($st['status_name']) ?>
+                                </div>
                             </div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
                     <!-- Overdue -->
                     <div class="col-6 col-md-3 col-xl-2">
                         <div class="self-stat-card" style="border-top:3px solid #ef4444;">
                             <div style="font-size:2rem;font-weight:800;color:#ef4444;">
-                                <?= (int)($selfStats['overdue'] ?? 0) ?>
+                                <?= (int) ($selfStats['overdue'] ?? 0) ?>
                             </div>
-                            <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">Overdue</div>
+                            <div style="font-size:.72rem;color:#9ca3af;font-weight:700;text-transform:uppercase;">Overdue
+                            </div>
                         </div>
                     </div>
                     <!-- Completion ring -->
                     <div class="col-12 col-md-6 col-xl-3">
                         <div class="completion-ring-card">
                             <?php
-                            $src   = 48; $scirc = round(2 * M_PI * $src, 2);
-                            $sdsh  = round($scirc * $selfCompletion / 100, 2);
+                            $src = 48;
+                            $scirc = round(2 * M_PI * $src, 2);
+                            $sdsh = round($scirc * $selfCompletion / 100, 2);
                             ?>
                             <div style="position:relative;flex-shrink:0;">
                                 <svg width="110" height="110" viewBox="0 0 110 110">
-                                    <circle cx="55" cy="55" r="<?= $src ?>" fill="none" stroke="#e5e7eb" stroke-width="8"/>
+                                    <circle cx="55" cy="55" r="<?= $src ?>" fill="none" stroke="#e5e7eb" stroke-width="8" />
                                     <circle cx="55" cy="55" r="<?= $src ?>" fill="none" stroke="<?= $deptColor ?>"
-                                            stroke-width="8" stroke-dasharray="<?= $sdsh ?> <?= $scirc ?>"
-                                            stroke-linecap="round" transform="rotate(-90 55 55)"/>
+                                        stroke-width="8" stroke-dasharray="<?= $sdsh ?> <?= $scirc ?>"
+                                        stroke-linecap="round" transform="rotate(-90 55 55)" />
                                 </svg>
                                 <div style="position:absolute;inset:0;display:flex;flex-direction:column;
                                             align-items:center;justify-content:center;">
                                     <div style="font-size:1.4rem;font-weight:800;color:<?= $deptColor ?>;line-height:1;">
                                         <?= $selfCompletion ?>%
                                     </div>
-                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">done</div>
+                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                        done</div>
                                 </div>
                             </div>
                             <div>
@@ -907,18 +1136,18 @@ include '../../includes/header.php';
 
                 <!-- Self bar chart -->
                 <?php if ($selfTotal > 0): ?>
-                <div class="chart-card mb-4">
-                    <div class="chart-card-header">
-                        <h5 style="margin:0;font-size:.95rem;font-weight:700;">
-                            <i class="fas fa-chart-pie me-2" style="color:<?= $deptColor ?>;"></i>My Task Breakdown
-                        </h5>
-                    </div>
-                    <div style="padding:1.25rem;">
-                        <div style="max-width:380px;margin:0 auto;height:260px;position:relative;">
-                            <canvas id="selfDoughnut"></canvas>
+                    <div class="chart-card mb-4">
+                        <div class="chart-card-header">
+                            <h5 style="margin:0;font-size:.95rem;font-weight:700;">
+                                <i class="fas fa-chart-pie me-2" style="color:<?= $deptColor ?>;"></i>My Task Breakdown
+                            </h5>
+                        </div>
+                        <div style="padding:1.25rem;">
+                            <div style="max-width:380px;margin:0 auto;height:260px;position:relative;">
+                                <canvas id="selfDoughnut"></canvas>
+                            </div>
                         </div>
                     </div>
-                </div>
                 <?php endif; ?>
 
                 <!-- Self task list -->
@@ -948,137 +1177,141 @@ include '../../includes/header.php';
                             </thead>
                             <tbody>
                                 <?php if (empty($selfTasks)): ?>
-                                <tr>
-                                    <td colspan="8" class="empty-state">
-                                        <i class="fas fa-list-check"></i> No tasks assigned to you in this period
-                                    </td>
-                                </tr>
+                                    <tr>
+                                        <td colspan="8" class="empty-state">
+                                            <i class="fas fa-list-check"></i> No tasks assigned to you in this period
+                                        </td>
+                                    </tr>
                                 <?php endif; ?>
                                 <?php foreach ($selfTasks as $t):
                                     $overdue = $t['due_date']
                                         && strtotime($t['due_date']) < time()
                                         && $t['status'] !== 'Done';
-                                    $sc  = $t['status_color'] ?: '#9ca3af';
-                                    $sbg = $t['status_bg']    ?: '#f3f4f6';
-                                ?>
-                                <tr <?= $overdue ? 'style="background:#fef2f2;"' : '' ?>>
-                                    <td>
-                                        <span class="task-number"><?= htmlspecialchars($t['task_number']) ?></span>
-                                        <?php if ($overdue): ?>
-                                            <div style="font-size:.6rem;color:#ef4444;font-weight:700;">OVERDUE</div>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;">
-                                        <?= htmlspecialchars($t['title']) ?>
-                                    </td>
-                                    <td style="font-size:.75rem;color:#6b7280;">
-                                        <?= htmlspecialchars($t['company_name'] ?? '—') ?>
-                                    </td>
-                                    <td>
-                                        <span style="font-size:.7rem;background:<?= htmlspecialchars($t['dept_color']??'#ccc') ?>22;
-                                                     color:<?= htmlspecialchars($t['dept_color']??'#666') ?>;
+                                    $sc = $t['status_color'] ?: '#9ca3af';
+                                    $sbg = $t['status_bg'] ?: '#f3f4f6';
+                                    ?>
+                                    <tr <?= $overdue ? 'style="background:#fef2f2;"' : '' ?>>
+                                        <td>
+                                            <span class="task-number"><?= htmlspecialchars($t['task_number']) ?></span>
+                                            <?php if ($overdue): ?>
+                                                <div style="font-size:.6rem;color:#ef4444;font-weight:700;">OVERDUE</div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td
+                                            style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;">
+                                            <?= htmlspecialchars($t['title']) ?>
+                                        </td>
+                                        <td style="font-size:.75rem;color:#6b7280;">
+                                            <?= htmlspecialchars($t['company_name'] ?? '—') ?>
+                                        </td>
+                                        <td>
+                                            <span style="font-size:.7rem;background:<?= htmlspecialchars($t['dept_color'] ?? '#ccc') ?>22;
+                                                     color:<?= htmlspecialchars($t['dept_color'] ?? '#666') ?>;
                                                      padding:.15rem .45rem;border-radius:99px;">
-                                            <?= htmlspecialchars($t['dept_name'] ?? '—') ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span style="background:<?= $sbg ?>;color:<?= $sc ?>;
+                                                <?= htmlspecialchars($t['dept_name'] ?? '—') ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span style="background:<?= $sbg ?>;color:<?= $sc ?>;
                                                      padding:.2rem .5rem;border-radius:99px;
                                                      font-size:.7rem;font-weight:600;">
-                                            <?= htmlspecialchars($t['status'] ?? '—') ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="status-badge priority-<?= $t['priority'] ?>">
-                                            <?= ucfirst($t['priority']) ?>
-                                        </span>
-                                    </td>
-                                    <td style="font-size:.75rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#9ca3af;' ?>">
-                                        <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
-                                    </td>
-                                    <td>
-                                        <a href="<?= APP_URL ?>/admin/tasks/view.php?id=<?= $t['id'] ?>"
-                                           class="btn btn-sm btn-outline-secondary">
-                                            <i class="fas fa-eye" style="font-size:.7rem;"></i>
-                                        </a>
-                                    </td>
-                                </tr>
+                                                <?= htmlspecialchars($t['status'] ?? '—') ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="status-badge priority-<?= $t['priority'] ?>">
+                                                <?= ucfirst($t['priority']) ?>
+                                            </span>
+                                        </td>
+                                        <td
+                                            style="font-size:.75rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#9ca3af;' ?>">
+                                            <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
+                                        </td>
+                                        <td>
+                                            <a href="<?= APP_URL ?>/admin/tasks/view.php?id=<?= $t['id'] ?>"
+                                                class="btn btn-sm btn-outline-secondary">
+                                                <i class="fas fa-eye" style="font-size:.7rem;"></i>
+                                            </a>
+                                        </td>
+                                    </tr>
                                 <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
                 </div>
 
-            <!-- Dept Staff Performance in Self Tab — Head Office & Hetauda only -->
+                <!-- Dept Staff Performance in Self Tab — Head Office & Hetauda only -->
                 <?php if ($canSeeAllBranch): ?>
-                <div class="chart-card mb-4">
-                    <div class="chart-card-header">
-                        <div>
-                            <h5 style="margin:0;font-size:.95rem;font-weight:700;">
-                                <i class="fas fa-users me-2" style="color:<?= $deptColor ?>;"></i>
-                                Department Staff Performance
-                            </h5>
-                            <small style="color:#9ca3af;">
-                                <?= htmlspecialchars($adminUser['dept_name'] ?? '') ?> ·
-                                <?= htmlspecialchars($adminUser['branch_name'] ?? '') ?> ·
-                                <?= count($staffReport) ?> staff
-                            </small>
-                        </div>
-                        <span style="font-size:.7rem;color:#6b7280;background:#f9fafb;
+                    <div class="chart-card mb-4">
+                        <div class="chart-card-header">
+                            <div>
+                                <h5 style="margin:0;font-size:.95rem;font-weight:700;">
+                                    <i class="fas fa-users me-2" style="color:<?= $deptColor ?>;"></i>
+                                    Department Staff Performance
+                                </h5>
+                                <small style="color:#9ca3af;">
+                                    <?= htmlspecialchars($adminUser['dept_name'] ?? '') ?> ·
+                                    <?= htmlspecialchars($adminUser['branch_name'] ?? '') ?> ·
+                                    <?= count($staffReport) ?> staff
+                                </small>
+                            </div>
+                            <span style="font-size:.7rem;color:#6b7280;background:#f9fafb;
                                      padding:.25rem .65rem;border-radius:99px;border:1px solid #e5e7eb;">
-                            <i class="fas fa-info-circle me-1 text-warning"></i>Your branch &amp; department
-                        </span>
-                    </div>
-                    <?php staffTable($staffReport, $allStatuses, $doneKey, $deptColor, $db, false); ?>
-                </div>
-
-                <!-- Dept bar chart in self tab -->
-                <?php if (!empty($staffReport)): ?>
-                <div class="chart-card mb-4">
-                    <div class="chart-card-header">
-                        <h5 style="margin:0;font-size:.95rem;font-weight:700;">
-                            <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>
-                            Department Task Breakdown
-                        </h5>
-                        <span style="font-size:.7rem;color:#9ca3af;">Stacked by status</span>
-                    </div>
-                    <div style="padding:1.25rem;">
-                        <div style="height:300px;position:relative;">
-                            <canvas id="staffChartSelfDept"></canvas>
+                                <i class="fas fa-info-circle me-1 text-warning"></i>Your branch &amp; department
+                            </span>
                         </div>
+                        <?php staffTable($staffReport, $allStatuses, $doneKey, $deptColor, $db, false); ?>
                     </div>
-                </div>
-                <?php endif; ?>
+
+                    <!-- Dept bar chart in self tab -->
+                    <?php if (!empty($staffReport)): ?>
+                        <div class="chart-card mb-4">
+                            <div class="chart-card-header">
+                                <h5 style="margin:0;font-size:.95rem;font-weight:700;">
+                                    <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>
+                                    Department Task Breakdown
+                                </h5>
+                                <span style="font-size:.7rem;color:#9ca3af;">Stacked by status</span>
+                            </div>
+                            <div style="padding:1.25rem;">
+                                <div style="height:300px;position:relative;">
+                                    <canvas id="staffChartSelfDept"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
                 <?php endif; // end $canSeeAllBranch ?>
             <?php /* ══════════════════════════════════════════════
-                   TAB 3 — ALL BRANCHES
-                   ══════════════════════════════════════════════ */
-           elseif ($activeTab === 'allbranch' && $canSeeAllBranch): ?> 
+              TAB 3 — ALL BRANCHES
+              ══════════════════════════════════════════════ */
+            elseif ($activeTab === 'allbranch' && $canSeeAllBranch): ?>
 
                 <!-- Status summary -->
                 <div class="row g-3 mb-4">
                     <?php foreach ($allStatuses as $st):
-                        $sn  = $st['status_name'];
+                        $sn = $st['status_name'];
                         $cnt = $abStatusReport[$sn] ?? 0;
                         $pct = $abTotalTasks ? round(($cnt / $abTotalTasks) * 100) : 0;
-                        $sc  = $st['color']    ?: '#9ca3af';
+                        $sc = $st['color'] ?: '#9ca3af';
                         $sbg = $st['bg_color'] ?: '#f3f4f6';
                         $rawI = trim($st['icon'] ?: 'fa-circle');
-                        $ico  = str_starts_with($rawI, 'fa') ? $rawI : 'fa-' . $rawI;
-                    ?>
-                    <div class="col-6 col-md-3 col-xl-2">
-                        <div class="rpt-stat" style="--sc:<?= $sc ?>;">
-                            <div style="position:absolute;top:.85rem;right:.85rem;width:30px;height:30px;
+                        $ico = str_starts_with($rawI, 'fa') ? $rawI : 'fa-' . $rawI;
+                        ?>
+                        <div class="col-6 col-md-3 col-xl-2">
+                            <div class="rpt-stat" style="--sc:<?= $sc ?>;">
+                                <div style="position:absolute;top:.85rem;right:.85rem;width:30px;height:30px;
                                         border-radius:8px;background:<?= $sbg ?>;
                                         display:flex;align-items:center;justify-content:center;">
-                                <i class="fas <?= htmlspecialchars($ico) ?>" style="font-size:.75rem;color:<?= $sc ?>;"></i>
+                                    <i class="fas <?= htmlspecialchars($ico) ?>" style="font-size:.75rem;color:<?= $sc ?>;"></i>
+                                </div>
+                                <div class="rpt-stat-val"><?= $cnt ?></div>
+                                <div class="rpt-stat-label"><?= htmlspecialchars($sn) ?></div>
+                                <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;"><?= $pct ?>% of total</div>
+                                <div class="rpt-stat-bar">
+                                    <div class="rpt-stat-fill" style="width:<?= $pct ?>%;"></div>
+                                </div>
                             </div>
-                            <div class="rpt-stat-val"><?= $cnt ?></div>
-                            <div class="rpt-stat-label"><?= htmlspecialchars($sn) ?></div>
-                            <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;"><?= $pct ?>% of total</div>
-                            <div class="rpt-stat-bar"><div class="rpt-stat-fill" style="width:<?= $pct ?>%;"></div></div>
                         </div>
-                    </div>
                     <?php endforeach; ?>
 
                     <div class="col-6 col-md-3 col-xl-2">
@@ -1091,29 +1324,34 @@ include '../../includes/header.php';
                             <div class="rpt-stat-val"><?= $abTotalTasks ?></div>
                             <div class="rpt-stat-label">Total Tasks</div>
                             <div style="font-size:.68rem;color:#9ca3af;margin-top:.2rem;">All branches</div>
-                            <div class="rpt-stat-bar"><div class="rpt-stat-fill" style="width:100%;"></div></div>
+                            <div class="rpt-stat-bar">
+                                <div class="rpt-stat-fill" style="width:100%;"></div>
+                            </div>
                         </div>
                     </div>
 
                     <div class="col-12 col-md-6 col-xl-3">
                         <div class="completion-ring-card">
                             <?php
-                            $abrc   = 48; $abcirc = round(2 * M_PI * $abrc, 2);
-                            $abdsh  = round($abcirc * $abCompletionRate / 100, 2);
+                            $abrc = 48;
+                            $abcirc = round(2 * M_PI * $abrc, 2);
+                            $abdsh = round($abcirc * $abCompletionRate / 100, 2);
                             ?>
                             <div style="position:relative;flex-shrink:0;">
                                 <svg width="110" height="110" viewBox="0 0 110 110">
-                                    <circle cx="55" cy="55" r="<?= $abrc ?>" fill="none" stroke="#e5e7eb" stroke-width="8"/>
+                                    <circle cx="55" cy="55" r="<?= $abrc ?>" fill="none" stroke="#e5e7eb"
+                                        stroke-width="8" />
                                     <circle cx="55" cy="55" r="<?= $abrc ?>" fill="none" stroke="<?= $deptColor ?>"
-                                            stroke-width="8" stroke-dasharray="<?= $abdsh ?> <?= $abcirc ?>"
-                                            stroke-linecap="round" transform="rotate(-90 55 55)"/>
+                                        stroke-width="8" stroke-dasharray="<?= $abdsh ?> <?= $abcirc ?>"
+                                        stroke-linecap="round" transform="rotate(-90 55 55)" />
                                 </svg>
                                 <div style="position:absolute;inset:0;display:flex;flex-direction:column;
                                             align-items:center;justify-content:center;">
                                     <div style="font-size:1.4rem;font-weight:800;color:<?= $deptColor ?>;line-height:1;">
                                         <?= $abCompletionRate ?>%
                                     </div>
-                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">done</div>
+                                    <div style="font-size:.58rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                        done</div>
                                 </div>
                             </div>
                             <div>
@@ -1152,19 +1390,19 @@ include '../../includes/header.php';
 
                 <!-- All-branch bar chart -->
                 <?php if (!empty($abStaffReport)): ?>
-                <div class="chart-card mb-4">
-                    <div class="chart-card-header">
-                        <h5 style="margin:0;font-size:.95rem;font-weight:700;">
-                            <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>
-                            All Branches — Staff Task Breakdown
-                        </h5>
-                    </div>
-                    <div style="padding:1.25rem;">
-                        <div style="height:320px;position:relative;">
-                            <canvas id="staffChartAllBranch"></canvas>
+                    <div class="chart-card mb-4">
+                        <div class="chart-card-header">
+                            <h5 style="margin:0;font-size:.95rem;font-weight:700;">
+                                <i class="fas fa-chart-bar me-2" style="color:<?= $deptColor ?>;"></i>
+                                All Branches — Staff Task Breakdown
+                            </h5>
+                        </div>
+                        <div style="padding:1.25rem;">
+                            <div style="height:320px;position:relative;">
+                                <canvas id="staffChartAllBranch"></canvas>
+                            </div>
                         </div>
                     </div>
-                </div>
                 <?php endif; ?>
 
             <?php endif; ?>
@@ -1175,187 +1413,187 @@ include '../../includes/header.php';
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function () {
+    document.addEventListener('DOMContentLoaded', function () {
 
-    const statuses = <?= json_encode(array_map(fn($st) => [
-        'key'   => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name'])),
-        'label' => $st['status_name'],
-        'color' => $st['color'] ?: '#9ca3af',
-    ], $allStatuses)) ?>;
+        const statuses = <?= json_encode(array_map(fn($st) => [
+            'key' => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name'])),
+            'label' => $st['status_name'],
+            'color' => $st['color'] ?: '#9ca3af',
+        ], $allStatuses)) ?>;
 
-    // ── TAB 1: Dept staff bar chart ───────────────────────────────────────────
-    <?php if ($activeTab === 'dept' && !empty($staffReport)): ?>
-    (function () {
-        const ctx = document.getElementById('staffChartDept');
-        if (!ctx) return;
-        const staff = <?= json_encode(array_map(function($s) use ($allStatuses) {
-            $row = ['name' => explode(' ', $s['full_name'])[0] ?? 'N/A', 'total' => (int)$s['total']];
-            foreach ($allStatuses as $st) {
-                $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-                $row[$safe] = (int)($s[$safe] ?? 0);
-            }
-            return $row;
-        }, $staffReport)) ?>;
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: staff.map(d => d.name),
-                datasets: statuses.map(st => ({
-                    label: st.label, data: staff.map(d => d[st.key] || 0),
-                    backgroundColor: st.color, borderRadius: 4, borderSkipped: false,
-                }))
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, padding: 16 } },
-                    tooltip: { callbacks: { footer: items => { const t = staff[items[0]?.dataIndex]?.total ?? 0; return t ? `Total: ${t}` : ''; } } }
-                },
-                scales: {
-                    x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-                    y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
-                }
-            }
-        });
-    })();
-    <?php endif; ?>
-
-    // ── TAB 2: Self doughnut ──────────────────────────────────────────────────
-    <?php if ($activeTab === 'self' && $selfTotal > 0): ?>
-    (function () {
-        const ctx = document.getElementById('selfDoughnut');
-        if (!ctx) return;
-        const vals   = <?= json_encode(array_map(function($st) use ($selfStats) {
-            $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-            return (int)($selfStats[$safe] ?? 0);
-        }, $allStatuses)) ?>;
-        const labels = statuses.map(s => s.label);
-        const colors = statuses.map(s => s.color);
-        new Chart(ctx, {
-            type: 'doughnut',
-            data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
-            options: {
-                responsive: true, maintainAspectRatio: false, cutout: '68%',
-                plugins: {
-                    legend: { position: 'right', labels: { usePointStyle: true, font: { size: 11 }, padding: 14 } },
-                    tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw}` } }
-                }
-            }
-        });
-    })();
-    <?php endif; ?>
-
-    // ── TAB 2b: Self tab — dept staff bar chart (Head Office & Hetauda only) ──
-    <?php if ($activeTab === 'self' && !empty($staffReport) && $canSeeAllBranch): ?>
-    (function () {
-        const ctx = document.getElementById('staffChartSelfDept');
-        if (!ctx) return;
-        const staff = <?= json_encode(array_map(function($s) use ($allStatuses) {
-            $row = ['name' => explode(' ', $s['full_name'])[0] ?? 'N/A', 'total' => (int)$s['total']];
-            foreach ($allStatuses as $st) {
-                $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-                $row[$safe] = (int)($s[$safe] ?? 0);
-            }
-            return $row;
-        }, $staffReport)) ?>;
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: staff.map(d => d.name),
-                datasets: statuses.map(st => ({
-                    label: st.label, data: staff.map(d => d[st.key] || 0),
-                    backgroundColor: st.color, borderRadius: 4, borderSkipped: false,
-                }))
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, padding: 16 } },
-                    tooltip: { callbacks: { footer: items => { const t = staff[items[0]?.dataIndex]?.total ?? 0; return t ? `Total: ${t}` : ''; } } }
-                },
-                scales: {
-                    x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-                    y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
-                }
-            }
-        });
-    })();
-    <?php endif; ?>
-    // ── TAB 3: All Branches staff bar chart ───────────────────────────────────
-    <?php if ($activeTab === 'allbranch' && !empty($abStaffReport)): ?>
-    (function () {
-        const ctx = document.getElementById('staffChartAllBranch');
-        if (!ctx) { console.warn('staffChartAllBranch canvas not found'); return; }
-
-        const staff = <?= json_encode(array_map(function($s) use ($allStatuses) {
-            // Label: "FirstName (Branch)" so bars are distinguishable across branches
-            $firstName  = explode(' ', $s['full_name'])[0] ?? 'N/A';
-            $branchShort = explode(' ', $s['branch_name'])[0] ?? '';
-            $row = [
-                'name'  => $firstName . ($branchShort ? ' (' . $branchShort . ')' : ''),
-                'total' => (int)$s['total'],
-            ];
-            foreach ($allStatuses as $st) {
-                $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
-                $row[$safe] = (int)($s[$safe] ?? 0);
-            }
-            return $row;
-        }, $abStaffReport)) ?>;
-
-        if (!staff.length) { console.warn('staffChartAllBranch: no data'); return; }
-
-        new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: staff.map(d => d.name),
-                datasets: statuses.map(st => ({
-                    label          : st.label,
-                    data           : staff.map(d => d[st.key] || 0),
-                    backgroundColor: st.color,
-                    borderRadius   : 4,
-                    borderSkipped  : false,
-                }))
-            },
-            options: {
-                responsive         : true,
-                maintainAspectRatio: false,
-                interaction        : { mode: 'index', intersect: false },
-                plugins: {
-                    legend: {
-                        position: 'top',
-                        labels  : { usePointStyle: true, font: { size: 11 }, padding: 16 }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            footer: items => {
-                                const t = staff[items[0]?.dataIndex]?.total ?? 0;
-                                return t ? `Total: ${t}` : '';
+        // ── TAB 1: Dept staff bar chart ───────────────────────────────────────────
+        <?php if ($activeTab === 'dept' && !empty($staffReport)): ?>
+                (function () {
+                    const ctx = document.getElementById('staffChartDept');
+                    if (!ctx) return;
+                    const staff = <?= json_encode(array_map(function ($s) use ($allStatuses) {
+                        $row = ['name' => explode(' ', $s['full_name'])[0] ?? 'N/A', 'total' => (int) $s['total']];
+                        foreach ($allStatuses as $st) {
+                            $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                            $row[$safe] = (int) ($s[$safe] ?? 0);
+                        }
+                        return $row;
+                    }, $staffReport)) ?>;
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: staff.map(d => d.name),
+                            datasets: statuses.map(st => ({
+                                label: st.label, data: staff.map(d => d[st.key] || 0),
+                                backgroundColor: st.color, borderRadius: 4, borderSkipped: false,
+                            }))
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, padding: 16 } },
+                                tooltip: { callbacks: { footer: items => { const t = staff[items[0]?.dataIndex]?.total ?? 0; return t ? `Total: ${t}` : ''; } } }
+                            },
+                            scales: {
+                                x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+                                y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
                             }
                         }
-                    }
-                },
-                scales: {
-                    x: {
-                        stacked: true,
-                        grid   : { display: false },
-                        ticks  : { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
-                    },
-                    y: {
-                        stacked    : true,
-                        beginAtZero: true,
-                        grid       : { color: '#f3f4f6' },
-                        ticks      : { stepSize: 1, font: { size: 11 } },
-                        title      : { display: true, text: 'Tasks', font: { size: 11 }, color: '#9ca3af' }
-                    }
-                }
-            }
-        });
-    })();
-    <?php endif; ?>
+                    });
+                })();
+        <?php endif; ?>
 
-});
+        // ── TAB 2: Self doughnut ──────────────────────────────────────────────────
+        <?php if ($activeTab === 'self' && $selfTotal > 0): ?>
+                (function () {
+                    const ctx = document.getElementById('selfDoughnut');
+                    if (!ctx) return;
+                    const vals = <?= json_encode(array_map(function ($st) use ($selfStats) {
+                        $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                        return (int) ($selfStats[$safe] ?? 0);
+                    }, $allStatuses)) ?>;
+                    const labels = statuses.map(s => s.label);
+                    const colors = statuses.map(s => s.color);
+                    new Chart(ctx, {
+                        type: 'doughnut',
+                        data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
+                        options: {
+                            responsive: true, maintainAspectRatio: false, cutout: '68%',
+                            plugins: {
+                                legend: { position: 'right', labels: { usePointStyle: true, font: { size: 11 }, padding: 14 } },
+                                tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.raw}` } }
+                            }
+                        }
+                    });
+                })();
+        <?php endif; ?>
+
+        // ── TAB 2b: Self tab — dept staff bar chart (Head Office & Hetauda only) ──
+        <?php if ($activeTab === 'self' && !empty($staffReport) && $canSeeAllBranch): ?>
+                (function () {
+                    const ctx = document.getElementById('staffChartSelfDept');
+                    if (!ctx) return;
+                    const staff = <?= json_encode(array_map(function ($s) use ($allStatuses) {
+                        $row = ['name' => explode(' ', $s['full_name'])[0] ?? 'N/A', 'total' => (int) $s['total']];
+                        foreach ($allStatuses as $st) {
+                            $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                            $row[$safe] = (int) ($s[$safe] ?? 0);
+                        }
+                        return $row;
+                    }, $staffReport)) ?>;
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: staff.map(d => d.name),
+                            datasets: statuses.map(st => ({
+                                label: st.label, data: staff.map(d => d[st.key] || 0),
+                                backgroundColor: st.color, borderRadius: 4, borderSkipped: false,
+                            }))
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: { position: 'top', labels: { usePointStyle: true, font: { size: 11 }, padding: 16 } },
+                                tooltip: { callbacks: { footer: items => { const t = staff[items[0]?.dataIndex]?.total ?? 0; return t ? `Total: ${t}` : ''; } } }
+                            },
+                            scales: {
+                                x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+                                y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
+                            }
+                        }
+                    });
+                })();
+        <?php endif; ?>
+        // ── TAB 3: All Branches staff bar chart ───────────────────────────────────
+        <?php if ($activeTab === 'allbranch' && !empty($abStaffReport)): ?>
+                (function () {
+                    const ctx = document.getElementById('staffChartAllBranch');
+                    if (!ctx) { console.warn('staffChartAllBranch canvas not found'); return; }
+
+                    const staff = <?= json_encode(array_map(function ($s) use ($allStatuses) {
+                        // Label: "FirstName (Branch)" so bars are distinguishable across branches
+                        $firstName = explode(' ', $s['full_name'])[0] ?? 'N/A';
+                        $branchShort = explode(' ', $s['branch_name'])[0] ?? '';
+                        $row = [
+                            'name' => $firstName . ($branchShort ? ' (' . $branchShort . ')' : ''),
+                            'total' => (int) $s['total'],
+                        ];
+                        foreach ($allStatuses as $st) {
+                            $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+                            $row[$safe] = (int) ($s[$safe] ?? 0);
+                        }
+                        return $row;
+                    }, $abStaffReport)) ?>;
+
+                    if (!staff.length) { console.warn('staffChartAllBranch: no data'); return; }
+
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: staff.map(d => d.name),
+                            datasets: statuses.map(st => ({
+                                label: st.label,
+                                data: staff.map(d => d[st.key] || 0),
+                                backgroundColor: st.color,
+                                borderRadius: 4,
+                                borderSkipped: false,
+                            }))
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: {
+                                    position: 'top',
+                                    labels: { usePointStyle: true, font: { size: 11 }, padding: 16 }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        footer: items => {
+                                            const t = staff[items[0]?.dataIndex]?.total ?? 0;
+                                            return t ? `Total: ${t}` : '';
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    stacked: true,
+                                    grid: { display: false },
+                                    ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
+                                },
+                                y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    grid: { color: '#f3f4f6' },
+                                    ticks: { stepSize: 1, font: { size: 11 } },
+                                    title: { display: true, text: 'Tasks', font: { size: 11 }, color: '#9ca3af' }
+                                }
+                            }
+                        }
+                    });
+                })();
+        <?php endif; ?>
+
+    });
 </script>
 
 <?php include '../../includes/footer.php'; ?>

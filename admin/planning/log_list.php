@@ -190,7 +190,7 @@ ORDER BY log_date DESC, time_in DESC
 ");
 $stmt->execute(array_merge(
     $paramsVisit,
-    [$uid, $uid, $uid,$uid],
+    [$uid, $uid, $uid, $uid],
     $paramsOffice,
     [$uid, $uid, $uid]
 ));
@@ -784,6 +784,40 @@ $baseQ = [
         height: 33px;
         font-family: inherit;
         background: var(--surface);
+    }
+
+    /* ── DataTables pagination fix ───────────────────────────────────────────── */
+    #logsTable_wrapper .dataTables_paginate .paginate_button {
+        background: var(--surface) !important;
+        border: 1.5px solid var(--border) !important;
+        color: var(--ink) !important;
+        border-radius: 7px !important;
+        padding: .25rem .6rem !important;
+        margin: 0 2px !important;
+        font-size: .78rem !important;
+        font-weight: 600 !important;
+        box-shadow: none !important;
+    }
+
+    #logsTable_wrapper .dataTables_paginate .paginate_button:hover {
+        background: var(--gold-lt) !important;
+        border-color: var(--gold) !important;
+        color: var(--gold) !important;
+    }
+
+    #logsTable_wrapper .dataTables_paginate .paginate_button.current,
+    #logsTable_wrapper .dataTables_paginate .paginate_button.current:hover {
+        background: var(--gold) !important;
+        border-color: var(--gold) !important;
+        color: #fff !important;
+    }
+
+    #logsTable_wrapper .dataTables_paginate .paginate_button.disabled,
+    #logsTable_wrapper .dataTables_paginate .paginate_button.disabled:hover {
+        background: #f8fafc !important;
+        border-color: var(--border) !important;
+        color: #cbd5e1 !important;
+        cursor: not-allowed !important;
     }
 
     @media (max-width: 768px) {

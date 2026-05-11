@@ -7,10 +7,10 @@ requireAdmin();
 
 $db = getDB();
 $userSession = currentUser();
-updateActiveAt($db, (int)$userSession['id']);
+updateActiveAt($db, (int) $userSession['id']);
 
 $stmt = $db->prepare("
-    SELECT u.*, r.role_name, b.branch_name, d.dept_name, d.dept_code
+    SELECT u.*, r.role_name, b.branch_name, d.dept_name, d.dept_code, d.color AS dept_color
     FROM users u
     LEFT JOIN roles       r ON r.id = u.role_id
     LEFT JOIN branches    b ON b.id = u.branch_id
@@ -20,10 +20,10 @@ $stmt = $db->prepare("
 $stmt->execute([$userSession['id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$pageTitle      = 'Admin Dashboard';
-$adminBranchId  = (int)($user['branch_id']     ?? 0);
-$adminDeptId    = (int)($user['department_id']  ?? 0);
-$adminUserId    = (int)$userSession['id'];
+$pageTitle = 'Admin Dashboard';
+$adminBranchId = (int) ($user['branch_id'] ?? 0);
+$adminDeptId = (int) ($user['department_id'] ?? 0);
+$adminUserId = (int) $userSession['id'];
 $isBranchManager = (($user['dept_code'] ?? '') === 'CORE');
 
 // ── Fetch all statuses ────────────────────────────────────────────────────────
@@ -50,35 +50,86 @@ if ($isBranchManager) {
     $byStatusStmt->execute([$adminBranchId]);
 } else {
     // Dept admin: tasks in their branch + dept (+ transfers + created/assigned)
-    $byStatusStmt = $db->prepare("
+// ── Primary dept status counts (for dept admins only) ─────────────────────
+    $primaryDeptStatus = [];
+    if (!$isBranchManager && $adminDeptId) {
+        $primStQ = $db->prepare("
         SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
         FROM task_status ts
         LEFT JOIN tasks t
-            ON  t.status_id = ts.id
-            AND t.is_active = 1
-            AND (
-                (t.branch_id = ? AND t.department_id = ?)
-                OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.from_dept_id=?)
-                OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.to_dept_id=?)
-                OR t.created_by  = ?
-                OR t.assigned_to = ?
-            )OR EXISTS (
-            SELECT 1 FROM user_department_assignments uda2
-            WHERE uda2.user_id = t.assigned_to
-            AND uda2.department_id = ?         
-        )
-        OR EXISTS (
-            SELECT 1 FROM user_department_assignments uda2
-            WHERE uda2.user_id = t.created_by
-            AND uda2.department_id = ?          
-        )
+            ON  t.status_id     = ts.id
+            AND t.is_active     = 1
+            AND t.branch_id     = ?
+            AND t.department_id = ?
         WHERE ts.status_name != 'Corporate Team'
         GROUP BY ts.id, ts.status_name
     ");
-    $byStatusStmt->execute([$adminBranchId, $adminDeptId,  $adminDeptId, $adminDeptId, $adminDeptId, $adminDeptId, $adminUserId, $adminUserId]);
+        $primStQ->execute([$adminBranchId, $adminDeptId]);
+        $primaryDeptStatus = array_column($primStQ->fetchAll(), 'cnt', 'status_name');
+    }
+    $byStatusStmt = $db->prepare("
+    SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
+    FROM task_status ts
+    LEFT JOIN tasks t
+        ON  t.status_id = ts.id
+        AND t.is_active = 1
+        AND (
+            (t.branch_id = ? AND t.department_id = ?)
+            OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.from_dept_id=?)
+            OR EXISTS (SELECT 1 FROM task_workflow tw WHERE tw.task_id=t.id AND tw.action='transferred_dept' AND tw.to_dept_id=?)
+            OR t.created_by  = ?
+            OR t.assigned_to = ?
+            OR EXISTS (
+                SELECT 1 FROM user_department_assignments uda2
+                WHERE uda2.user_id = t.assigned_to
+                AND uda2.department_id = ?
+            )
+            OR EXISTS (
+                SELECT 1 FROM user_department_assignments uda2
+                WHERE uda2.user_id = t.created_by
+                AND uda2.department_id = ?
+            )
+        )
+    WHERE ts.status_name != 'Corporate Team'
+    GROUP BY ts.id, ts.status_name
+");
+    $byStatusStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId, $adminDeptId, $adminUserId, $adminUserId, $adminDeptId, $adminDeptId]);
 }
 $byStatus = array_column($byStatusStmt->fetchAll(), 'cnt', 'status_name');
 $total = array_sum($byStatus);
+
+// ── UDA additional departments for this admin ─────────────────────────────────
+$udaAdminQ = $db->prepare("
+    SELECT uda.department_id, d.dept_name, d.color
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ? AND uda.department_id != ?
+");
+$udaAdminQ->execute([$adminUserId, $adminDeptId]);
+$adminUdaDepts = $udaAdminQ->fetchAll(PDO::FETCH_ASSOC);
+
+// Status counts per UDA dept
+$udaDeptStatus = [];
+foreach ($adminUdaDepts as $udaDept) {
+    $udaDid = (int) $udaDept['department_id'];
+    $udaStQ = $db->prepare("
+        SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
+        FROM task_status ts
+        LEFT JOIN tasks t
+            ON  t.status_id   = ts.id
+            AND t.is_active   = 1
+            AND t.branch_id   = ?
+            AND t.department_id = ?
+        WHERE ts.status_name != 'Corporate Team'
+        GROUP BY ts.id, ts.status_name
+    ");
+    $udaStQ->execute([$adminBranchId, $udaDid]);
+    $udaDeptStatus[$udaDid] = [
+        'dept_name' => $udaDept['dept_name'],
+        'color' => $udaDept['color'],
+        'counts' => array_column($udaStQ->fetchAll(), 'cnt', 'status_name'),
+    ];
+}
 
 // ── 2. Staff count ────────────────────────────────────────────────────────────
 if ($isBranchManager) {
@@ -90,21 +141,25 @@ if ($isBranchManager) {
     $scStmt->execute([$adminBranchId]);
 } else {
     $scStmt = $db->prepare("
-    SELECT COUNT(DISTINCT u.id)
-    FROM users u
-    JOIN roles r ON r.id = u.role_id
-    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE r.role_name = 'staff'
-      AND u.is_active = 1
-      AND u.branch_id = ?
-      AND (
-            u.department_id = ?
-            OR uda.department_id = ?
+        SELECT COUNT(DISTINCT u.id)
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE r.role_name = 'staff'
+          AND u.is_active = 1
+          AND u.branch_id = ?
+          AND (
+              u.department_id = ?
+              OR EXISTS (
+                  SELECT 1 FROM user_department_assignments uda
+                  WHERE uda.user_id       = u.id
+                    AND uda.department_id = ?
+              )
           )
-");
-$scStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId]);
+    ");
+    $scStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId]);
+
 }
-$staffCount = (int)$scStmt->fetchColumn();
+$staffCount = (int) $scStmt->fetchColumn();
 
 // ── 3. Transfer activity (only relevant for dept admins) ──────────────────────
 $transferIn = $transferOut = 0;
@@ -117,7 +172,7 @@ if (!$isBranchManager) {
             WHERE tw.action='transferred_dept' AND tw.to_dept_id=?
         ");
         $tIn->execute([$adminBranchId, $adminDeptId]);
-        $transferIn = (int)$tIn->fetchColumn();
+        $transferIn = (int) $tIn->fetchColumn();
 
         $tOut = $db->prepare("
             SELECT COUNT(DISTINCT tw.task_id)
@@ -126,30 +181,46 @@ if (!$isBranchManager) {
             WHERE tw.action='transferred_dept' AND tw.from_dept_id=?
         ");
         $tOut->execute([$adminBranchId, $adminDeptId]);
-        $transferOut = (int)$tOut->fetchColumn();
-    } catch (Exception $e) {}
+        $transferOut = (int) $tOut->fetchColumn();
+    } catch (Exception $e) {
+    }
 }
-
+// ── Active dept for Staff Work Distribution ───────────────────────────────────
+$distDeptFilter = $adminDeptId; // safe default before UDA check
+if (!$isBranchManager) {
+    $distDeptFilter = (int)($_GET['dist_dept'] ?? $adminDeptId);
+    $allUdaDeptIds  = array_column($adminUdaDepts, 'department_id');
+    if (!in_array($distDeptFilter, array_merge([$adminDeptId], $allUdaDeptIds))) {
+        $distDeptFilter = $adminDeptId;
+    }
+}
 // ── 4. Staff performance distribution ────────────────────────────────────────
 $statusCols = '';
 foreach ($allStatuses as $st) {
-    $safe   = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
+    $safe = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name']));
     $quoted = $db->quote($st['status_name']);
     $statusCols .= "SUM(CASE WHEN ut.status_name = {$quoted} THEN 1 ELSE 0 END) AS `{$safe}`,\n        ";
 }
 
-// Build the inner UNION subquery (no params — uses all tasks)
+// For BM: no dept filter. For dept admin: scope to selected dept + branch.
+// We use placeholder literals directly since this goes inside a subquery.
+$unionDeptFilter = $isBranchManager
+    ? "1=1"
+    : "t.branch_id = {$adminBranchId} AND t.department_id = {$distDeptFilter}";
+
 $unionSql = "
     SELECT t.id AS task_id, t.assigned_to AS user_id, ts.status_name, 0 AS via_transfer
     FROM tasks t
     LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE t.is_active = 1
+      AND {$unionDeptFilter}
     UNION
     SELECT t.id AS task_id, tw.to_user_id AS user_id, ts.status_name, 1 AS via_transfer
     FROM task_workflow tw
     JOIN  tasks t            ON t.id  = tw.task_id
     LEFT JOIN task_status ts ON ts.id = t.status_id
     WHERE t.is_active = 1
+      AND {$unionDeptFilter}
       AND tw.action IN ('transferred_staff','transferred_dept')
       AND tw.to_user_id IS NOT NULL
 ";
@@ -182,15 +253,15 @@ if ($isBranchManager) {
     ");
     $deptDistStmt->execute([$adminBranchId]);
 } else {
-    // Dept admin: only staff in their branch + dept
+    // Dept admin: all staff in selected dept (primary OR UDA), show even with 0 tasks
     $deptDistStmt = $db->prepare("
         SELECT
             u.full_name,
             u.employee_id,
             d.dept_name,
-            COUNT(DISTINCT ut.task_id)  AS task_count,
-            SUM(ut.via_transfer)        AS transferred_in_count,
-            SUM(1 - ut.via_transfer)    AS original_count,
+            COALESCE(COUNT(DISTINCT ut.task_id), 0)  AS task_count,
+            COALESCE(SUM(ut.via_transfer), 0)        AS transferred_in_count,
+            COALESCE(SUM(1 - ut.via_transfer), 0)    AS original_count,
             {$statusCols}
             CASE (ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT ut.task_id) DESC) % 8)
                 WHEN 0 THEN '#f59e0b' WHEN 1 THEN '#3b82f6' WHEN 2 THEN '#10b981'
@@ -198,23 +269,42 @@ if ($isBranchManager) {
                 WHEN 6 THEN '#06b6d4' WHEN 7 THEN '#f97316'
             END AS color
         FROM users u
-        LEFT JOIN roles r        ON r.id  = u.role_id
-        LEFT JOIN departments d  ON d.id  = u.department_id
-        LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+        LEFT JOIN roles r       ON r.id = u.role_id
+        LEFT JOIN departments d ON d.id = u.department_id
         LEFT JOIN ({$unionSql}) AS ut ON ut.user_id = u.id
-        WHERE r.role_name     = 'staff'
-          AND u.is_active     = 1
-          AND u.branch_id     = ?
+        WHERE r.role_name = 'staff'
+          AND u.is_active = 1
+          AND u.branch_id = ?
           AND (
-          u.department_id = ?
-          OR uda.department_id = ?
-      )
+              u.department_id = ?
+              OR EXISTS (
+                  SELECT 1 FROM user_department_assignments uda2
+                  WHERE uda2.user_id       = u.id
+                    AND uda2.department_id = ?
+              )
+          )
         GROUP BY u.id, u.full_name, u.employee_id, d.dept_name
         ORDER BY task_count DESC
     ");
-    $deptDistStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId]);
+    $deptDistStmt->execute([$adminBranchId, $distDeptFilter, $distDeptFilter]);
 }
 $deptDist = $deptDistStmt->fetchAll();
+
+// Label for the active dist dept
+$distDeptLabel = '';
+$distDeptColor = '#c9a84c';
+if (!$isBranchManager) {
+    foreach (array_merge(
+        [['department_id' => $adminDeptId, 'dept_name' => $user['dept_name'], 'color' => $user['dept_color'] ?? '#c9a84c']],
+        $adminUdaDepts
+    ) as $dd) {
+        if ((int)$dd['department_id'] === $distDeptFilter) {
+            $distDeptLabel = $dd['dept_name'];
+            $distDeptColor = $dd['color'] ?: '#c9a84c';
+            break;
+        }
+    }
+}
 
 // ── 5. Recent tasks ───────────────────────────────────────────────────────────
 if ($isBranchManager) {
@@ -233,6 +323,17 @@ if ($isBranchManager) {
     ");
     $recentStmt->execute([$adminBranchId]);
 } else {
+    // Collect all dept IDs this admin can see (primary + UDA)
+    $allAdminDeptIds = array_unique(array_merge(
+        [$adminDeptId],
+        array_column($adminUdaDepts, 'department_id')
+    ));
+    $recentDeptFilter = (int) ($_GET['recent_dept'] ?? $adminDeptId);
+    // Fallback: if selected dept not in allowed list, use primary
+    if (!in_array($recentDeptFilter, $allAdminDeptIds)) {
+        $recentDeptFilter = $adminDeptId;
+    }
+
     $recentStmt = $db->prepare("
         SELECT t.*, ts.status_name AS status,
                d.dept_name, d.color, c.company_name,
@@ -242,15 +343,26 @@ if ($isBranchManager) {
         LEFT JOIN companies   c  ON c.id  = t.company_id
         LEFT JOIN users       u  ON u.id  = t.assigned_to
         LEFT JOIN task_status ts ON ts.id = t.status_id
-        WHERE t.is_active = 1
-          AND t.branch_id     = ?
+        WHERE t.is_active   = 1
+          AND t.branch_id   = ?
           AND t.department_id = ?
         ORDER BY t.created_at DESC
-        LIMIT 6
+        LIMIT 8
     ");
-    $recentStmt->execute([$adminBranchId, $adminDeptId]);
+    $recentStmt->execute([$adminBranchId, $recentDeptFilter]);
 }
 $recentTasks = $recentStmt->fetchAll();
+
+// Build dept label map for recent tasks tabs (dept admin only)
+$recentDeptTabs = [];
+if (!$isBranchManager && !empty($allAdminDeptIds)) {
+    $tabDeptIds = implode(',', array_map('intval', $allAdminDeptIds));
+    $recentDeptTabs = $db->query("
+        SELECT id, dept_name, color FROM departments
+        WHERE id IN ({$tabDeptIds}) AND is_active = 1
+        ORDER BY FIELD(id, {$adminDeptId}) DESC, dept_name ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+}
 
 include '../../includes/header.php';
 ?>
@@ -268,7 +380,8 @@ include '../../includes/header.php';
                             <?php if ($isBranchManager): ?>
                                 <i class="fas fa-code-branch me-1"></i>Branch Manager
                             <?php else: ?>
-                                <i class="fas fa-user-shield me-1"></i><?= htmlspecialchars($user['role_name'] ?? 'Admin') ?>
+                                <i
+                                    class="fas fa-user-shield me-1"></i><?= htmlspecialchars($user['role_name'] ?? 'Admin') ?>
                             <?php endif; ?>
                         </div>
                         <h4>Hello, <?= htmlspecialchars($user['full_name'] ?? $userSession['username']) ?></h4>
@@ -281,7 +394,8 @@ include '../../includes/header.php';
                             <?php endif; ?>
                         </p>
                     </div>
-                    <a href="<?= APP_URL ?>/admin/tasks/assign.php" class="btn-gold btn d-flex align-items-center gap-2">
+                    <a href="<?= APP_URL ?>/admin/tasks/assign.php"
+                        class="btn-gold btn d-flex align-items-center gap-2">
                         <i class="fas fa-plus"></i> Assign Task
                     </a>
                 </div>
@@ -307,15 +421,16 @@ include '../../includes/header.php';
             <!-- Stat cards -->
             <div class="row g-3 mb-4">
                 <?php foreach ($allStatuses as $st):
-                    $k    = $st['status_name'];
-                    $cnt  = $byStatus[$k] ?? 0;
-                    $col  = $st['color']    ?? '#6b7280';
-                    $bg   = $st['bg_color'] ?? '#f3f4f6';
-                    $icon = $st['icon']     ?? 'fa-circle';
-                ?>
+                    $k = $st['status_name'];
+                    $cnt = $byStatus[$k] ?? 0;
+                    $col = $st['color'] ?? '#6b7280';
+                    $bg = $st['bg_color'] ?? '#f3f4f6';
+                    $icon = $st['icon'] ?? 'fa-circle';
+                    ?>
                     <div class="col-6 col-md-4 col-xl-2">
                         <div class="stat-card">
-                            <div class="stat-card-icon" style="background:<?= htmlspecialchars($bg) ?>;color:<?= htmlspecialchars($col) ?>;">
+                            <div class="stat-card-icon"
+                                style="background:<?= htmlspecialchars($bg) ?>;color:<?= htmlspecialchars($col) ?>;">
                                 <i class="fas <?= htmlspecialchars($icon) ?>"></i>
                             </div>
                             <div class="stat-card-value" style="color:<?= htmlspecialchars($col) ?>;">
@@ -348,7 +463,105 @@ include '../../includes/header.php';
                     </div>
                 </div>
             </div>
-
+            <!-- Primary Dept KPI (dept admins only) -->
+            <?php if (!$isBranchManager && !empty($primaryDeptStatus)):
+                $primaryTotal = array_sum($primaryDeptStatus);
+                $deptColor = $user['dept_color'] ?? '#c9a84c'; // fallback gold
+                ?>
+                <div class="card-mis mb-3">
+                    <div class="card-mis-header" style="border-left:3px solid <?= htmlspecialchars($deptColor) ?>;">
+                        <h5 style="font-size:.88rem;">
+                            <i class="fas fa-building me-2" style="color:<?= htmlspecialchars($deptColor) ?>;"></i>
+                            <?= htmlspecialchars($user['dept_name'] ?? 'My Department') ?> — Task Status
+                            <span style="font-size:.72rem;color:#9ca3af;font-weight:400;margin-left:.4rem;">(primary
+                                dept)</span>
+                        </h5>
+                        <span style="font-size:.75rem;color:#9ca3af;"><?= $primaryTotal ?> total tasks</span>
+                    </div>
+                    <div class="card-mis-body">
+                        <div class="row g-2">
+                            <?php foreach ($allStatuses as $st):
+                                $sn = $st['status_name'];
+                                $cnt = $primaryDeptStatus[$sn] ?? 0;
+                                $col = $st['color'] ?: '#9ca3af';
+                                ?>
+                                <div class="col-6 col-md-3 col-xl-2">
+                                    <div
+                                        style="background:#f9fafb;border-radius:10px;padding:.75rem;text-align:center;border:1px solid #f3f4f6;">
+                                        <div style="font-size:1.3rem;font-weight:800;color:<?= $col ?>;"><?= $cnt ?></div>
+                                        <div style="font-size:.68rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                            <?= htmlspecialchars($sn) ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                            <div class="col-6 col-md-3 col-xl-2">
+                                <div
+                                    style="background:#f9fafb;border-radius:10px;padding:.75rem;text-align:center;border:1px solid <?= htmlspecialchars($deptColor) ?>44;">
+                                    <div
+                                        style="font-size:1.3rem;font-weight:800;color:<?= htmlspecialchars($deptColor) ?>;">
+                                        <?= $primaryTotal ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                        Total</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+            <!-- UDA Additional Dept KPIs -->
+            <?php foreach ($udaDeptStatus as $udaDid => $udaData):
+                $udaTotal = array_sum($udaData['counts']);
+                if ($udaTotal === 0)
+                    continue;
+                ?>
+                <div class="card-mis mb-3">
+                    <div class="card-mis-header"
+                        style="border-left:3px solid <?= htmlspecialchars($udaData['color'] ?: '#c9a84c') ?>;">
+                        <h5 style="font-size:.88rem;">
+                            <i class="fas fa-layer-group me-2"
+                                style="color:<?= htmlspecialchars($udaData['color'] ?: '#c9a84c') ?>;"></i>
+                            <?= htmlspecialchars($udaData['dept_name']) ?> — Task Status
+                            <span style="font-size:.72rem;color:#9ca3af;font-weight:400;margin-left:.4rem;">(additional
+                                dept)</span>
+                        </h5>
+                        <span style="font-size:.75rem;color:#9ca3af;"><?= $udaTotal ?> total tasks</span>
+                    </div>
+                    <div class="card-mis-body">
+                        <div class="row g-2">
+                            <?php foreach ($allStatuses as $st):
+                                $sn = $st['status_name'];
+                                $cnt = $udaData['counts'][$sn] ?? 0;
+                                $col = $st['color'] ?: '#9ca3af';
+                                $bg = $st['bg_color'] ?: '#f3f4f6';
+                                $ico = $st['icon'] ?: 'fa-circle';
+                                ?>
+                                <div class="col-6 col-md-3 col-xl-2">
+                                    <div
+                                        style="background:#f9fafb;border-radius:10px;padding:.75rem;text-align:center;border:1px solid #f3f4f6;">
+                                        <div style="font-size:1.3rem;font-weight:800;color:<?= $col ?>;"><?= $cnt ?></div>
+                                        <div style="font-size:.68rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                            <?= htmlspecialchars($sn) ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                            <div class="col-6 col-md-3 col-xl-2">
+                                <div
+                                    style="background:#f9fafb;border-radius:10px;padding:.75rem;text-align:center;border:1px solid <?= htmlspecialchars($udaData['color'] ?: '#c9a84c') ?>44;">
+                                    <div
+                                        style="font-size:1.3rem;font-weight:800;color:<?= htmlspecialchars($udaData['color'] ?: '#c9a84c') ?>;">
+                                        <?= $udaTotal ?>
+                                    </div>
+                                    <div style="font-size:.68rem;color:#9ca3af;font-weight:600;text-transform:uppercase;">
+                                        Total</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
             <!-- Staff Work Distribution -->
             <div class="card-mis mb-4">
                 <div class="card-mis-header">
@@ -358,40 +571,79 @@ include '../../includes/header.php';
                         <?php if ($isBranchManager): ?>
                             · <span style="color:#c9a84c;">All Departments</span>
                         <?php else: ?>
-                            · <?= htmlspecialchars($user['dept_name'] ?? '') ?>
+                            · <span style="color:<?= htmlspecialchars($distDeptColor) ?>;"><?= htmlspecialchars($distDeptLabel ?: ($user['dept_name'] ?? '')) ?></span>
                         <?php endif; ?>
                         <span style="margin-left:.4rem;background:#eff6ff;color:#3b82f6;padding:.1rem .45rem;border-radius:99px;font-size:.68rem;">
                             incl. transferred tasks
                         </span>
                     </span>
                 </div>
-                <div class="card-mis-body">
-                    <?php if (!empty($deptDist) && array_sum(array_column($deptDist, 'task_count')) > 0): ?>
+
+                <?php if (!$isBranchManager && count($recentDeptTabs) > 1): ?>
+                <!-- Dept tabs for distribution -->
+                <div style="display:flex;gap:0;border-bottom:2px solid #f3f4f6;overflow-x:auto;">
+                    <?php foreach ($recentDeptTabs as $dtab):
+                        $isActive = ($distDeptFilter == $dtab['id']);
+                        $tabColor = $dtab['color'] ?: '#c9a84c';
+                        // Count staff in this dept for the badge
+                        $dtabStaffCnt = 0;
+                        foreach ($deptDist as $dd) { $dtabStaffCnt++; } // reuse deptDist only for active tab; show total for active
+                    ?>
+                   <a href="?<?= http_build_query(array_merge($_GET, ['dist_dept' => $dtab['id']])) ?>#dist-section"
+                       style="padding:.6rem 1.2rem;font-size:.8rem;font-weight:600;text-decoration:none;
+                              white-space:nowrap;border-bottom:2px solid <?= $isActive ? $tabColor : 'transparent' ?>;
+                              margin-bottom:-2px;
+                              color:<?= $isActive ? $tabColor : '#9ca3af' ?>;
+                              background:<?= $isActive ? $tabColor.'0d' : 'transparent' ?>;
+                              transition:.15s;">
+                        <i class="fas fa-users me-1" style="font-size:.7rem;"></i>
+                        <?= htmlspecialchars($dtab['dept_name']) ?>
+                        <?php if ($dtab['id'] == $adminDeptId): ?>
+                            <span style="font-size:.6rem;color:<?= $tabColor ?>;margin-left:.2rem;">★</span>
+                        <?php endif; ?>
+                        <?php if ($isActive): ?>
+                            <span style="background:<?= $tabColor ?>22;color:<?= $tabColor ?>;
+                                         font-size:.62rem;font-weight:700;padding:.05rem .35rem;
+                                         border-radius:99px;margin-left:.3rem;">
+                                <?= count($deptDist) ?>
+                            </span>
+                        <?php endif; ?>
+                    </a>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+
+                <div class="card-mis-body" id="dist-section">
+                    <?php if (!empty($deptDist)): ?>
                         <div style="height:300px;position:relative;margin-bottom:1.5rem;">
                             <canvas id="staffBarChart"></canvas>
                         </div>
                         <div class="row g-2 mt-2">
                             <?php foreach ($deptDist as $s):
                                 $doneKey = preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower('Done'));
-                                $doneCnt = (int)($s[$doneKey] ?? 0);
-                                $openCnt = max(0, (int)$s['task_count'] - $doneCnt);
-                                $xferIn  = (int)($s['transferred_in_count'] ?? 0);
+                                $doneCnt = (int) ($s[$doneKey] ?? 0);
+                                $openCnt = max(0, (int) $s['task_count'] - $doneCnt);
+                                $xferIn = (int) ($s['transferred_in_count'] ?? 0);
                                 $donePct = $s['task_count'] > 0 ? round(($doneCnt / $s['task_count']) * 100) : 0;
-                            ?>
+                                ?>
                                 <div class="col-md-4 col-6">
-                                    <div style="background:#f9fafb;border-radius:10px;padding:.75rem 1rem;border-left:3px solid <?= htmlspecialchars($s['color']) ?>;">
-                                        <div style="font-size:.82rem;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                                    <div
+                                        style="background:#f9fafb;border-radius:10px;padding:.75rem 1rem;border-left:3px solid <?= htmlspecialchars($s['color']) ?>;">
+                                        <div
+                                            style="font-size:.82rem;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                                             <?= htmlspecialchars($s['full_name']) ?>
                                         </div>
                                         <div style="font-size:.7rem;color:#9ca3af;margin-bottom:.5rem;">
                                             <?= htmlspecialchars($s['employee_id'] ?? '') ?>
                                             <?php if ($isBranchManager && !empty($s['dept_name'])): ?>
-                                                <span style="background:#f3f4f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;color:#6b7280;">
+                                                <span
+                                                    style="background:#f3f4f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;color:#6b7280;">
                                                     <?= htmlspecialchars($s['dept_name']) ?>
                                                 </span>
                                             <?php endif; ?>
                                             <?php if ($xferIn > 0): ?>
-                                                <span style="background:#eff6ff;color:#3b82f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;">
+                                                <span
+                                                    style="background:#eff6ff;color:#3b82f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;">
                                                     +<?= $xferIn ?> transferred in
                                                 </span>
                                             <?php endif; ?>
@@ -408,14 +660,19 @@ include '../../includes/header.php';
                                             </div>
                                             <div style="width:1px;background:#e5e7eb;align-self:stretch;"></div>
                                             <div style="text-align:center;">
-                                                <div style="font-size:1rem;font-weight:700;color:#3b82f6;"><?= $s['task_count'] ?></div>
+                                                <div style="font-size:1rem;font-weight:700;color:#3b82f6;">
+                                                    <?= $s['task_count'] ?>
+                                                </div>
                                                 <div style="font-size:.65rem;color:#9ca3af;">Total</div>
                                             </div>
                                             <div style="flex:1;margin-left:.5rem;">
                                                 <div style="background:#f3f4f6;border-radius:99px;height:5px;overflow:hidden;">
-                                                    <div style="width:<?= $donePct ?>%;background:#10b981;height:100%;border-radius:99px;"></div>
+                                                    <div
+                                                        style="width:<?= $donePct ?>%;background:#10b981;height:100%;border-radius:99px;">
+                                                    </div>
                                                 </div>
-                                                <div style="font-size:.65rem;color:#9ca3af;text-align:right;"><?= $donePct ?>%</div>
+                                                <div style="font-size:.65rem;color:#9ca3af;text-align:right;"><?= $donePct ?>%
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -432,54 +689,79 @@ include '../../includes/header.php';
             </div>
 
             <script>
-            (function () {
-                const ctx = document.getElementById('staffBarChart');
-                if (!ctx) return;
-                const data = <?= json_encode(array_values(array_filter($deptDist, fn($d) => $d['task_count'] > 0))) ?>;
-                if (!data.length) return;
-                const statuses = <?= json_encode(array_map(function($st) {
-                    return [
-                        'key'   => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name'])),
-                        'label' => $st['status_name'],
-                        'color' => $st['color'] ?? '#9ca3af',
-                    ];
-                }, $allStatuses)) ?>;
-                new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: data.map(d => d.full_name.split(' ')[0]),
-                        datasets: statuses
-                            .filter(s => data.some(d => (d[s.key] ?? 0) > 0))
-                            .map(s => ({
-                                label: s.label,
-                                data: data.map(d => parseInt(d[s.key] ?? 0)),
-                                backgroundColor: s.color,
-                                borderRadius: 6, borderSkipped: false,
-                            }))
-                    },
-                    options: {
-                        responsive: true, maintainAspectRatio: false,
-                        interaction: { mode: 'index', intersect: false },
-                        plugins: {
-                            legend: { display: true, position: 'top', labels: { font: { size: 11 }, usePointStyle: true, padding: 14 } },
-                            tooltip: { callbacks: { afterBody: items => [`Total: ${data[items[0].dataIndex].task_count} tasks`] } }
+                (function () {
+                    const ctx = document.getElementById('staffBarChart');
+                    if (!ctx) return;
+                    const data = <?= json_encode(array_values($deptDist)) ?>;
+                    if (!data.length) return;
+                    const statuses = <?= json_encode(array_map(function ($st) {
+                        return [
+                            'key' => preg_replace('/[^a-zA-Z0-9_]/', '_', strtolower($st['status_name'])),
+                            'label' => $st['status_name'],
+                            'color' => $st['color'] ?? '#9ca3af',
+                        ];
+                    }, $allStatuses)) ?>;
+                    new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.map(d => d.full_name.split(' ')[0]),
+                            datasets: statuses
+                                .filter(s => data.some(d => (d[s.key] ?? 0) > 0))
+                                .map(s => ({
+                                    label: s.label,
+                                    data: data.map(d => parseInt(d[s.key] ?? 0)),
+                                    backgroundColor: s.color,
+                                    borderRadius: 6, borderSkipped: false,
+                                }))
                         },
-                        scales: {
-                            x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-                            y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: { display: true, position: 'top', labels: { font: { size: 11 }, usePointStyle: true, padding: 14 } },
+                                tooltip: { callbacks: { afterBody: items => [`Total: ${data[items[0].dataIndex].task_count} tasks`] } }
+                            },
+                            scales: {
+                                x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+                                y: { stacked: true, beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { stepSize: 1, font: { size: 11 } } }
+                            }
                         }
-                    }
-                });
-            })();
+                    });
+                })();
             </script>
 
+            <!-- Recent Tasks -->
             <!-- Recent Tasks -->
             <div class="card-mis mt-4">
                 <div class="card-mis-header">
                     <h5><i class="fas fa-clock text-warning me-2"></i>Recent Tasks</h5>
                     <a href="<?= APP_URL ?>/admin/tasks/index.php" class="btn btn-sm btn-outline-secondary">View All</a>
                 </div>
-                <div class="table-responsive">
+
+                <?php if (!$isBranchManager && count($recentDeptTabs) > 1): ?>
+                    <!-- Dept tabs for recent tasks -->
+                    <div style="display:flex;gap:0;border-bottom:2px solid #f3f4f6;overflow-x:auto;">
+                        <?php foreach ($recentDeptTabs as $rtab):
+                            $isActive = ($recentDeptFilter == $rtab['id']);
+                            $tabColor = $rtab['color'] ?: '#c9a84c';
+                            ?>
+                            <a href="?<?= http_build_query(array_merge($_GET, ['recent_dept' => $rtab['id']])) ?>#recent-tasks" style="padding:.6rem 1.2rem;font-size:.8rem;font-weight:600;text-decoration:none;
+                              white-space:nowrap;border-bottom:2px solid <?= $isActive ? $tabColor : 'transparent' ?>;
+                              margin-bottom:-2px;
+                              color:<?= $isActive ? $tabColor : '#9ca3af' ?>;
+                              background:<?= $isActive ? $tabColor . '0d' : 'transparent' ?>;
+                              transition:.15s;">
+                                <i class="fas fa-layer-group me-1" style="font-size:.7rem;"></i>
+                                <?= htmlspecialchars($rtab['dept_name']) ?>
+                                <?php if ($rtab['id'] == $adminDeptId): ?>
+                                    <span style="font-size:.6rem;color:<?= $tabColor ?>;margin-left:.2rem;">★</span>
+                                <?php endif; ?>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+
+                <div class="table-responsive" id="recent-tasks">
                     <table class="table-mis w-100">
                         <thead>
                             <tr>
@@ -495,34 +777,44 @@ include '../../includes/header.php';
                         <tbody>
                             <?php if (empty($recentTasks)): ?>
                                 <tr>
-                                    <td colspan="7" class="empty-state"><i class="fas fa-list-check"></i> No tasks yet</td>
+                                    <td colspan="7" class="empty-state">
+                                        <i class="fas fa-list-check"></i> No tasks yet
+                                    </td>
                                 </tr>
                             <?php endif; ?>
                             <?php foreach ($recentTasks as $t):
-                                $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status']));
-                            ?>
+                                $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
+                                ?>
                                 <tr>
                                     <td><span class="task-number"><?= htmlspecialchars($t['task_number']) ?></span></td>
-                                    <td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.87rem;font-weight:500;">
+                                    <td
+                                        style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.87rem;font-weight:500;">
                                         <?= htmlspecialchars($t['title']) ?>
                                     </td>
                                     <td>
-                                        <span style="font-size:.73rem;background:<?= htmlspecialchars($t['color'] ?? '#ccc') ?>22;color:<?= htmlspecialchars($t['color'] ?? '#666') ?>;padding:.2rem .5rem;border-radius:99px;">
+                                        <span
+                                            style="font-size:.73rem;background:<?= htmlspecialchars($t['color'] ?? '#ccc') ?>22;color:<?= htmlspecialchars($t['color'] ?? '#666') ?>;padding:.2rem .5rem;border-radius:99px;">
                                             <?= htmlspecialchars($t['dept_name'] ?? '—') ?>
                                         </span>
                                     </td>
                                     <td style="font-size:.82rem;"><?= htmlspecialchars($t['company_name'] ?? '—') ?></td>
-                                    <td style="font-size:.82rem;"><?= htmlspecialchars($t['assigned_to_name'] ?? '—') ?></td>
-                                    <td><span class="status-badge <?= $sClass ?>"><?= htmlspecialchars($t['status']) ?></span></td>
-                                    <td style="font-size:.78rem;color:#9ca3af;"><?= date('M j', strtotime($t['created_at'])) ?></td>
+                                    <td style="font-size:.82rem;"><?= htmlspecialchars($t['assigned_to_name'] ?? '—') ?>
+                                    </td>
+                                    <td><span
+                                            class="status-badge <?= $sClass ?>"><?= htmlspecialchars($t['status'] ?? '—') ?></span>
+                                    </td>
+                                    <td style="font-size:.78rem;color:#9ca3af;">
+                                        <?= date('M j', strtotime($t['created_at'])) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
             </div>
+            
 
-        </div><!-- padding -->
-    </div><!-- main-content -->
+
+    </div><!-- padding -->
+</div><!-- main-content -->
 </div><!-- app-wrapper -->
 <?php include '../../includes/footer.php'; ?>

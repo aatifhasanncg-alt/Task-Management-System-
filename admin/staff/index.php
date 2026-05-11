@@ -22,6 +22,43 @@ $isCoreAdminDept = ($self['dept_code'] ?? '') === 'CORE';
 $myBranchId = (int) ($self['branch_id'] ?? 0);
 $myDeptId = (int) ($self['department_id'] ?? 0);
 
+// ── UDA dept tabs (non-core-admin only) ───────────────────────────────────────
+$activeStaffDeptTab = 0;
+$staffDeptTabs = [];
+
+if (!$isCoreAdminDept) {
+    // Fetch UDA depts for current user
+    $udaTabStmt = $db->prepare("
+        SELECT d.id, d.dept_name, d.color
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id = ?
+        ORDER BY d.dept_name
+    ");
+    $udaTabStmt->execute([$userId]);
+    $udaTabDepts = $udaTabStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Primary dept first, then additional UDA depts
+    $primaryDeptStmt = $db->prepare("SELECT id, dept_name, color FROM departments WHERE id = ?");
+    $primaryDeptStmt->execute([$myDeptId]);
+    $primaryDeptRow = $primaryDeptStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($primaryDeptRow) {
+        $staffDeptTabs[] = array_merge($primaryDeptRow, ['is_primary' => true]);
+    }
+    foreach ($udaTabDepts as $udt) {
+        if ($udt['id'] != $myDeptId) {
+            $staffDeptTabs[] = array_merge($udt, ['is_primary' => false]);
+        }
+    }
+
+    $activeStaffDeptTab = (int) ($_GET['staff_dept'] ?? 0);
+    $validTabIds = array_column($staffDeptTabs, 'id');
+    if ($activeStaffDeptTab !== 0 && !in_array($activeStaffDeptTab, $validTabIds)) {
+        $activeStaffDeptTab = 0;
+    }
+}
+
 // ── Filters ───────────────────────────────────────────────────────────────────
 $search = trim($_GET['search'] ?? '');
 $filterB = (int) ($_GET['branch_id'] ?? 0);
@@ -31,45 +68,73 @@ $page = max(1, (int) ($_GET['page'] ?? 1));
 $perPage = 25;
 $offset = ($page - 1) * $perPage;
 
+// Core-admin dept tab filter (existing behaviour)
+$filterDeptTab = (int) ($_GET['dept_tab'] ?? 0);
+
 // ── Build WHERE ───────────────────────────────────────────────────────────────
 $where = ['u.is_active = 1'];
 $params = [];
 
 if ($isCoreAdminDept) {
-    // Core Admin: only staff from the user's branch
-    $where[] = 'u.branch_id = ?'; // Add this line to restrict Core Admin to their respective branch
-    $params[] = $myBranchId; // Pass the logged-in user's branch
-    if ($filterD) {
+    // Branch-scoped; optional dept tab / dropdown filter
+    $where[] = 'u.branch_id = ?';
+    $params[] = $myBranchId;
+
+    $activeDeptFilter = $filterDeptTab ?: $filterD;
+    if ($activeDeptFilter) {
         $where[] = '(u.department_id = ? OR EXISTS (
-        SELECT 1 FROM user_department_assignments uda
-        WHERE uda.user_id = u.id AND uda.department_id = ?
-    ))';
-        $params[] = $filterD;
-        $params[] = $filterD;
+            SELECT 1 FROM user_department_assignments uda
+            WHERE uda.user_id = u.id AND uda.department_id = ?
+        ))';
+        $params[] = $activeDeptFilter;
+        $params[] = $activeDeptFilter;
     }
 } else {
-    // Show: all staff in same dept (primary OR via UDA) + the logged-in user
-    $where[] = '(
-        (
-            (u.department_id = ? OR EXISTS (
-                SELECT 1 FROM user_department_assignments uda
-                WHERE uda.user_id = u.id AND uda.department_id = ?
-            ))
-            AND r.role_name = \'staff\'
-        )
-        OR u.id = ?
-    )';
-    $params[] = $myDeptId;
-    $params[] = $myDeptId;
-    $params[] = $userId;
+    // Non-core-admin: scope by active UDA tab or all accessible depts
+    if (count($staffDeptTabs) > 1 && $activeStaffDeptTab) {
+        // Single dept tab selected
+        $where[] = '(
+            (
+                (u.department_id = ? OR EXISTS (
+                    SELECT 1 FROM user_department_assignments uda
+                    WHERE uda.user_id = u.id AND uda.department_id = ?
+                ))
+                AND r.role_name = \'staff\'
+            )
+            OR u.id = ?
+        )';
+        $params[] = $activeStaffDeptTab;
+        $params[] = $activeStaffDeptTab;
+        $params[] = $userId;
+    } else {
+        // All accessible depts (primary + all UDA)
+        $udaAllStmt = $db->prepare("SELECT department_id FROM user_department_assignments WHERE user_id = ?");
+        $udaAllStmt->execute([$userId]);
+        $allAccessDeptIds = array_unique(array_filter(
+            array_merge([$myDeptId], array_column($udaAllStmt->fetchAll(), 'department_id'))
+        ));
+
+        $deptPlaceholders = implode(',', array_fill(0, count($allAccessDeptIds), '?'));
+        $where[] = '(
+            (
+                (u.department_id IN (' . $deptPlaceholders . ') OR EXISTS (
+                    SELECT 1 FROM user_department_assignments uda
+                    WHERE uda.user_id = u.id AND uda.department_id IN (' . $deptPlaceholders . ')
+                ))
+                AND r.role_name = \'staff\'
+            )
+            OR u.id = ?
+        )';
+        $params = array_merge($params, $allAccessDeptIds, $allAccessDeptIds, [$userId]);
+    }
 }
+
 // Search applies to everyone
 if ($search) {
     $where[] = '(u.full_name LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.employee_id LIKE ?)';
     $params = array_merge($params, ["%$search%", "%$search%", "%$search%", "%$search%"]);
 }
 if ($filterR && $isCoreAdminDept) {
-    // Role filter only meaningful for Core Admin (non-core already locked to staff + self)
     $where[] = 'r.role_name = ?';
     $params[] = $filterR;
 }
@@ -100,11 +165,8 @@ $userStmt = $db->prepare("
     LEFT JOIN branches b     ON b.id  = u.branch_id
     LEFT JOIN departments d  ON d.id  = u.department_id
     LEFT JOIN users um       ON um.id = u.managed_by
-
-    -- 🔥 NEW: department assignment mapping
-    LEFT JOIN user_department_assignments uda 
-           ON uda.user_id = u.id 
-
+    LEFT JOIN user_department_assignments uda
+           ON uda.user_id = u.id
     LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
     LEFT JOIN task_status ts ON ts.id = t.status_id
 
@@ -129,7 +191,14 @@ $userStmt = $db->prepare("
 $userStmt->execute(array_merge($params, [$userId]));
 $staffList = $userStmt->fetchAll();
 
-// Viewer's accessible dept IDs
+// ── Core-admin dept tab list ──────────────────────────────────────────────────
+$deptTabList = [];
+if ($isCoreAdminDept) {
+    $deptTabQ = $db->query("SELECT id, dept_name, color FROM departments WHERE is_active=1 ORDER BY dept_name");
+    $deptTabList = $deptTabQ->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Viewer's accessible dept IDs (for task breakdown column)
 $viewerDeptStmt = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
 $viewerDeptStmt->execute([$myDeptId]);
 $viewerDeptCode = $viewerDeptStmt->fetchColumn() ?: '';
@@ -140,7 +209,7 @@ $viewerUdaStmt->execute([$userId]);
 $viewerUdaDepts = array_column($viewerUdaStmt->fetchAll(), 'department_id');
 $viewerAllDeptIds = array_unique(array_merge([$myDeptId], $viewerUdaDepts));
 
-// Per-user dept task stats (filtered to viewer's accessible depts)
+// ── Per-user UDA dept names & task stats ──────────────────────────────────────
 $staffIds = array_column($staffList, 'id');
 $udaByUser = [];
 $deptStatsByUser = [];
@@ -161,7 +230,7 @@ if (!empty($staffIds)) {
         $udaByUser[$row['user_id']][] = $row;
     }
 
-    // Per-dept task stats per user — restrict to viewer's depts if not core admin
+    // Per-dept task stats — restrict to viewer's depts if not core admin
     $deptFilter = '';
     $deptFilterParams = [];
     if (!$viewerIsCoreAdmin && !empty($viewerAllDeptIds)) {
@@ -228,11 +297,11 @@ include '../../includes/header.php';
                             <?= number_format($total) ?> user<?= $total !== 1 ? 's' : '' ?>
                             <?php if (!$isCoreAdminDept): ?>
                                 <span style="font-size:.73rem;color:#c9a84c;margin-left:.4rem;">
-                                    · Your department staff only
+                                    · Your department<?= count($staffDeptTabs) > 1 ? ' + UDA-assigned staff' : '' ?>
                                 </span>
                             <?php else: ?>
                                 <span style="font-size:.73rem;color:#c9a84c;margin-left:.4rem;">
-                                    · All branches
+                                    · Your branch
                                 </span>
                             <?php endif; ?>
                         </p>
@@ -247,9 +316,67 @@ include '../../includes/header.php';
 
             <?= flashHtml() ?>
 
+            <!-- ── UDA Dept Tabs: non-core-admin with multiple depts ── -->
+            <?php if (!$isCoreAdminDept && count($staffDeptTabs) > 1): ?>
+                <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;">
+                    <a href="?<?= http_build_query(array_merge(array_diff_key($_GET, ['staff_dept' => '']), [])) ?>" style="padding:.35rem .9rem;border-radius:99px;font-size:.78rem;font-weight:600;
+                              text-decoration:none;
+                              background:<?= !isset($_GET['staff_dept']) ? '#0a0f1e' : '#f3f4f6' ?>;
+                              color:<?= !isset($_GET['staff_dept']) ? '#c9a84c' : '#6b7280' ?>;
+                              border:1px solid <?= !isset($_GET['staff_dept']) ? '#c9a84c44' : '#e5e7eb' ?>;">
+                        All My Depts
+                    </a>
+                    <?php foreach ($staffDeptTabs as $stab):
+                        $isActive = ($activeStaffDeptTab == $stab['id']) && isset($_GET['staff_dept']);
+                        $tabCol = $stab['color'] ?: '#3b82f6';
+                        ?>
+                        <a href="?<?= http_build_query(array_merge($_GET, ['staff_dept' => $stab['id'], 'page' => 1])) ?>"
+                            style="padding:.35rem .9rem;border-radius:99px;font-size:.78rem;font-weight:600;
+                                  text-decoration:none;
+                                  background:<?= $isActive ? $tabCol : '#f3f4f6' ?>;
+                                  color:<?= $isActive ? '#fff' : '#6b7280' ?>;
+                                  border:1px solid <?= $isActive ? $tabCol : '#e5e7eb' ?>;">
+                            <?= htmlspecialchars($stab['dept_name']) ?>
+                            <?php if ($stab['is_primary']): ?>
+                                <span style="font-size:.6rem;opacity:.8;margin-left:.2rem;">★</span>
+                            <?php endif; ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <!-- ── Core-admin dept tabs ── -->
+            <?php if ($isCoreAdminDept && !empty($deptTabList)): ?>
+                <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;">
+                    <a href="?<?= http_build_query(array_merge(array_diff_key($_GET, ['dept_tab' => '']), [])) ?>" style="padding:.35rem .9rem;border-radius:99px;font-size:.78rem;font-weight:600;text-decoration:none;
+                              background:<?= !$filterDeptTab ? '#0a0f1e' : '#f3f4f6' ?>;
+                              color:<?= !$filterDeptTab ? '#c9a84c' : '#6b7280' ?>;
+                              border:1px solid <?= !$filterDeptTab ? '#c9a84c44' : '#e5e7eb' ?>;">
+                        All Departments
+                    </a>
+                    <?php foreach ($deptTabList as $dtab): ?>
+                        <a href="?<?= http_build_query(array_merge($_GET, ['dept_tab' => $dtab['id'], 'page' => 1])) ?>"
+                            style="padding:.35rem .9rem;border-radius:99px;font-size:.78rem;font-weight:600;text-decoration:none;
+                                  background:<?= $filterDeptTab == $dtab['id'] ? ($dtab['color'] ?: '#3b82f6') : '#f3f4f6' ?>;
+                                  color:<?= $filterDeptTab == $dtab['id'] ? '#fff' : '#6b7280' ?>;
+                                  border:1px solid <?= $filterDeptTab == $dtab['id'] ? ($dtab['color'] ?: '#3b82f6') : '#e5e7eb' ?>;">
+                            <?= htmlspecialchars($dtab['dept_name']) ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
             <!-- Filters -->
             <div class="filter-bar mb-4">
                 <form method="GET" class="row g-2 align-items-end w-100">
+
+                    <!-- Preserve active dept tab in filter form submissions -->
+                    <?php if (!$isCoreAdminDept && isset($_GET['staff_dept'])): ?>
+                        <input type="hidden" name="staff_dept" value="<?= (int) $_GET['staff_dept'] ?>">
+                    <?php endif; ?>
+                    <?php if ($isCoreAdminDept && $filterDeptTab): ?>
+                        <input type="hidden" name="dept_tab" value="<?= $filterDeptTab ?>">
+                    <?php endif; ?>
 
                     <div class="col-md-3">
                         <label class="form-label-mis">Search</label>
@@ -315,7 +442,7 @@ include '../../includes/header.php';
                         <tbody>
                             <?php if (empty($staffList)): ?>
                                 <tr>
-                                    <td colspan="8" class="empty-state">
+                                    <td colspan="9" class="empty-state">
                                         <i class="fas fa-users"></i> No users found
                                     </td>
                                 </tr>
@@ -342,7 +469,7 @@ include '../../includes/header.php';
                                                     <?php if ($isSelf): ?>
                                                         <span
                                                             style="font-size:.65rem;background:#c9a84c22;color:#c9a84c;
-                                                                 padding:.1rem .4rem;border-radius:99px;margin-left:.3rem;">You</span>
+                                                                     padding:.1rem .4rem;border-radius:99px;margin-left:.3rem;">You</span>
                                                     <?php endif; ?>
                                                 </div>
                                                 <div style="font-size:.72rem;color:#9ca3af;">
@@ -358,15 +485,15 @@ include '../../includes/header.php';
                                     </td>
                                     <td>
                                         <span style="font-size:.78rem;font-weight:700;color:<?= $rc ?>;
-                                                 background:<?= $rc ?>15;padding:.2rem .6rem;border-radius:50px;">
+                                                     background:<?= $rc ?>15;padding:.2rem .6rem;border-radius:50px;">
                                             <?= ucfirst($u['role_name'] ?? '—') ?>
                                         </span>
                                     </td>
                                     <td style="font-size:.83rem;"><?= htmlspecialchars($u['branch_name'] ?? '—') ?></td>
                                     <td style="font-size:.82rem;">
                                         <span style="background:#fef3c7;color:#92400e;padding:.15rem .5rem;
-                 border-radius:99px;font-size:.7rem;font-weight:700;
-                 display:inline-block;margin-bottom:.2rem;">
+                                                     border-radius:99px;font-size:.7rem;font-weight:700;
+                                                     display:inline-block;margin-bottom:.2rem;">
                                             ★ <?= htmlspecialchars($u['dept_name'] ?? '—') ?>
                                         </span>
                                         <?php foreach ($udaByUser[$u['id']] ?? [] as $uda): ?>
@@ -375,8 +502,8 @@ include '../../includes/header.php';
                                                 && ($viewerIsCoreAdmin || in_array($uda['dept_id'], $viewerAllDeptIds))
                                             ): ?>
                                                 <span style="background:#eff6ff;color:#3b82f6;padding:.15rem .5rem;
-                     border-radius:99px;font-size:.68rem;font-weight:600;
-                     display:inline-block;margin-bottom:.2rem;">
+                                                             border-radius:99px;font-size:.68rem;font-weight:600;
+                                                             display:inline-block;margin-bottom:.2rem;">
                                                     <?= htmlspecialchars($uda['dept_name']) ?>
                                                 </span>
                                             <?php endif; ?>
@@ -402,8 +529,9 @@ include '../../includes/header.php';
                                                 $donePct = $deptTotal > 0 ? round(($doneCnt / $deptTotal) * 100) : 0;
                                                 $dColor = $deptData['dept_color'] ?: '#9ca3af';
                                                 ?>
-                                                <div style="margin-bottom:.5rem;background:#f9fafb;border-radius:8px;
-                    padding:.4rem .6rem;border-left:3px solid <?= htmlspecialchars($dColor) ?>;">
+                                                <div
+                                                    style="margin-bottom:.5rem;background:#f9fafb;border-radius:8px;
+                                                            padding:.4rem .6rem;border-left:3px solid <?= htmlspecialchars($dColor) ?>;">
                                                     <div
                                                         style="font-size:.7rem;font-weight:700;color:#374151;margin-bottom:.25rem;">
                                                         <?= htmlspecialchars($deptData['dept_name']) ?>
@@ -412,16 +540,17 @@ include '../../includes/header.php';
                                                     <div style="display:flex;flex-wrap:wrap;gap:.2rem;margin-bottom:.25rem;">
                                                         <?php foreach ($deptData['statuses'] as $sn => $sv): ?>
                                                             <span style="background:<?= htmlspecialchars($sv['bg'] ?: '#f3f4f6') ?>;
-                             color:<?= htmlspecialchars($sv['color'] ?: '#6b7280') ?>;
-                             font-size:.63rem;font-weight:700;
-                             padding:.1rem .35rem;border-radius:99px;">
+                                                                         color:<?= htmlspecialchars($sv['color'] ?: '#6b7280') ?>;
+                                                                         font-size:.63rem;font-weight:700;
+                                                                         padding:.1rem .35rem;border-radius:99px;">
                                                                 <?= htmlspecialchars($sn) ?>: <?= $sv['cnt'] ?>
                                                             </span>
                                                         <?php endforeach; ?>
                                                     </div>
                                                     <div style="background:#e5e7eb;border-radius:99px;height:3px;overflow:hidden;">
                                                         <div style="width:<?= $donePct ?>%;height:100%;border-radius:99px;
-                             background:<?= htmlspecialchars($dColor) ?>;"></div>
+                                                                    background:<?= htmlspecialchars($dColor) ?>;">
+                                                        </div>
                                                     </div>
                                                 </div>
                                             <?php endforeach; ?>
@@ -432,7 +561,7 @@ include '../../includes/header.php';
                                             <div style="flex:1;background:#f3f4f6;border-radius:99px;height:6px;">
                                                 <div
                                                     style="width:<?= $pct ?>%;height:100%;border-radius:99px;
-                                                        background:<?= $pct >= 75 ? '#10b981' : ($pct >= 40 ? '#f59e0b' : '#ef4444') ?>;">
+                                                            background:<?= $pct >= 75 ? '#10b981' : ($pct >= 40 ? '#f59e0b' : '#ef4444') ?>;">
                                                 </div>
                                             </div>
                                             <span style="font-size:.72rem;color:#6b7280;flex-shrink:0;"><?= $pct ?>%</span>

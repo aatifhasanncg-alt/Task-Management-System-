@@ -123,6 +123,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'chang
 
 include '../../includes/header.php';
 ?>
+<style>
+    .dept-assignment-card {
+        display: flex;
+        align-items: flex-start;
+        gap: .6rem;
+        background: #fff;
+        border: 1px solid #fde68a;
+        border-radius: 12px;
+        padding: .65rem .9rem;
+        margin-bottom: .5rem;
+        min-width: 0;
+        transition: box-shadow .18s;
+    }
+
+    .dept-assignment-card:hover {
+        box-shadow: 0 2px 10px rgba(201, 168, 76, .13);
+    }
+
+    .dept-assignment-card.is-primary {
+        border-color: #c9a84c;
+        background: #fffbeb;
+    }
+
+    .dept-icon-wrap {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #fef3c7, #fde68a);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .85rem;
+        color: #92400e;
+    }
+
+    .dept-assignment-card.is-primary .dept-icon-wrap {
+        background: linear-gradient(135deg, #c9a84c, #e8c96a);
+        color: #fff;
+    }
+
+    .dept-name-row {
+        font-size: .83rem;
+        font-weight: 700;
+        color: #1f2937;
+        line-height: 1.2;
+    }
+
+    .dept-primary-star {
+        display: inline-block;
+        font-size: .62rem;
+        background: #c9a84c;
+        color: #fff;
+        border-radius: 4px;
+        padding: .05rem .3rem;
+        font-weight: 700;
+        margin-left: .3rem;
+        vertical-align: middle;
+        letter-spacing: .03em;
+    }
+
+    .dept-supervisor-row {
+        display: flex;
+        align-items: center;
+        gap: .35rem;
+        font-size: .72rem;
+        color: #6b7280;
+        margin-top: .22rem;
+    }
+
+    .dept-supervisor-row i {
+        color: #c9a84c;
+        font-size: .65rem;
+    }
+
+    .dept-supervisor-name {
+        color: #374151;
+        font-weight: 600;
+    }
+</style>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
@@ -168,23 +248,32 @@ include '../../includes/header.php';
                                 <span
                                     class="branch-badge"><?= htmlspecialchars($profile['branch_name'] ?? '—') ?></span>
                                 <?php foreach ($allDepts as $dept): ?>
-                                    <div class="dept-chip"
-                                        style="display:flex;flex-direction:column;align-items:flex-start;">
-
-                                        <div>
-                                            <?= htmlspecialchars($dept['dept_name']) ?>
-
-                                            <?php if ($dept['is_primary']): ?>
-                                                <span style="font-size:.6rem;opacity:.7;margin-left:.2rem;">★</span>
+                                    <div class="dept-assignment-card <?= $dept['is_primary'] ? 'is-primary' : '' ?>"
+                                        style="text-align:left;width:100%;">
+                                        <div class="dept-icon-wrap">
+                                            <i class="fas fa-layer-group"></i>
+                                        </div>
+                                        <div style="min-width:0;">
+                                            <div class="dept-name-row">
+                                                <?= htmlspecialchars($dept['dept_name']) ?>
+                                                <?php if ($dept['is_primary']): ?>
+                                                    <span class="dept-primary-star">PRIMARY</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <?php if (!empty($dept['managed_by'])): ?>
+                                                <div class="dept-supervisor-row">
+                                                    <i class="fas fa-user-tie"></i>
+                                                    <span>Supervisor:</span>
+                                                    <span
+                                                        class="dept-supervisor-name"><?= htmlspecialchars($dept['managed_by']) ?></span>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="dept-supervisor-row" style="color:#d1d5db;">
+                                                    <i class="fas fa-user-slash"></i>
+                                                    <span>No supervisor assigned</span>
+                                                </div>
                                             <?php endif; ?>
                                         </div>
-
-                                        <?php if (!empty($dept['managed_by'])): ?>
-                                            <small style="font-size:.65rem;color:#9ca3af;">
-                                                Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
-                                            </small>
-                                        <?php endif; ?>
-
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -246,33 +335,35 @@ include '../../includes/header.php';
                                         </div>
                                         <div style="font-size:.9rem;color:#1f2937;font-weight:500;margin-top:.15rem;">
                                             <?php if ($val === '__DEPTS__'): ?>
-                                                <div class="d-flex flex-wrap gap-1 mt-1">
+                                                <div class="mt-1" style="display:flex;flex-direction:column;gap:.4rem;">
                                                     <?php foreach ($allDepts as $dept): ?>
-                                                        <div style="
-                                                            background:#fef3c7;
-                                                            color:#92400e;
-                                                            font-size:.75rem;
-                                                            padding:.35rem .6rem;
-                                                            border-radius:12px;
-                                                            font-weight:600;
-                                                            margin-bottom:.35rem;
-                                                            min-width:220px;
-                                                        ">
-                                                            <div>
-                                                                <?= htmlspecialchars($dept['dept_name']) ?>
-
-                                                                <?php if ($dept['is_primary']): ?>
-                                                                    <span style="font-size:.6rem;opacity:.7;">★</span>
+                                                        <div
+                                                            class="dept-assignment-card <?= $dept['is_primary'] ? 'is-primary' : '' ?>">
+                                                            <div class="dept-icon-wrap">
+                                                                <i class="fas fa-layer-group"></i>
+                                                            </div>
+                                                            <div style="min-width:0;flex:1;">
+                                                                <div class="dept-name-row">
+                                                                    <?= htmlspecialchars($dept['dept_name']) ?>
+                                                                    <?php if ($dept['is_primary']): ?>
+                                                                        <span class="dept-primary-star">PRIMARY</span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                                <?php if (!empty($dept['managed_by'])): ?>
+                                                                    <div class="dept-supervisor-row">
+                                                                        <i class="fas fa-user-tie"></i>
+                                                                        <span>Supervisor:</span>
+                                                                        <span
+                                                                            class="dept-supervisor-name"><?= htmlspecialchars($dept['managed_by']) ?></span>
+                                                                    </div>
+                                                                <?php else: ?>
+                                                                    <div class="dept-supervisor-row" style="color:#d1d5db;">
+                                                                        <i class="fas fa-user-slash"></i>
+                                                                        <span>No supervisor assigned</span>
+                                                                    </div>
                                                                 <?php endif; ?>
                                                             </div>
-
-                                                            <?php if (!empty($dept['managed_by'])): ?>
-                                                                <div style="font-size:.68rem;color:#6b7280;font-weight:500;">
-                                                                    Supervisor : <?= htmlspecialchars($dept['managed_by']) ?>
-                                                                </div>
-                                                            <?php endif; ?>
                                                         </div>
-                                        
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else: ?>

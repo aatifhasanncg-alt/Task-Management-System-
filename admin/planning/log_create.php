@@ -129,42 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $logId = $db->lastInsertId();
 
-        // Notify supervisor/admin
-        $adminStmt = $db->prepare("
-            SELECT u.id FROM users u
-            WHERE u.department_id=? AND u.branch_id=? AND u.is_active=1
-            AND u.id IN (
-                SELECT uda.user_id FROM user_department_assignments uda
-                JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
-                UNION
-                SELECT u2.id FROM users u2
-                JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
-            )
-            LIMIT 5
-        ");
-        $adminStmt->execute([$deptId, $branchId]);
-        $admins = $adminStmt->fetchAll();
 
-        // Get client name
-        $cn = '';
-        foreach ($companies as $c) {
-            if ($c['id'] == $clientId) {
-                $cn = $c['company_name'];
-                break;
-            }
-        }
-
-        foreach ($admins as $admin) {
-            notify(
-                $admin['id'],
-                'Visit Logged',
-                $user['full_name'] . ' logged a ' . $visitStatus . ' visit to ' . $cn . ' on ' . date('d M Y', strtotime($logDate)),
-                'task',
-                APP_URL . '/consulting/log_list.php?month=' . $monthYear,
-                false,
-                []
-            );
-        }
 
         logActivity('Logged visit to client #' . $clientId, 'consulting', 'log_id=' . $logId);
         setFlash('success', 'Visit logged successfully!');
