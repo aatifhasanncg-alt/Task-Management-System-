@@ -182,7 +182,63 @@ include '../../includes/header.php';
     .rt-table td { max-width: 0; }
     .rt-table td:first-child { max-width: none; }
     .rt-table td:last-child  { max-width: none; }
-    </style>
+    @media (max-width: 768px) {
+    /* Stat cards: 2 per row on mobile */
+    .row .col-6 { flex: 0 0 50%; max-width: 50%; }
+    .row .col-md-3 { flex: 0 0 50%; max-width: 50%; }
+    .row .col-xl-2 { flex: 0 0 50%; max-width: 50%; }
+    .row .col-xl-3 { flex: 0 0 50%; max-width: 50%; }
+
+    /* Department table: hide less critical columns */
+    .table-mis th:nth-child(n+4),
+    .table-mis td:nth-child(n+4) {
+        display: none;
+    }
+
+    /* Recent tasks table */
+    .rt-table th:nth-child(3),
+    .rt-table td:nth-child(3),
+    .rt-table th:nth-child(4),
+    .rt-table td:nth-child(4) {
+        display: none;
+    }
+
+    /* Stack top-performers and branch side by side into full width */
+    .col-lg-5, .col-lg-7 {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    /* Page hero: stack buttons */
+    .page-hero .d-flex.gap-2 {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .page-hero .btn {
+        font-size: .78rem;
+        padding: .35rem .7rem;
+    }
+
+    /* Topbar date hide on very small screens */
+    .topbar-date {
+        display: none !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .stat-card {
+        padding: .75rem;
+    }
+    .stat-card-value {
+        font-size: 1.4rem;
+    }
+    .stat-card-label {
+        font-size: .65rem;
+    }
+    h5 { font-size: .92rem; }
+}
+</style>
 
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>

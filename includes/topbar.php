@@ -60,6 +60,7 @@ $reminders = $db->prepare("
     WHERE n.user_id = ?
       AND n.type = 'reminder'
       AND n.is_read = 0
+      AND n.title NOT LIKE '%Plan Reminder%'
     ORDER BY n.created_at DESC
 ");
 $reminders->execute([$user['id']]);
@@ -76,7 +77,10 @@ if (($__viewerRole === 'staff') || ($__viewerRole === 'admin') || ($__viewerRole
             SUBSTRING_INDEX(n.link, '?id=', -1) AS UNSIGNED
         )
         WHERE n.user_id = ?
-        AND n.type = 'plan'
+        AND (
+            n.type = 'plan'
+            OR (n.type = 'reminder' AND n.title LIKE '%Plan Reminder%')
+        )
         AND n.is_read = 0
         ORDER BY n.created_at DESC
     ");
@@ -87,14 +91,23 @@ if (($__viewerRole === 'staff') || ($__viewerRole === 'admin') || ($__viewerRole
 if (!function_exists('__rewriteLink')) {
     function __rewriteLink(string $link, string $role): string
     {
-        if (empty($link))
-            return $link;
+        if (empty($link)) return $link;
 
-        return preg_replace(
+        // Rewrite task links
+        $link = preg_replace(
             '#/(staff|admin|executive)/tasks/(view|index)\.php#',
             '/' . $role . '/tasks/$2.php',
             $link
         ) ?: $link;
+
+        // Rewrite plan links
+        $link = preg_replace(
+            '#/(staff|admin)/planning/plan_view\.php#',
+            '/' . $role . '/planning/plan_view.php',
+            $link
+        ) ?: $link;
+
+        return $link;
     }
 }
 ?>
@@ -241,99 +254,6 @@ if (!function_exists('__rewriteLink')) {
                     <?php endif; ?>
 
                 </div>
-                <?php if (!empty($planReminders)): ?>
-                    <div id="plan-reminder-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);
-         z-index:999998;display:flex;align-items:center;justify-content:center;padding:1rem;">
-
-                        <div style="width:100%;max-width:460px;background:#fff;border-radius:16px;
-                box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
-
-                            <!-- Header -->
-                            <div style="background:#eff6ff;border-bottom:1px solid #bfdbfe;
-                    padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
-                                <div style="display:flex;align-items:center;gap:.6rem;">
-                                    <div style="width:36px;height:36px;background:#3b82f6;border-radius:50%;
-                            display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                        <i class="fas fa-calendar-check" style="color:#fff;font-size:.9rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div style="font-size:.9rem;font-weight:700;color:#1e40af;">Plan Reminders</div>
-                                        <div style="font-size:.72rem;color:#1d4ed8;">
-                                            <?= count($planReminders) ?> plan
-                                            <?= count($planReminders) > 1 ? 's' : '' ?>
-                                            need
-                                            <?= count($planReminders) === 1 ? 's' : '' ?> attention
-                                        </div>
-                                    </div>
-                                </div>
-                                <button onclick="closePlanModal()" style="background:none;border:none;cursor:pointer;color:#1e40af;
-                           font-size:1.1rem;padding:.25rem;line-height:1;opacity:.7;" title="Close">
-                                    <i class="fas fa-times"></i>
-                                </button>
-                            </div>
-
-                            <!-- Body -->
-                            <div style="max-height:380px;overflow-y:auto;padding:1rem;">
-                                <?php foreach ($planReminders as $pr):
-                                    $planLink = __rewriteLink($pr['link'] ?? '', $__viewerRole);
-                                    ?>
-                                    <div style="padding:.85rem;border:1px solid #bfdbfe;border-radius:10px;
-                            margin-bottom:.75rem;background:#eff6ff;
-                            border-left:4px solid #3b82f6;">
-
-                                        <div style="font-size:.85rem;font-weight:700;color:#111827;margin-bottom:.2rem;">
-                                            <?= htmlspecialchars($pr['title']) ?>
-                                        </div>
-
-                                        <?php if (!empty($pr['plan_id'])): ?>
-                                            <div style="font-size:.7rem;background:#dbeafe;color:#1e40af;
-                                    display:inline-block;padding:.1rem .45rem;
-                                    border-radius:99px;margin-bottom:.35rem;font-weight:600;">
-                                                <i class="fas fa-hashtag" style="font-size:.6rem;"></i>
-                                                Plan #
-                                                <?= htmlspecialchars($pr['plan_id']) ?>
-                                            </div>
-                                        <?php endif; ?>
-
-                                        <div style="font-size:.8rem;color:#6b7280;margin-bottom:.65rem;line-height:1.5;">
-                                            <?= htmlspecialchars($pr['message']) ?>
-                                        </div>
-
-                                        <div style="display:flex;gap:.5rem;">
-                                            <?php if (!empty($planLink)): ?>
-                                                <a href="<?= htmlspecialchars($planLink) ?>" style="background:#3b82f6;color:#fff;padding:.35rem .85rem;
-                                          border-radius:6px;text-decoration:none;font-size:.8rem;font-weight:600;">
-                                                    <i class="fas fa-arrow-right me-1"></i>Open Plan
-                                                </a>
-                                            <?php endif; ?>
-
-                                            <button onclick="markPlanRead(<?= $pr['id'] ?>, this)" style="background:#f3f4f6;border:none;color:#6b7280;
-                                           padding:.35rem .85rem;border-radius:6px;
-                                           cursor:pointer;font-size:.8rem;font-weight:600;">
-                                                <i class="fas fa-check me-1"></i>Mark Read
-                                            </button>
-                                        </div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-
-                            <!-- Footer -->
-                            <div style="padding:.75rem 1.25rem;border-top:1px solid #f3f4f6;
-                    display:flex;justify-content:flex-end;gap:.5rem;background:#fafafa;">
-                                <button onclick="markAllPlanRemindersRead()" style="background:#3b82f6;color:#fff;border:none;
-                               padding:.4rem 1rem;border-radius:7px;
-                               cursor:pointer;font-size:.8rem;font-weight:600;">
-                                    <i class="fas fa-check-double me-1"></i>Mark All Read
-                                </button>
-                                <button onclick="closePlanModal()" style="background:#f3f4f6;color:#6b7280;border:none;
-                               padding:.4rem 1rem;border-radius:7px;
-                               cursor:pointer;font-size:.8rem;font-weight:600;">
-                                    Dismiss
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
 
                 <!-- Footer -->
                 <div style="padding:.6rem 1rem;border-top:1px solid #f3f4f6;text-align:center;">
@@ -450,6 +370,111 @@ if (!function_exists('__rewriteLink')) {
 
     </div><!-- topbar-right -->
 </div><!-- topbar -->
+<?php if (!empty($planReminders)): ?>
+    <div id="plan-reminder-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);
+z-index:999998;display:flex;align-items:center;justify-content:center;padding:1rem;">
+
+        <div style="width:100%;max-width:460px;background:#fff;border-radius:16px;
+box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
+
+            <!-- Header -->
+            <div style="background:#eff6ff;border-bottom:1px solid #bfdbfe;
+    padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:.6rem;">
+                    <div style="width:36px;height:36px;background:#3b82f6;border-radius:50%;
+            display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                        <i class="fas fa-calendar-check" style="color:#fff;font-size:.9rem;"></i>
+                    </div>
+                    <div>
+                        <div style="font-size:.9rem;font-weight:700;color:#1e40af;">Plan Reminders</div>
+                        <div style="font-size:.72rem;color:#1d4ed8;">
+                            <?= count($planReminders) ?> plan
+                            <?= count($planReminders) > 1 ? 's' : '' ?>
+                            need
+                            <?= count($planReminders) === 1 ? 's' : '' ?> attention
+                        </div>
+                    </div>
+                </div>
+                <button onclick="closePlanModal()" style="background:none;border:none;cursor:pointer;color:#1e40af;
+            font-size:1.1rem;padding:.25rem;line-height:1;opacity:.7;" title="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div style="max-height:380px;overflow-y:auto;padding:1rem;">
+                <?php foreach ($planReminders as $pr):
+                    $planLink = __rewriteLink($pr['link'] ?? '', $__viewerRole);
+                    ?>
+                    <div style="padding:.85rem;border:1px solid #bfdbfe;border-radius:10px;
+            margin-bottom:.75rem;background:#eff6ff;
+            border-left:4px solid #3b82f6;">
+
+                        <div style="font-size:.85rem;font-weight:700;color:#111827;margin-bottom:.2rem;">
+                            <?= htmlspecialchars($pr['title']) ?>
+                        </div>
+
+                        <?php if (!empty($pr['plan_id'])): ?>
+                            <div style="font-size:.7rem;background:#dbeafe;color:#1e40af;
+                    display:inline-block;padding:.1rem .45rem;
+                    border-radius:99px;margin-bottom:.35rem;font-weight:600;">
+                                <i class="fas fa-hashtag" style="font-size:.6rem;"></i>
+                                Plan #
+                                <?= htmlspecialchars($pr['plan_id']) ?>
+                            </div>
+                        <?php endif; ?>
+
+                        <div style="font-size:.8rem;color:#6b7280;margin-bottom:.65rem;line-height:1.5;">
+                            <?= htmlspecialchars($pr['message']) ?>
+                        </div>
+
+                        <div style="display:flex;gap:.5rem;">
+                            <?php
+                            // Build correct plan view URL based on viewer role
+                            $planViewPath = match($__viewerRole) {
+                                'admin'     => APP_URL . '/admin/planning/plan_view.php',
+                                'staff'     => APP_URL . '/staff/planning/plan_view.php',
+                            };
+                            $planViewUrl = !empty($pr['plan_id'])
+                                ? $planViewPath . '?id=' . (int)$pr['plan_id']
+                                : (!empty($planLink) ? $planLink : '');
+                            ?>
+                            <?php if (!empty($planViewUrl)): ?>
+                                <a href="<?= htmlspecialchars($planViewUrl) ?>"
+                                    style="background:#3b82f6;color:#fff;padding:.35rem .85rem;
+                                            border-radius:6px;text-decoration:none;font-size:.8rem;font-weight:600;">
+                                    <i class="fas fa-calendar-week me-1"></i>Open Plan
+                                </a>
+                            <?php endif; ?>
+
+                            <button onclick="markPlanRead(<?= $pr['id'] ?>, this)"
+                                    style="background:#f3f4f6;border:none;color:#6b7280;
+                                            padding:.35rem .85rem;border-radius:6px;
+                                            cursor:pointer;font-size:.8rem;font-weight:600;">
+                                <i class="fas fa-check me-1"></i>Mark Read
+                            </button>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- Footer -->
+            <div style="padding:.75rem 1.25rem;border-top:1px solid #f3f4f6;
+    display:flex;justify-content:flex-end;gap:.5rem;background:#fafafa;">
+                <button onclick="markAllPlanRemindersRead()" style="background:#3b82f6;color:#fff;border:none;
+                padding:.4rem 1rem;border-radius:7px;
+                cursor:pointer;font-size:.8rem;font-weight:600;">
+                    <i class="fas fa-check-double me-1"></i>Mark All Read
+                </button>
+                <button onclick="closePlanModal()" style="background:#f3f4f6;color:#6b7280;border:none;
+                padding:.4rem 1rem;border-radius:7px;
+                cursor:pointer;font-size:.8rem;font-weight:600;">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 <?php if (!empty($reminders)): ?>
     <div id="followup-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);
      z-index:999999;display:flex;align-items:center;justify-content:center;padding:1rem;">

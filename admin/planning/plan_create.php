@@ -84,33 +84,50 @@ $companies = $db->query("
 $deptStaff = [];
 if ($isAdmin) {
     $st1 = $db->prepare("
-        SELECT DISTINCT u.id, u.full_name, u.employee_id, u.department_id,
-               b.branch_name
-        FROM users u
-        LEFT JOIN branches b ON b.id = u.branch_id
-        LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-        LEFT JOIN departments d1 ON d1.id = u.department_id
-        LEFT JOIN departments d2 ON d2.id = uda.department_id
-        WHERE u.is_active = 1
-          AND (
-              u.id = ?
-              OR (
-                  u.managed_by = ?
-                  AND (
-                      (d1.dept_code = 'CON' OR d1.dept_name LIKE '%consult%')
-                      OR
-                      (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
-                  )
-              )
-              OR (
-                  uda.managed_by = ?
-                  AND (d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%')
-              )
+    SELECT DISTINCT 
+           u.id,
+           u.full_name,
+           u.employee_id,
+           u.department_id,
+           b.branch_name
+    FROM users u
+
+    LEFT JOIN branches b 
+           ON b.id = u.branch_id
+
+    LEFT JOIN user_department_assignments uda
+           ON uda.user_id = u.id
+
+    LEFT JOIN departments d1
+           ON d1.id = u.department_id
+
+    LEFT JOIN departments d2
+           ON d2.id = uda.department_id
+
+    WHERE u.is_active = 1
+      AND (
+            u.id = :uid1
+            OR u.managed_by = :uid2
+            OR uda.managed_by = :uid3
           )
-        ORDER BY u.full_name
-    ");
-    $st1->execute([$uid, $uid, $uid]);
-    $deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
+
+      AND (
+            d1.dept_code = 'CON'
+            OR d2.dept_code = 'CON'
+            OR d1.dept_name LIKE '%consult%'
+            OR d2.dept_name LIKE '%consult%'
+          )
+
+    ORDER BY u.full_name ASC
+");
+
+$st1->execute([
+    ':uid1' => $uid,
+    ':uid2' => $uid,
+    ':uid3' => $uid
+]);
+
+$deptStaff = $st1->fetchAll(PDO::FETCH_ASSOC);
 }
 // ── POST ──────────────────────────────────────────────────────
 $errors  = [];
@@ -129,16 +146,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Admin: validate the chosen user belongs to their branch
+    // Admin: validate the chosen user — allow self always, managed staff otherwise
     if ($isAdmin && $planUserId !== $uid) {
-    $chk = $db->prepare("
-        SELECT id FROM users
-        WHERE id = ?
-          AND managed_by = ?
-          AND is_active = 1
-    ");
-    $chk->execute([$planUserId, $uid]);
-    if (!$chk->fetch()) $errors[] = 'You can only create plans for staff you manage.';
-}
+        $chk = $db->prepare("
+            SELECT id FROM users u
+            LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+            WHERE u.id = ?
+              AND u.is_active = 1
+              AND (u.managed_by = ? OR uda.managed_by = ?)
+            LIMIT 1
+        ");
+        $chk->execute([$planUserId, $uid, $uid]);
+        if (!$chk->fetch()) $errors[] = 'You can only create plans for staff you manage.';
+    }
 
     $weekNum   = (int)($_POST['week_number']    ?? 0);
     $weekStart = trim($_POST['week_start_date'] ?? '');
@@ -184,6 +204,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdate = trim($e['plan_date'] ?? '');
             if (!$cid || !$pdate) continue;
 
+            // When creating for self, skip supervisor-duplicate check —
+            // just add all entries to the new/existing plan directly
+            if ($planUserId === $uid) {
+                $newEntries[] = $e;
+                continue;
+            }
+
             $dupE = $db->prepare("
                 SELECT wp.id        AS plan_id,
                        wp.week_number,
@@ -202,7 +229,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $found = $dupE->fetch(PDO::FETCH_ASSOC);
 
             if (!$found) {
-                // ── No duplicate anywhere → add to new plan ───────────────
                 $newEntries[] = $e;
                 continue;
             }
@@ -213,10 +239,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                    . ' (Week ' . $found['week_number'] . ')';
 
             if ($existingSupervisor === $uid) {
-                // ── Same supervisor created original → block ───────────────
                 $blockedMsgs[] = $label . ' — already assigned by you, skipped';
             } else {
-                // ── Different/no supervisor → inject into existing plan ────
                 $injectEntries[] = [
                     'entry'   => $e,
                     'plan_id' => (int)$found['plan_id'],
@@ -378,76 +402,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $db->commit();
-
-            // ── Notifications ──────────────────────────────────────────────
-            try {
-                if ($isAdmin && $planUserId !== $uid) {
-                    // Admin created plan FOR a staff member — notify that staff
-                    $db->prepare("
-                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                        VALUES (?, 'task', 'Work Plan Created for You', ?, ?, 0, NOW())
-                    ")->execute([
-                        $planUserId,
-                        $user['full_name'] . ' created a work plan for you — Week ' . $weekNum . ', ' . $monthLabel,
-                        APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
-                    ]);
-
-                    // Also notify the staff member's supervisor (managed_by) if different from creator
-                    $staffRow = $db->prepare("SELECT managed_by, full_name FROM users WHERE id=?");
-                    $staffRow->execute([$planUserId]);
-                    $staffData = $staffRow->fetch();
-
-                    if (!empty($staffData['managed_by']) && $staffData['managed_by'] != $uid) {
-                        $db->prepare("
-                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                            VALUES (?, 'task', 'Work Plan Created', ?, ?, 0, NOW())
-                        ")->execute([
-                            (int) $staffData['managed_by'],
-                            $user['full_name'] . ' created a plan for ' . ($staffData['full_name'] ?? 'a staff member')
-                                . ' — Week ' . $weekNum . ', ' . $monthLabel,
-                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-                        ]);
-                    }
-
-                } elseif ($isAdmin && $planUserId === $uid) {
-                    // Admin created plan for themselves (auto-approved) — notify branch admins/executives
-                    $supStmt = $db->prepare("
-                        SELECT u.id FROM users u
-                        JOIN roles r ON r.id = u.role_id
-                        WHERE u.branch_id = ?
-                        AND r.role_name ='admin'
-                        AND u.is_active = 1
-                        AND u.id != ?
-                    ");
-                    $supStmt->execute([$branchId, $uid]);
-                    foreach ($supStmt->fetchAll() as $sup) {
-                        $db->prepare("
-                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                            VALUES (?, 'task', 'Work Plan Submitted', ?, ?, 0, NOW())
-                        ")->execute([
-                            $sup['id'],
-                            $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' (auto-approved)',
-                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-                        ]);
-                    }
-
-                } else {
-                    // Staff created plan for themselves — notify their supervisor (managed_by)
-                    if (!empty($user['managed_by'])) {
-                        $db->prepare("
-                            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                            VALUES (?, 'task', 'New Work Plan Submitted', ?, ?, 0, NOW())
-                        ")->execute([
-                            (int) $user['managed_by'],
-                            $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel . ' — awaiting approval',
-                            APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-                        ]);
-                    }
-                }
-
-            } catch (Exception $notifEx) {
-                error_log('Plan create notification error: ' . $notifEx->getMessage());
-            }
 
             logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
             setFlash('success', 'Work plan created successfully!');

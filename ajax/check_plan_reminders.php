@@ -13,10 +13,12 @@ $stmt = $db->query("
     SELECT wpe.*, 
            wp.user_id,
            u.email, u.full_name,
-           c.company_name
+           c.company_name,
+           r.role_name
     FROM work_plan_entries wpe
     JOIN work_plans wp ON wp.id = wpe.plan_id
     JOIN users u ON u.id = wp.user_id
+    LEFT JOIN roles r ON r.id = u.role_id
     LEFT JOIN companies c ON c.id = wpe.client_id
     WHERE wpe.plan_date IN ('$today', '$tomorrow')
       AND (wpe.is_notified IS NULL OR wpe.is_notified = 0)
@@ -32,7 +34,8 @@ foreach ($plans as $p) {
     $message = "{$label} you have a plan with {$p['company_name']} "
              . "at " . date('h:i A', strtotime($p['planned_time_in']));
 
-    $link = APP_URL . "/staff/plan_view.php?id=" . $p['plan_id'];
+    $isAdminRole = in_array($p['role_name'] ?? '', ['admin', 'executive']);
+    $link = APP_URL . ($isAdminRole ? "/admin/planning/plan_view.php" : "/staff/planning/plan_view.php") . "?id=" . $p['plan_id'];
 
     try {
         // ✅ Insert notification (same system as yours)

@@ -87,7 +87,7 @@ $isOwner = ($plan['user_id'] === $uid);
 
 // ── Hard gate ─────────────────────────────────────────────────
 // ── Hard gate: ONLY manager (managed_by) can view ─────────────
-if (!$canManage) {
+if (!$canManage && !$isOwner && !$isSupervisor) {
     setFlash('error', 'You do not have permission to view this plan.');
     header('Location: plan_list.php');
     exit;

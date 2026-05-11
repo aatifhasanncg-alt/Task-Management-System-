@@ -45,7 +45,8 @@ $canEditStmt = $db->prepare("
 ");
 $canEditStmt->execute([$plan['user_id'], $uid, $plan['user_id'], $uid, $planId, $uid]);
 $canEdit = ($plan['user_id'] === $uid) || (bool)$canEditStmt->fetch();
-
+// Any admin can add new entries, but only canEdit users can modify existing ones
+$canAddEntries = $isAdmin;
 // ── Is login user a supervisor on any entry of this plan? ──────
 $isSupervisorStmt = $db->prepare("
     SELECT 1 FROM work_plan_entries
@@ -191,7 +192,7 @@ $postData = $_POST;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
-    if (!$canEdit) {
+    if (!$canEdit && $canAddEntries) {
         // Non-full-editor: can only update their own supervised entries + add new entries
         $db->beginTransaction();
         try {
@@ -264,6 +265,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->rollBack();
             $errors[] = 'Failed to save: ' . $ex->getMessage();
         }
+        // Stop here — non-full-editor should not fall through to full edit
+        if (empty($errors)) return;
+    }
+
+    // ── Full edit (canEdit only) ───────────────────────────────
+    if (!$canEdit) {
+        // Not a full editor and not adding entries — nothing to do
+        $errors[] = 'You do not have permission to edit this plan.';
     }
 
     // ── Full edit (canEdit) ────────────────────────────────────
@@ -446,8 +455,8 @@ include '../../includes/header.php';
                 </ul>
             </div>
             <?php endif; ?>
-
-            <form method="POST" id="planForm" <?= (!$canEdit && !$isSupervisor) ? 'onsubmit="return false;"' : '' ?>>
+            
+            <form method="POST" id="planForm" <?= (!$canEdit && !$isSupervisor && !$canAddEntries) ? 'onsubmit="return false;"' : '' ?>>
                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
 
                 <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
@@ -588,9 +597,13 @@ include '../../includes/header.php';
                                 <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
                                     <i class="fas fa-save"></i> Update Plan
                                 </button>
-                                <?php else: ?>
+                                <?php elseif ($canAddEntries): ?>
                                 <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Save My Entries
+                                    <i class="fas fa-plus"></i> Save New Entries
+                                </button>
+                                <?php else: ?>
+                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;" disabled>
+                                    <i class="fas fa-lock"></i> View Only
                                 </button>
                                 <?php endif; ?>
                                 <a href="plan_list.php?month=<?= $month ?>"
@@ -621,7 +634,15 @@ include '../../includes/header.php';
                                         <td style="padding:4px 0;color:var(--muted);">Supervisor</td>
                                         <td style="padding:4px 0;font-weight:600;"><?= htmlspecialchars($supervisorName) ?></td>
                                     </tr>
-                                    <?php if ($isSupervisor && !$canEdit): ?>
+                                    <?php if (!$canEdit && $canAddEntries): ?>
+                                    <tr>
+                                        <td colspan="2" style="padding:6px 0;">
+                                            <span style="font-size:.72rem;background:#ecfdf5;color:#10b981;padding:3px 8px;border-radius:6px;font-weight:600;">
+                                                <i class="fas fa-plus me-1"></i>You can add new entries
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <?php elseif ($isSupervisor && !$canEdit): ?>
                                     <tr>
                                         <td colspan="2" style="padding:6px 0;">
                                             <span style="font-size:.72rem;background:#eff6ff;color:#3b82f6;padding:3px 8px;border-radius:6px;font-weight:600;">
@@ -795,7 +816,8 @@ const existingEntries = <?= json_encode(array_map(function($e) {
     ];
 }, $existingEntries)) ?>;
 
-const isSupervisorOnly = <?= (!$canEdit) ? 'true' : 'false' ?>;
+const isSupervisorOnly = <?= (!$canEdit && !$canAddEntries) ? 'true' : 'false' ?>;
+const canAddEntries    = <?= $canAddEntries ? 'true' : 'false' ?>;
 const canEdit          = <?= $canEdit ? 'true' : 'false' ?>;
 
 // ── TomSelect: staff dropdown ──────────────────────────────────
@@ -849,7 +871,10 @@ function fmtTime(t) {
 
 // ── Add entry: supervisor sees schedule-only card ──────────────
 function addEntry(prefill) {
-    if (isSupervisorOnly && prefill) {
+    // canEdit: full editable entries
+    // canAddEntries only (not canEdit): existing entries are readonly cards, new entries are full
+    // isSupervisorOnly: all entries are readonly cards
+    if (!canEdit && prefill) {
         addSupervisorEntry(prefill);
         return;
     }
