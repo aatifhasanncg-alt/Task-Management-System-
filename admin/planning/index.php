@@ -866,8 +866,8 @@ include '../../includes/header.php';
                         <span class="card-mis-sub"><?= $monthLabel ?></span>
                     </div>
                     <div class="cd-donut-wrap">
-                        <div class="cd-donut-cw">
-                            <canvas id="exDonutVisit" width="90" height="90"></canvas>
+                        <div class="cd-donut-cw" style="width:130px;height:130px;">
+                            <canvas id="exDonutVisit" width="130" height="130"></canvas>
                             <div class="cd-donut-ctr">
                                 <span
                                     style="font-size:17px;font-weight:700;color:var(--text-dark);font-variant-numeric:tabular-nums;">
@@ -1055,8 +1055,8 @@ include '../../includes/header.php';
                         </span>
                     </div>
                     <div class="cd-donut-wrap">
-                        <div class="cd-donut-cw" style="width:100px;height:100px;">
-                            <canvas id="exOfficeDonut" width="100" height="100"></canvas>
+                        <div class="cd-donut-cw" style="width:130px;height:130px;">
+                            <canvas id="exOfficeDonut" width="130" height="130"></canvas>
                             <div class="cd-donut-ctr">
                                 <span
                                     style="font-size:18px;font-weight:700;color:var(--teal);font-variant-numeric:tabular-nums;"><?= $offCompRate ?>%</span>
