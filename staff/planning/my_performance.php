@@ -12,23 +12,23 @@ require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 requireAnyRole();
 
-$db   = getDB();
+$db = getDB();
 $user = currentUser();
-$uid  = (int) $user['id'];
+$uid = (int) $user['id'];
 $currentRole = $_SESSION['role'] ?? ($user['role'] ?? '');
-$isAdmin     = in_array($currentRole, ['admin', 'executive']);
-$branchId    = (int) $user['branch_id'];
+$isAdmin = in_array($currentRole, ['admin', 'executive']);
+$branchId = (int) $user['branch_id'];
 
 // ── Resolve consulting department ID for this user ─────────────────────────
 $__deptMetaQ = $db->prepare(
     "SELECT dept_code, dept_name FROM departments WHERE id = ?"
 );
 $__deptMetaQ->execute([$user['department_id']]);
-$__deptMeta       = $__deptMetaQ->fetch(PDO::FETCH_ASSOC);
-$__primaryCode    = $__deptMeta['dept_code'] ?? '';
-$__isConsPrimary  = ($__primaryCode === 'CON'
-                     || stripos($__deptMeta['dept_name'] ?? '', 'consult') !== false);
-$__isCoreAdmin    = ($__primaryCode === 'CORE');
+$__deptMeta = $__deptMetaQ->fetch(PDO::FETCH_ASSOC);
+$__primaryCode = $__deptMeta['dept_code'] ?? '';
+$__isConsPrimary = ($__primaryCode === 'CON'
+    || stripos($__deptMeta['dept_name'] ?? '', 'consult') !== false);
+$__isCoreAdmin = ($__primaryCode === 'CORE');
 
 $__udaQ = $db->prepare("
     SELECT d.id, d.dept_code
@@ -50,9 +50,9 @@ if ($__isConsPrimary) {
 }
 
 // ── Month selection ────────────────────────────────────────────────────────
-$now        = new DateTime();
-$month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$now = new DateTime();
+$month = $_GET['month'] ?? $now->format('Y-m');
+$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
 $monthLabel = $monthDate->format('F Y');
 $monthStart = $monthDate->format('Y-m-01');
 
@@ -83,10 +83,16 @@ $stActual = $db->prepare("
 $stActual->execute([$uid, $month, $deptId]);
 $actualHours = (float) $stActual->fetchColumn();
 
-$efficiencyRaw = $plannedHours > 0
-    ? round(($actualHours / $plannedHours) * 100, 1)
-    : 0;
-$efficiency = min($efficiencyRaw, 100);
+// "Time Efficiency": planned hrs ÷ actual hrs × 100
+// If planned=2h, actual=1h → 200% (completed in half the time)
+// If planned=2h, actual=2h → 100%
+// If planned=2h, actual=4h →  50% (took twice as long)
+$efficiencyRaw = $actualHours > 0 && $plannedHours > 0
+    ? round(($plannedHours / $actualHours) * 100, 1)
+    : ($plannedHours > 0 && $actualHours == 0 ? 0 : null);
+
+$efficiency = $efficiencyRaw !== null ? min($efficiencyRaw, 200) : 0; // cap at 200%
+$overDelivered = $efficiencyRaw > 100;
 
 // ── Visit status breakdown ─────────────────────────────────────────────────
 $stVst = $db->prepare("
@@ -102,10 +108,10 @@ $vst = [];
 foreach ($stVst->fetchAll() as $r) {
     $vst[$r['visit_status']] = (int) $r['cnt'];
 }
-$visited     = $vst['visited']     ?? 0;
-$missed      = $vst['missed']      ?? 0;
+$visited = $vst['visited'] ?? 0;
+$missed = $vst['missed'] ?? 0;
 $rescheduled = $vst['rescheduled'] ?? 0;
-$totalLogs   = $visited + $missed + $rescheduled;
+$totalLogs = $visited + $missed + $rescheduled;
 
 // ── Unique clients (visit logs) ────────────────────────────────────────────
 $stUC = $db->prepare("
@@ -133,19 +139,18 @@ $stOff = $db->prepare("
         SUM(status = 'not_started')                                  AS not_started,
         COUNT(DISTINCT client_id)                                    AS unique_clients
     FROM office_work_logs
-    WHERE user_id       = ?
-      AND department_id = ?
-      AND DATE_FORMAT(log_date, '%Y-%m') = ?
+    WHERE user_id = ?
+        AND DATE_FORMAT(log_date, '%Y-%m') = ?
 ");
-$stOff->execute([$uid, $deptId, $month]);
+$stOff->execute([$uid, $month]);
 $offStats = $stOff->fetch(PDO::FETCH_ASSOC);
-$officeHours       = round((float) $offStats['total_hours'], 2);
-$officeEntries     = (int) $offStats['total_entries'];
-$officeCompleted   = (int) $offStats['completed'];
-$officeWip         = (int) $offStats['wip'];
-$officeHolding     = (int) $offStats['holding'];
-$officeNotStarted  = (int) $offStats['not_started'];
-$officeClients     = (int) $offStats['unique_clients'];
+$officeHours = round((float) $offStats['total_hours'], 2);
+$officeEntries = (int) $offStats['total_entries'];
+$officeCompleted = (int) $offStats['completed'];
+$officeWip = (int) $offStats['wip'];
+$officeHolding = (int) $offStats['holding'];
+$officeNotStarted = (int) $offStats['not_started'];
+$officeClients = (int) $offStats['unique_clients'];
 
 // ── Client-wise VISIT performance ──────────────────────────────────────────
 $stClientVisit = $db->prepare("
@@ -285,30 +290,24 @@ $trendRows = $stTrend->fetchAll(PDO::FETCH_ASSOC);
 // ── Team summary (admin only — subordinates under login user) ──────────────
 $teamRows = [];
 if ($isAdmin) {
-    // Staff who are managed_by login user OR via UDA managed_by login user
-    // filtered to CON dept, active only
     $stTeam = $db->prepare("
         SELECT DISTINCT
             u.id,
             u.full_name,
             u.employee_id,
-            -- Visit logs
             COUNT(DISTINCT wl.id)                        AS visit_logs,
             COALESCE(SUM(wl.duration_hours), 0)          AS visit_hours,
             SUM(wl.visit_status = 'visited')             AS v_visited,
             SUM(wl.visit_status = 'missed')              AS v_missed,
             COUNT(DISTINCT wl.client_id)                 AS visit_clients,
-            -- Office logs
             COUNT(DISTINCT owl.id)                       AS office_entries,
             COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60),0) AS office_hours,
             COUNT(DISTINCT owl.client_id)                AS office_clients
         FROM users u
-        -- join visit logs for this month
         LEFT JOIN work_logs wl
             ON  wl.user_id       = u.id
             AND wl.month_year    = ?
             AND wl.department_id = ?
-        -- join office logs for this month
         LEFT JOIN office_work_logs owl
             ON  owl.user_id       = u.id
             AND owl.department_id = ?
@@ -316,10 +315,8 @@ if ($isAdmin) {
         WHERE u.is_active = 1
           AND u.id != ?
           AND (
-              -- primary managed_by
               u.managed_by = ?
               OR
-              -- via UDA managed_by
               EXISTS (
                   SELECT 1 FROM user_department_assignments uda2
                   JOIN departments d2 ON d2.id = uda2.department_id
@@ -329,7 +326,6 @@ if ($isAdmin) {
               )
           )
           AND (
-              -- staff is in CON dept (primary or UDA)
               EXISTS (
                   SELECT 1 FROM departments dp
                   WHERE dp.id = u.department_id
@@ -347,20 +343,18 @@ if ($isAdmin) {
         ORDER BY visit_hours DESC, office_hours DESC
     ");
     $stTeam->execute([
-        $month, $deptId,          // visit_logs filter
-        $deptId, $month,          // office_logs filter
-        $uid,                     // exclude self
-        $uid,                     // managed_by (primary)
-        $uid,                     // managed_by (UDA)
+        $month, $deptId,
+        $deptId, $month,
+        $uid, $uid, $uid,
     ]);
     $teamRows = $stTeam->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // ── Chart data ─────────────────────────────────────────────────────────────
 $chartLabels      = array_column($trendRows, 'month_year');
-$chartVisitHours  = array_map(fn($r) => (float) $r['visit_hours'],   $trendRows);
-$chartOfficeHours = array_map(fn($r) => (float) $r['office_hours'],  $trendRows);
-$chartVisitLogs   = array_map(fn($r) => (int)   $r['visit_logs'],    $trendRows);
+$chartVisitHours  = array_map(fn($r) => (float) $r['visit_hours'],  $trendRows);
+$chartOfficeHours = array_map(fn($r) => (float) $r['office_hours'], $trendRows);
+$chartVisitLogs   = array_map(fn($r) => (int)   $r['visit_logs'],   $trendRows);
 
 $pageTitle = 'Performance Dashboard';
 include '../../includes/header.php';
@@ -392,8 +386,7 @@ include '../../includes/header.php';
                     </div>
                     <div class="d-flex gap-2 flex-wrap align-items-center">
                         <input type="month" class="form-control form-control-sm" style="width:155px;"
-                               value="<?= $month ?>"
-                               onchange="location='?month='+this.value">
+                            value="<?= $month ?>" onchange="location='?month='+this.value">
                         <?php if ($isAdmin): ?>
                             <a href="log_list.php?month=<?= $month ?>" class="btn btn-outline-secondary btn-sm">
                                 <i class="fas fa-history me-1"></i>All Logs
@@ -413,11 +406,11 @@ include '../../includes/header.php';
                             </a>
                         <?php endif; ?>
                         <a href="<?= APP_URL ?>/exports/export_pdf.php?module=consulting_performance&month=<?= urlencode($month) ?>"
-                           class="btn btn-outline-secondary btn-sm">
+                            class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-file-pdf me-1" style="color:#ef4444;"></i>PDF
                         </a>
                         <a href="<?= APP_URL ?>/exports/export_excel.php?module=consulting_performance&month=<?= urlencode($month) ?>"
-                           class="btn btn-outline-secondary btn-sm">
+                            class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-file-excel me-1" style="color:#10b981;"></i>Excel
                         </a>
                     </div>
@@ -444,12 +437,12 @@ include '../../includes/header.php';
                     </button>
                 </li>
                 <?php if ($isAdmin && !empty($teamRows)): ?>
-                <li class="nav-item">
-                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabTeam">
-                        <i class="fas fa-users me-1 text-warning"></i>Team
-                        <span class="badge bg-secondary ms-1"><?= count($teamRows) ?></span>
-                    </button>
-                </li>
+                    <li class="nav-item">
+                        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabTeam">
+                            <i class="fas fa-users me-1 text-warning"></i>Team
+                            <span class="badge bg-secondary ms-1"><?= count($teamRows) ?></span>
+                        </button>
+                    </li>
                 <?php endif; ?>
             </ul>
 
@@ -464,12 +457,12 @@ include '../../includes/header.php';
                     <div class="kpi-row mb-4">
                         <?php
                         $kpis = [
-                            ['icon'=>'fa-clipboard-list','color'=>'#3b82f6','val'=>$totalLogs,      'label'=>'Total Visits'],
-                            ['icon'=>'fa-clock',         'color'=>'#c9a84c','val'=>number_format($actualHours,1).'h','label'=>'Actual Hours'],
-                            ['icon'=>'fa-building',      'color'=>'#8b5cf6','val'=>$uniqueVisitClients,'label'=>'Clients Visited'],
-                            ['icon'=>'fa-check-circle',  'color'=>'#10b981','val'=>$visited,        'label'=>'Visited'],
-                            ['icon'=>'fa-times-circle',  'color'=>'#ef4444','val'=>$missed,         'label'=>'Missed'],
-                            ['icon'=>'fa-redo',          'color'=>'#f59e0b','val'=>$rescheduled,    'label'=>'Rescheduled'],
+                            ['icon' => 'fa-clipboard-list', 'color' => '#3b82f6', 'val' => $totalLogs,           'label' => 'Total Visits'],
+                            ['icon' => 'fa-clock',          'color' => '#c9a84c', 'val' => number_format($actualHours,1).'h', 'label' => 'Actual Hours'],
+                            ['icon' => 'fa-building',       'color' => '#8b5cf6', 'val' => $uniqueVisitClients,  'label' => 'Clients Visited'],
+                            ['icon' => 'fa-check-circle',   'color' => '#10b981', 'val' => $visited,             'label' => 'Visited'],
+                            ['icon' => 'fa-times-circle',   'color' => '#ef4444', 'val' => $missed,              'label' => 'Missed'],
+                            ['icon' => 'fa-redo',           'color' => '#f59e0b', 'val' => $rescheduled,         'label' => 'Rescheduled'],
                         ];
                         foreach ($kpis as $k): ?>
                             <div class="kpi-tile" style="--kpi-color:<?= $k['color'] ?>;">
@@ -478,16 +471,28 @@ include '../../includes/header.php';
                                 <div class="kpi-label"><?= $k['label'] ?></div>
                             </div>
                         <?php endforeach; ?>
+
                         <!-- Efficiency tile -->
-                        <?php $effColor = $efficiency >= 80 ? '#10b981' : ($efficiency >= 50 ? '#f59e0b' : '#ef4444'); ?>
+                        <?php
+                        $effColor = $efficiencyRaw === null ? '#9ca3af'
+                            : ($efficiencyRaw >= 100 ? '#10b981' : ($efficiencyRaw >= 60 ? '#f59e0b' : '#ef4444'));
+                        $effLabel = ($efficiencyRaw >= 100) ? '✅ Ahead of Plan' : '⚠ Behind Plan';
+                        ?>
                         <div class="kpi-tile" style="--kpi-color:<?= $effColor ?>;">
                             <div class="kpi-icon"><i class="fas fa-tachometer-alt" style="color:<?= $effColor ?>;"></i></div>
-                            <div class="kpi-val" style="color:<?= $effColor ?>;"><?= $efficiency ?>%</div>
-                            <div class="kpi-label">Efficiency</div>
-                            <div class="kpi-delta" style="color:#9ca3af;font-size:.7rem;"><?= number_format($plannedHours,1) ?>h planned</div>
-                            <?php if ($efficiencyRaw > 100): ?>
-                                <div style="font-size:.65rem;color:#f59e0b;margin-top:3px;font-weight:600;">
-                                    ⚠ <?= $efficiencyRaw ?>% actual
+                            <div class="kpi-val" style="color:<?= $effColor ?>;">
+                                <?= $efficiencyRaw !== null ? $efficiencyRaw . '%' : '—' ?>
+                                <?php if ($efficiencyRaw > 100): ?>
+                                    <span style="font-size:.6rem;background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:4px;vertical-align:middle;">↑ Fast</span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="kpi-label">Time Efficiency</div>
+                            <div class="kpi-delta" style="color:#9ca3af;font-size:.68rem;">
+                                <?= number_format($plannedHours, 1) ?>h planned · <?= number_format($actualHours, 1) ?>h used
+                            </div>
+                            <?php if ($efficiencyRaw !== null): ?>
+                                <div style="font-size:.63rem;font-weight:600;margin-top:3px;color:<?= $effColor ?>;">
+                                    <?= $effLabel ?>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -510,14 +515,14 @@ include '../../includes/header.php';
                                     <div style="margin-bottom:16px;">
                                         <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#9ca3af;margin-bottom:4px;">
                                             <span>Planned</span>
-                                            <strong style="color:#3b82f6;"><?= number_format($plannedHours,1) ?>h</strong>
+                                            <strong style="color:#3b82f6;"><?= number_format($plannedHours, 1) ?>h</strong>
                                         </div>
                                         <div style="background:#f1f5f9;border-radius:99px;height:7px;overflow:hidden;">
                                             <div style="width:<?= $pw ?>%;height:100%;background:#3b82f6;border-radius:99px;"></div>
                                         </div>
                                         <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#9ca3af;margin:8px 0 4px;">
                                             <span>Actual</span>
-                                            <strong style="color:<?= $ec ?>;"><?= number_format($actualHours,1) ?>h</strong>
+                                            <strong style="color:<?= $ec ?>;"><?= number_format($actualHours, 1) ?>h</strong>
                                         </div>
                                         <div style="background:#f1f5f9;border-radius:99px;height:7px;overflow:hidden;">
                                             <div style="width:<?= $aw ?>%;height:100%;background:<?= $ec ?>;border-radius:99px;"></div>
@@ -532,7 +537,7 @@ include '../../includes/header.php';
                                             <?php if ($rescheduled):?><div style="flex:<?= $rescheduled ?>;background:#f59e0b;" title="Rescheduled: <?= $rescheduled ?>"></div><?php endif; ?>
                                         </div>
                                         <div style="display:flex;gap:10px;font-size:.72rem;flex-wrap:wrap;">
-                                            <span style="color:#10b981;">● Visited <?= $visited ?> (<?= $totalLogs ? round($visited/$totalLogs*100) : 0 ?>%)</span>
+                                            <span style="color:#10b981;">● Visited <?= $visited ?> (<?= $totalLogs ? round($visited / $totalLogs * 100) : 0 ?>%)</span>
                                             <span style="color:#ef4444;">● Missed <?= $missed ?></span>
                                             <span style="color:#f59e0b;">● Rescheduled <?= $rescheduled ?></span>
                                         </div>
@@ -543,20 +548,32 @@ include '../../includes/header.php';
                             </div>
                         </div>
 
-                        <!-- Planned entries calendar-style placeholder -->
+                        <!-- Plan Coverage card — FIXED if/elseif/else/endif -->
                         <div class="col-lg-8">
                             <div class="card-mis h-100">
                                 <div class="card-mis-header">
                                     <h5><i class="fas fa-calendar-check text-warning me-2"></i>Plan Coverage — <?= $monthLabel ?></h5>
                                 </div>
-                                <div class="card-mis-body" style="height:200px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;">
-                                    <?php if ($plannedHours > 0): ?>
-                                        <div style="font-size:2rem;font-weight:800;color:#3b82f6;"><?= number_format($plannedHours,1) ?>h</div>
+                                <div class="card-mis-body"
+                                    style="height:200px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;">
+                                    <?php if ($plannedHours > 0 && $actualHours > 0): ?>
+                                        <div style="font-size:2rem;font-weight:800;color:#3b82f6;"><?= number_format($plannedHours, 1) ?>h</div>
                                         <div style="color:#9ca3af;font-size:.83rem;">planned this month</div>
-                                        <div style="font-size:1.4rem;font-weight:700;color:<?= $effColor ?>;"><?= $efficiencyRaw ?>% delivered</div>
-                                        <?php if ($efficiencyRaw > 100): ?>
-                                            <div style="font-size:.72rem;color:#f59e0b;">⚠ Over-delivered by <?= round($efficiencyRaw-100,1) ?>%</div>
-                                        <?php endif; ?>
+                                        <div style="margin-top:8px;font-size:1.2rem;font-weight:700;color:#c9a84c;"><?= number_format($actualHours, 1) ?>h</div>
+                                        <div style="color:#9ca3af;font-size:.83rem;">time actually used</div>
+                                        <div style="margin-top:10px;font-size:1.4rem;font-weight:700;color:<?= $effColor ?>;">
+                                            <?= $efficiencyRaw ?>% Time Efficiency
+                                        </div>
+                                        <div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">
+                                            <?php if ($efficiencyRaw >= 100): ?>
+                                                ✅ Finished faster than planned
+                                            <?php else: ?>
+                                                ⚠ Used more time than planned
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php elseif ($plannedHours > 0): ?>
+                                        <i class="fas fa-hourglass-start" style="font-size:2rem;color:#d1d5db;"></i>
+                                        <div style="color:#9ca3af;font-size:.85rem;margin-top:8px;"><?= number_format($plannedHours, 1) ?>h planned — no logs yet</div>
                                     <?php else: ?>
                                         <i class="fas fa-calendar-times" style="font-size:2rem;color:#d1d5db;"></i>
                                         <div style="color:#9ca3af;font-size:.85rem;">No work plan found for <?= $monthLabel ?></div>
@@ -584,7 +601,8 @@ include '../../includes/header.php';
                                 <table class="table-mis w-100">
                                     <thead>
                                         <tr>
-                                            <th>#</th><th>Client</th>
+                                            <th>#</th>
+                                            <th>Client</th>
                                             <th class="text-center">Visits</th>
                                             <th class="text-center">Visited</th>
                                             <th class="text-center">Missed</th>
@@ -592,57 +610,72 @@ include '../../includes/header.php';
                                             <th class="text-center">Planned Hrs</th>
                                             <th class="text-center">Actual Hrs</th>
                                             <th class="text-center">Efficiency</th>
-                                            <th>First</th><th>Last</th>
+                                            <th>First</th>
+                                            <th>Last</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php foreach ($clientVisitPerf as $i => $cp):
-                                        $effRaw = (float)$cp['planned_hours'] > 0
-                                            ? round((float)$cp['actual_hours'] / (float)$cp['planned_hours'] * 100)
-                                            : null;
-                                        $eff = $effRaw !== null ? min($effRaw,100) : null;
-                                        $ec  = $eff === null ? '#9ca3af'
-                                             : ($eff >= 80 ? '#10b981' : ($eff >= 50 ? '#f59e0b' : '#ef4444'));
-                                    ?>
-                                        <tr>
-                                            <td style="color:#9ca3af;font-size:.75rem;"><?= $i+1 ?></td>
-                                            <td>
-                                                <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($cp['company_name'] ?? '—') ?></div>
-                                                <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($cp['company_code'] ?? '') ?></div>
-                                            </td>
-                                            <td class="text-center"><strong><?= $cp['total_visits'] ?></strong></td>
-                                            <td class="text-center">
-                                                <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['visited'] ?></span>
-                                            </td>
-                                            <td class="text-center">
-                                                <?php if ($cp['missed'] > 0): ?>
-                                                    <span style="background:#fef2f2;color:#b91c1c;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['missed'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td class="text-center">
-                                                <?php if ($cp['rescheduled'] > 0): ?>
-                                                    <span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['rescheduled'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td class="text-center" style="color:#3b82f6;font-weight:600;"><?= number_format((float)$cp['planned_hours'],1) ?>h</td>
-                                            <td class="text-center"><strong style="color:<?= hoursColor((float)$cp['actual_hours']) ?>;"><?= number_format((float)$cp['actual_hours'],1) ?>h</strong></td>
-                                            <td class="text-center">
-                                                <?php if ($eff !== null): ?>
-                                                    <div style="display:flex;align-items:center;gap:5px;justify-content:center;">
-                                                        <div style="flex:1;max-width:55px;background:#f1f5f9;border-radius:99px;height:5px;overflow:hidden;">
-                                                            <div style="width:<?= $eff ?>%;height:100%;background:<?= $ec ?>;border-radius:99px;"></div>
+                                        <?php foreach ($clientVisitPerf as $i => $cp):
+                                            $effRaw = ((float)$cp['planned_hours'] > 0 && (float)$cp['actual_hours'] > 0)
+                                                ? round((float)$cp['planned_hours'] / (float)$cp['actual_hours'] * 100)
+                                                : null;
+                                            $eff = $effRaw !== null ? min($effRaw, 200) : null;
+                                            $ec  = $eff === null ? '#9ca3af'
+                                                 : ($eff >= 100 ? '#10b981' : ($eff >= 60 ? '#f59e0b' : '#ef4444'));
+                                            ?>
+                                            <tr>
+                                                <td style="color:#9ca3af;font-size:.75rem;"><?= $i + 1 ?></td>
+                                                <td>
+                                                    <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($cp['company_name'] ?? '—') ?></div>
+                                                    <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($cp['company_code'] ?? '') ?></div>
+                                                </td>
+                                                <td class="text-center"><strong><?= $cp['total_visits'] ?></strong></td>
+                                                <td class="text-center">
+                                                    <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['visited'] ?></span>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($cp['missed'] > 0): ?>
+                                                        <span style="background:#fef2f2;color:#b91c1c;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['missed'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($cp['rescheduled'] > 0): ?>
+                                                        <span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['rescheduled'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="text-center" style="color:#3b82f6;font-weight:600;">
+                                                    <?= number_format((float) $cp['planned_hours'], 1) ?>h
+                                                </td>
+                                                <td class="text-center">
+                                                    <strong style="color:<?= hoursColor((float) $cp['actual_hours']) ?>;"><?= number_format((float) $cp['actual_hours'], 1) ?>h</strong>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($eff !== null): ?>
+                                                        <div style="display:flex;align-items:center;gap:5px;justify-content:center;">
+                                                            <div style="flex:1;max-width:55px;background:#f1f5f9;border-radius:99px;height:5px;overflow:hidden;">
+                                                                <div style="width:<?= $eff ?>%;height:100%;background:<?= $ec ?>;border-radius:99px;"></div>
+                                                            </div>
+                                                            <span style="font-size:.75rem;font-weight:700;color:<?= $ec ?>;"><?= $eff ?>%</span>
                                                         </div>
-                                                        <span style="font-size:.75rem;font-weight:700;color:<?= $ec ?>;"><?= $eff ?>%</span>
-                                                    </div>
-                                                    <?php if ($effRaw > 100): ?><div style="font-size:.63rem;color:#f59e0b;margin-top:2px;">⚠ <?= $effRaw ?>%</div><?php endif; ?>
-                                                <?php else: ?>
-                                                    <span style="font-size:.75rem;color:#9ca3af;">No plan</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;"><?= $cp['first_visit'] ? date('d M', strtotime($cp['first_visit'])) : '—' ?></td>
-                                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;"><?= $cp['last_visit']  ? date('d M', strtotime($cp['last_visit']))  : '—' ?></td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                                        <?php if ($effRaw > 100): ?>
+                                                            <div style="font-size:.63rem;color:#f59e0b;margin-top:2px;">⚠ <?= $effRaw ?>%</div>
+                                                        <?php endif; ?>
+                                                    <?php else: ?>
+                                                        <span style="font-size:.75rem;color:#9ca3af;">No plan</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                                    <?= $cp['first_visit'] ? date('d M', strtotime($cp['first_visit'])) : '—' ?>
+                                                </td>
+                                                <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                                    <?= $cp['last_visit'] ? date('d M', strtotime($cp['last_visit'])) : '—' ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
                                     </tbody>
                                     <tfoot>
                                         <tr style="background:#f9fafb;font-weight:700;">
@@ -651,8 +684,8 @@ include '../../includes/header.php';
                                             <td class="text-center" style="color:#15803d;"><?= $visited ?></td>
                                             <td class="text-center" style="color:#b91c1c;"><?= $missed ?></td>
                                             <td class="text-center" style="color:#b45309;"><?= $rescheduled ?></td>
-                                            <td class="text-center" style="color:#3b82f6;"><?= number_format($plannedHours,1) ?>h</td>
-                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($actualHours,1) ?>h</td>
+                                            <td class="text-center" style="color:#3b82f6;"><?= number_format($plannedHours, 1) ?>h</td>
+                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($actualHours, 1) ?>h</td>
                                             <td class="text-center" style="color:<?= $effColor ?>;"><?= $efficiency ?>%</td>
                                             <td colspan="2"></td>
                                         </tr>
@@ -669,13 +702,18 @@ include '../../includes/header.php';
                             <span style="font-size:.78rem;color:#9ca3af;"><?= count($dateVisitPerf) ?> active day(s)</span>
                         </div>
                         <?php if (empty($dateVisitPerf)): ?>
-                            <div class="card-mis-body"><div class="empty-state"><i class="fas fa-calendar-times"></i><h6>No visit data for <?= $monthLabel ?></h6></div></div>
+                            <div class="card-mis-body">
+                                <div class="empty-state"><i class="fas fa-calendar-times"></i>
+                                    <h6>No visit data for <?= $monthLabel ?></h6>
+                                </div>
+                            </div>
                         <?php else: ?>
                             <div class="table-responsive">
                                 <table class="table-mis w-100">
                                     <thead>
                                         <tr>
-                                            <th>Date</th><th>Day</th>
+                                            <th>Date</th>
+                                            <th>Day</th>
                                             <th class="text-center">Visits</th>
                                             <th class="text-center">Visited</th>
                                             <th class="text-center">Missed</th>
@@ -685,29 +723,40 @@ include '../../includes/header.php';
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php $runHours = 0; foreach ($dateVisitPerf as $dp): $runHours += (float)$dp['actual_hours']; ?>
-                                        <tr>
-                                            <td><strong style="font-size:.85rem;"><?= date('d M Y', strtotime($dp['log_date'])) ?></strong></td>
-                                            <td><span style="font-size:.78rem;color:#6b7280;"><?= $dp['day_of_week'] ?></span></td>
-                                            <td class="text-center"><strong><?= $dp['total_visits'] ?></strong></td>
-                                            <td class="text-center"><span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['visited'] ?></span></td>
-                                            <td class="text-center">
-                                                <?php if ($dp['missed'] > 0): ?><span style="background:#fef2f2;color:#b91c1c;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['missed'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td class="text-center">
-                                                <?php if ($dp['rescheduled'] > 0): ?><span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['rescheduled'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td class="text-center">
-                                                <strong style="color:<?= hoursColor((float)$dp['actual_hours']) ?>;"><?= number_format((float)$dp['actual_hours'],1) ?>h</strong>
-                                                <span style="font-size:.68rem;color:#9ca3af;">(<?= number_format($runHours,1) ?>h)</span>
-                                            </td>
-                                            <td style="font-size:.77rem;color:#6b7280;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($dp['clients_visited'] ?? '') ?>">
-                                                <?= htmlspecialchars(mb_strimwidth($dp['clients_visited'] ?? '—', 0, 50, '…')) ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                        <?php $runHours = 0;
+                                        foreach ($dateVisitPerf as $dp):
+                                            $runHours += (float) $dp['actual_hours']; ?>
+                                            <tr>
+                                                <td><strong style="font-size:.85rem;"><?= date('d M Y', strtotime($dp['log_date'])) ?></strong></td>
+                                                <td><span style="font-size:.78rem;color:#6b7280;"><?= $dp['day_of_week'] ?></span></td>
+                                                <td class="text-center"><strong><?= $dp['total_visits'] ?></strong></td>
+                                                <td class="text-center">
+                                                    <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['visited'] ?></span>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($dp['missed'] > 0): ?>
+                                                        <span style="background:#fef2f2;color:#b91c1c;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['missed'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($dp['rescheduled'] > 0): ?>
+                                                        <span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['rescheduled'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="text-center">
+                                                    <strong style="color:<?= hoursColor((float) $dp['actual_hours']) ?>;"><?= number_format((float) $dp['actual_hours'], 1) ?>h</strong>
+                                                    <span style="font-size:.68rem;color:#9ca3af;">(<?= number_format($runHours, 1) ?>h)</span>
+                                                </td>
+                                                <td style="font-size:.77rem;color:#6b7280;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                                                    title="<?= htmlspecialchars($dp['clients_visited'] ?? '') ?>">
+                                                    <?= htmlspecialchars(mb_strimwidth($dp['clients_visited'] ?? '—', 0, 50, '…')) ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
                                     </tbody>
                                     <tfoot>
                                         <tr style="background:#f9fafb;font-weight:700;">
@@ -716,7 +765,7 @@ include '../../includes/header.php';
                                             <td class="text-center" style="color:#15803d;"><?= $visited ?></td>
                                             <td class="text-center" style="color:#b91c1c;"><?= $missed ?></td>
                                             <td class="text-center" style="color:#b45309;"><?= $rescheduled ?></td>
-                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($actualHours,1) ?>h</td>
+                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($actualHours, 1) ?>h</td>
                                             <td></td>
                                         </tr>
                                     </tfoot>
@@ -736,13 +785,13 @@ include '../../includes/header.php';
                     <div class="kpi-row mb-4">
                         <?php
                         $offKpis = [
-                            ['icon'=>'fa-briefcase',    'color'=>'#3b82f6','val'=>$officeEntries,             'label'=>'Total Entries'],
-                            ['icon'=>'fa-clock',        'color'=>'#c9a84c','val'=>number_format($officeHours,1).'h','label'=>'Office Hours'],
-                            ['icon'=>'fa-building',     'color'=>'#8b5cf6','val'=>$officeClients,             'label'=>'Clients Worked'],
-                            ['icon'=>'fa-check-circle', 'color'=>'#10b981','val'=>$officeCompleted,           'label'=>'Completed'],
-                            ['icon'=>'fa-spinner',      'color'=>'#3b82f6','val'=>$officeWip,                 'label'=>'WIP'],
-                            ['icon'=>'fa-pause-circle', 'color'=>'#f59e0b','val'=>$officeHolding,             'label'=>'Holding'],
-                            ['icon'=>'fa-circle',       'color'=>'#9ca3af','val'=>$officeNotStarted,          'label'=>'Not Started'],
+                            ['icon' => 'fa-briefcase',    'color' => '#3b82f6', 'val' => $officeEntries,                      'label' => 'Total Entries'],
+                            ['icon' => 'fa-clock',        'color' => '#c9a84c', 'val' => number_format($officeHours,1).'h',    'label' => 'Office Hours'],
+                            ['icon' => 'fa-building',     'color' => '#8b5cf6', 'val' => $officeClients,                      'label' => 'Clients Worked'],
+                            ['icon' => 'fa-check-circle', 'color' => '#10b981', 'val' => $officeCompleted,                    'label' => 'Completed'],
+                            ['icon' => 'fa-spinner',      'color' => '#3b82f6', 'val' => $officeWip,                          'label' => 'WIP'],
+                            ['icon' => 'fa-pause-circle', 'color' => '#f59e0b', 'val' => $officeHolding,                      'label' => 'Holding'],
+                            ['icon' => 'fa-circle',       'color' => '#9ca3af', 'val' => $officeNotStarted,                   'label' => 'Not Started'],
                         ];
                         foreach ($offKpis as $k): ?>
                             <div class="kpi-tile" style="--kpi-color:<?= $k['color'] ?>;">
@@ -761,53 +810,69 @@ include '../../includes/header.php';
                         </div>
                         <?php if (empty($clientOffPerf)): ?>
                             <div class="card-mis-body">
-                                <div class="empty-state"><i class="fas fa-building"></i><h6>No office logs for <?= $monthLabel ?></h6></div>
+                                <div class="empty-state"><i class="fas fa-building"></i>
+                                    <h6>No office logs for <?= $monthLabel ?></h6>
+                                </div>
                             </div>
                         <?php else: ?>
                             <div class="table-responsive">
                                 <table class="table-mis w-100">
                                     <thead>
                                         <tr>
-                                            <th>#</th><th>Client</th>
+                                            <th>#</th>
+                                            <th>Client</th>
                                             <th class="text-center">Entries</th>
                                             <th class="text-center">Hours</th>
                                             <th class="text-center">Completed</th>
                                             <th class="text-center">WIP</th>
                                             <th class="text-center">Holding</th>
-                                            <th>First Log</th><th>Last Log</th>
+                                            <th>First Log</th>
+                                            <th>Last Log</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php $totalOffH = 0; foreach ($clientOffPerf as $i => $cp):
-                                        $totalOffH += (float)$cp['total_hours'];
-                                    ?>
-                                        <tr>
-                                            <td style="color:#9ca3af;font-size:.75rem;"><?= $i+1 ?></td>
-                                            <td>
-                                                <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($cp['company_name'] ?? '—') ?></div>
-                                                <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($cp['company_code'] ?? '') ?></div>
-                                            </td>
-                                            <td class="text-center"><strong><?= $cp['total_entries'] ?></strong></td>
-                                            <td class="text-center"><strong style="color:#c9a84c;"><?= number_format((float)$cp['total_hours'],1) ?>h</strong></td>
-                                            <td class="text-center"><span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['completed'] ?></span></td>
-                                            <td class="text-center">
-                                                <?php if ($cp['wip'] > 0): ?><span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['wip'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td class="text-center">
-                                                <?php if ($cp['holding'] > 0): ?><span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['holding'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;"><?= $cp['first_log'] ? date('d M', strtotime($cp['first_log'])) : '—' ?></td>
-                                            <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;"><?= $cp['last_log']  ? date('d M', strtotime($cp['last_log']))  : '—' ?></td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                        <?php $totalOffH = 0;
+                                        foreach ($clientOffPerf as $i => $cp):
+                                            $totalOffH += (float) $cp['total_hours']; ?>
+                                            <tr>
+                                                <td style="color:#9ca3af;font-size:.75rem;"><?= $i + 1 ?></td>
+                                                <td>
+                                                    <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($cp['company_name'] ?? '—') ?></div>
+                                                    <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($cp['company_code'] ?? '') ?></div>
+                                                </td>
+                                                <td class="text-center"><strong><?= $cp['total_entries'] ?></strong></td>
+                                                <td class="text-center"><strong style="color:#c9a84c;"><?= number_format((float) $cp['total_hours'], 1) ?>h</strong></td>
+                                                <td class="text-center">
+                                                    <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['completed'] ?></span>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($cp['wip'] > 0): ?>
+                                                        <span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['wip'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($cp['holding'] > 0): ?>
+                                                        <span style="background:#fffbeb;color:#b45309;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $cp['holding'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                                    <?= $cp['first_log'] ? date('d M', strtotime($cp['first_log'])) : '—' ?>
+                                                </td>
+                                                <td style="font-size:.78rem;color:#6b7280;white-space:nowrap;">
+                                                    <?= $cp['last_log'] ? date('d M', strtotime($cp['last_log'])) : '—' ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
                                     </tbody>
                                     <tfoot>
                                         <tr style="background:#f9fafb;font-weight:700;">
                                             <td colspan="2" style="padding:10px 14px;font-size:.82rem;color:#374151;"><i class="fas fa-calculator me-1 text-warning"></i>TOTAL</td>
                                             <td class="text-center"><?= $officeEntries ?></td>
-                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($officeHours,1) ?>h</td>
+                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($officeHours, 1) ?>h</td>
                                             <td class="text-center" style="color:#15803d;"><?= $officeCompleted ?></td>
                                             <td class="text-center" style="color:#1d4ed8;"><?= $officeWip ?></td>
                                             <td class="text-center" style="color:#b45309;"><?= $officeHolding ?></td>
@@ -826,13 +891,18 @@ include '../../includes/header.php';
                             <span style="font-size:.78rem;color:#9ca3af;"><?= count($dateOffPerf) ?> active day(s)</span>
                         </div>
                         <?php if (empty($dateOffPerf)): ?>
-                            <div class="card-mis-body"><div class="empty-state"><i class="fas fa-calendar-times"></i><h6>No office data for <?= $monthLabel ?></h6></div></div>
+                            <div class="card-mis-body">
+                                <div class="empty-state"><i class="fas fa-calendar-times"></i>
+                                    <h6>No office data for <?= $monthLabel ?></h6>
+                                </div>
+                            </div>
                         <?php else: ?>
                             <div class="table-responsive">
                                 <table class="table-mis w-100">
                                     <thead>
                                         <tr>
-                                            <th>Date</th><th>Day</th>
+                                            <th>Date</th>
+                                            <th>Day</th>
                                             <th class="text-center">Entries</th>
                                             <th class="text-center">Hours</th>
                                             <th class="text-center">Completed</th>
@@ -841,31 +911,39 @@ include '../../includes/header.php';
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php $runOffH = 0; foreach ($dateOffPerf as $dp): $runOffH += (float)$dp['total_hours']; ?>
-                                        <tr>
-                                            <td><strong style="font-size:.85rem;"><?= date('d M Y', strtotime($dp['log_date'])) ?></strong></td>
-                                            <td><span style="font-size:.78rem;color:#6b7280;"><?= $dp['day_of_week'] ?></span></td>
-                                            <td class="text-center"><strong><?= $dp['total_entries'] ?></strong></td>
-                                            <td class="text-center">
-                                                <strong style="color:#c9a84c;"><?= number_format((float)$dp['total_hours'],1) ?>h</strong>
-                                                <span style="font-size:.68rem;color:#9ca3af;">(<?= number_format($runOffH,1) ?>h)</span>
-                                            </td>
-                                            <td class="text-center"><span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['completed'] ?></span></td>
-                                            <td class="text-center">
-                                                <?php if ($dp['wip'] > 0): ?><span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['wip'] ?></span>
-                                                <?php else: ?><span style="color:#d1d5db;font-size:.78rem;">—</span><?php endif; ?>
-                                            </td>
-                                            <td style="font-size:.77rem;color:#6b7280;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($dp['clients_worked'] ?? '') ?>">
-                                                <?= htmlspecialchars(mb_strimwidth($dp['clients_worked'] ?? '—', 0, 50, '…')) ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                        <?php $runOffH = 0;
+                                        foreach ($dateOffPerf as $dp):
+                                            $runOffH += (float) $dp['total_hours']; ?>
+                                            <tr>
+                                                <td><strong style="font-size:.85rem;"><?= date('d M Y', strtotime($dp['log_date'])) ?></strong></td>
+                                                <td><span style="font-size:.78rem;color:#6b7280;"><?= $dp['day_of_week'] ?></span></td>
+                                                <td class="text-center"><strong><?= $dp['total_entries'] ?></strong></td>
+                                                <td class="text-center">
+                                                    <strong style="color:#c9a84c;"><?= number_format((float) $dp['total_hours'], 1) ?>h</strong>
+                                                    <span style="font-size:.68rem;color:#9ca3af;">(<?= number_format($runOffH, 1) ?>h)</span>
+                                                </td>
+                                                <td class="text-center">
+                                                    <span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['completed'] ?></span>
+                                                </td>
+                                                <td class="text-center">
+                                                    <?php if ($dp['wip'] > 0): ?>
+                                                        <span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:.75rem;font-weight:600;"><?= $dp['wip'] ?></span>
+                                                    <?php else: ?>
+                                                        <span style="color:#d1d5db;font-size:.78rem;">—</span>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td style="font-size:.77rem;color:#6b7280;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                                                    title="<?= htmlspecialchars($dp['clients_worked'] ?? '') ?>">
+                                                    <?= htmlspecialchars(mb_strimwidth($dp['clients_worked'] ?? '—', 0, 50, '…')) ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
                                     </tbody>
                                     <tfoot>
                                         <tr style="background:#f9fafb;font-weight:700;">
                                             <td colspan="2" style="padding:10px 14px;font-size:.82rem;color:#374151;"><i class="fas fa-calculator me-1 text-warning"></i>TOTAL</td>
                                             <td class="text-center"><?= $officeEntries ?></td>
-                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($officeHours,1) ?>h</td>
+                                            <td class="text-center" style="color:#c9a84c;"><?= number_format($officeHours, 1) ?>h</td>
                                             <td class="text-center" style="color:#15803d;"><?= $officeCompleted ?></td>
                                             <td class="text-center" style="color:#1d4ed8;"><?= $officeWip ?></td>
                                             <td></td>
@@ -899,7 +977,11 @@ include '../../includes/header.php';
                             <h5><i class="fas fa-history text-warning me-2"></i>My Monthly Performance History</h5>
                         </div>
                         <?php if (empty($trendRows)): ?>
-                            <div class="card-mis-body"><div class="empty-state"><i class="fas fa-chart-line"></i><h6>No historical data yet</h6></div></div>
+                            <div class="card-mis-body">
+                                <div class="empty-state"><i class="fas fa-chart-line"></i>
+                                    <h6>No historical data yet</h6>
+                                </div>
+                            </div>
                         <?php else: ?>
                             <div class="table-responsive">
                                 <table class="table-mis w-100">
@@ -916,34 +998,34 @@ include '../../includes/header.php';
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php foreach (array_reverse($trendRows) as $tr):
-                                        $vRate  = $tr['visit_logs'] > 0 ? round($tr['visited'] / $tr['visit_logs'] * 100) : 0;
-                                        $vrColor= $vRate >= 80 ? '#10b981' : ($vRate >= 50 ? '#f59e0b' : '#ef4444');
-                                        $totalH = (float)$tr['visit_hours'] + (float)$tr['office_hours'];
-                                    ?>
-                                        <tr <?= $tr['month_year'] === $month ? 'style="background:rgba(201,168,76,.04);"' : '' ?>>
-                                            <td>
-                                                <strong style="<?= $tr['month_year'] === $month ? 'color:#c9a84c;' : '' ?>">
-                                                    <?= date('F Y', strtotime($tr['month_year'].'-01')) ?>
-                                                    <?= $tr['month_year'] === $month ? ' ← current' : '' ?>
-                                                </strong>
-                                            </td>
-                                            <td class="text-center"><?= $tr['visit_logs'] ?></td>
-                                            <td class="text-center" style="color:#15803d;font-weight:600;"><?= $tr['visited'] ?></td>
-                                            <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format((float)$tr['visit_hours'],1) ?>h</td>
-                                            <td class="text-center"><?= $tr['office_entries'] ?></td>
-                                            <td class="text-center" style="color:#3b82f6;font-weight:700;"><?= number_format((float)$tr['office_hours'],1) ?>h</td>
-                                            <td class="text-center" style="color:#8b5cf6;font-weight:700;"><?= number_format($totalH,1) ?>h</td>
-                                            <td>
-                                                <div class="perf-bar">
-                                                    <div class="perf-bar-track">
-                                                        <div class="perf-bar-fill" style="width:<?= $vRate ?>%;background:<?= $vrColor ?>;"></div>
+                                        <?php foreach (array_reverse($trendRows) as $tr):
+                                            $vRate   = $tr['visit_logs'] > 0 ? round($tr['visited'] / $tr['visit_logs'] * 100) : 0;
+                                            $vrColor = $vRate >= 80 ? '#10b981' : ($vRate >= 50 ? '#f59e0b' : '#ef4444');
+                                            $totalH  = (float) $tr['visit_hours'] + (float) $tr['office_hours'];
+                                            ?>
+                                            <tr <?= $tr['month_year'] === $month ? 'style="background:rgba(201,168,76,.04);"' : '' ?>>
+                                                <td>
+                                                    <strong style="<?= $tr['month_year'] === $month ? 'color:#c9a84c;' : '' ?>">
+                                                        <?= date('F Y', strtotime($tr['month_year'] . '-01')) ?>
+                                                        <?= $tr['month_year'] === $month ? ' ← current' : '' ?>
+                                                    </strong>
+                                                </td>
+                                                <td class="text-center"><?= $tr['visit_logs'] ?></td>
+                                                <td class="text-center" style="color:#15803d;font-weight:600;"><?= $tr['visited'] ?></td>
+                                                <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format((float) $tr['visit_hours'], 1) ?>h</td>
+                                                <td class="text-center"><?= $tr['office_entries'] ?></td>
+                                                <td class="text-center" style="color:#3b82f6;font-weight:700;"><?= number_format((float) $tr['office_hours'], 1) ?>h</td>
+                                                <td class="text-center" style="color:#8b5cf6;font-weight:700;"><?= number_format($totalH, 1) ?>h</td>
+                                                <td>
+                                                    <div class="perf-bar">
+                                                        <div class="perf-bar-track">
+                                                            <div class="perf-bar-fill" style="width:<?= $vRate ?>%;background:<?= $vrColor ?>;"></div>
+                                                        </div>
+                                                        <span style="font-size:.78rem;font-weight:700;color:<?= $vrColor ?>;min-width:35px;"><?= $vRate ?>%</span>
                                                     </div>
-                                                    <span style="font-size:.78rem;font-weight:700;color:<?= $vrColor ?>;min-width:35px;"><?= $vRate ?>%</span>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
                                     </tbody>
                                 </table>
                             </div>
@@ -956,78 +1038,80 @@ include '../../includes/header.php';
                      TAB 4 — TEAM (admin only)
                 ═════════════════════════════════════════════════════════ -->
                 <?php if ($isAdmin): ?>
-                <div class="tab-pane fade" id="tabTeam">
-                    <?php if (empty($teamRows)): ?>
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-users text-warning me-2"></i>Team Performance — <?= $monthLabel ?></h5>
+                    <div class="tab-pane fade" id="tabTeam">
+                        <?php if (empty($teamRows)): ?>
+                            <div class="card-mis mb-4">
+                                <div class="card-mis-header">
+                                    <h5><i class="fas fa-users text-warning me-2"></i>Team Performance — <?= $monthLabel ?></h5>
+                                </div>
+                                <div class="card-mis-body">
+                                    <div class="empty-state"><i class="fas fa-users"></i>
+                                        <h6>No team data for <?= $monthLabel ?></h6>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="card-mis-body">
-                                <div class="empty-state"><i class="fas fa-users"></i><h6>No team data for <?= $monthLabel ?></h6></div>
+                        <?php else: ?>
+                            <div class="card-mis mb-4">
+                                <div class="card-mis-header">
+                                    <h5><i class="fas fa-users text-warning me-2"></i>Team Performance — <?= $monthLabel ?></h5>
+                                    <span style="font-size:.78rem;color:#9ca3af;"><?= count($teamRows) ?> staff member(s)</span>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table-mis w-100">
+                                        <thead>
+                                            <tr>
+                                                <th>Staff</th>
+                                                <th class="text-center">Visit Logs</th>
+                                                <th class="text-center">Visited</th>
+                                                <th class="text-center">Missed</th>
+                                                <th class="text-center">Visit Clients</th>
+                                                <th class="text-center">Visit Hours</th>
+                                                <th class="text-center">Office Entries</th>
+                                                <th class="text-center">Office Hours</th>
+                                                <th class="text-center">Office Clients</th>
+                                                <th>Visit Rate</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($teamRows as $tr):
+                                                $vr  = $tr['visit_logs'] > 0 ? round($tr['v_visited'] / $tr['visit_logs'] * 100) : 0;
+                                                $vrC = $vr >= 80 ? '#10b981' : ($vr >= 50 ? '#f59e0b' : '#ef4444');
+                                                ?>
+                                                <tr>
+                                                    <td>
+                                                        <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($tr['full_name']) ?></div>
+                                                        <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($tr['employee_id'] ?? '') ?></div>
+                                                    </td>
+                                                    <td class="text-center"><?= $tr['visit_logs'] ?></td>
+                                                    <td class="text-center" style="color:#15803d;font-weight:600;"><?= $tr['v_visited'] ?></td>
+                                                    <td class="text-center" style="color:<?= $tr['v_missed'] > 0 ? '#b91c1c' : '#9ca3af' ?>;font-weight:<?= $tr['v_missed'] > 0 ? '600' : '400' ?>;">
+                                                        <?= $tr['v_missed'] ?: '—' ?>
+                                                    </td>
+                                                    <td class="text-center"><?= $tr['visit_clients'] ?></td>
+                                                    <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format((float) $tr['visit_hours'], 1) ?>h</td>
+                                                    <td class="text-center"><?= $tr['office_entries'] ?></td>
+                                                    <td class="text-center" style="color:#3b82f6;font-weight:700;"><?= number_format((float) $tr['office_hours'], 1) ?>h</td>
+                                                    <td class="text-center"><?= $tr['office_clients'] ?></td>
+                                                    <td>
+                                                        <?php if ($tr['visit_logs'] > 0): ?>
+                                                            <div class="perf-bar">
+                                                                <div class="perf-bar-track">
+                                                                    <div class="perf-bar-fill" style="width:<?= $vr ?>%;background:<?= $vrC ?>;"></div>
+                                                                </div>
+                                                                <span style="font-size:.78rem;font-weight:700;color:<?= $vrC ?>;min-width:35px;"><?= $vr ?>%</span>
+                                                            </div>
+                                                        <?php else: ?>
+                                                            <span style="font-size:.78rem;color:#9ca3af;">No logs</span>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    <?php else: ?>
-                        <div class="card-mis mb-4">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-users text-warning me-2"></i>Team Performance — <?= $monthLabel ?></h5>
-                                <span style="font-size:.78rem;color:#9ca3af;"><?= count($teamRows) ?> staff member(s)</span>
-                            </div>
-                            <div class="table-responsive">
-                                <table class="table-mis w-100">
-                                    <thead>
-                                        <tr>
-                                            <th>Staff</th>
-                                            <th class="text-center">Visit Logs</th>
-                                            <th class="text-center">Visited</th>
-                                            <th class="text-center">Missed</th>
-                                            <th class="text-center">Visit Clients</th>
-                                            <th class="text-center">Visit Hours</th>
-                                            <th class="text-center">Office Entries</th>
-                                            <th class="text-center">Office Hours</th>
-                                            <th class="text-center">Office Clients</th>
-                                            <th>Visit Rate</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                    <?php foreach ($teamRows as $tr):
-                                        $vr  = $tr['visit_logs'] > 0 ? round($tr['v_visited'] / $tr['visit_logs'] * 100) : 0;
-                                        $vrC = $vr >= 80 ? '#10b981' : ($vr >= 50 ? '#f59e0b' : '#ef4444');
-                                    ?>
-                                        <tr>
-                                            <td>
-                                                <div style="font-weight:600;font-size:.85rem;"><?= htmlspecialchars($tr['full_name']) ?></div>
-                                                <div style="font-size:.7rem;color:#9ca3af;"><?= htmlspecialchars($tr['employee_id'] ?? '') ?></div>
-                                            </td>
-                                            <td class="text-center"><?= $tr['visit_logs'] ?></td>
-                                            <td class="text-center" style="color:#15803d;font-weight:600;"><?= $tr['v_visited'] ?></td>
-                                            <td class="text-center" style="color:<?= $tr['v_missed'] > 0 ? '#b91c1c' : '#9ca3af' ?>;font-weight:<?= $tr['v_missed'] > 0 ? '600' : '400' ?>;">
-                                                <?= $tr['v_missed'] ?: '—' ?>
-                                            </td>
-                                            <td class="text-center"><?= $tr['visit_clients'] ?></td>
-                                            <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format((float)$tr['visit_hours'],1) ?>h</td>
-                                            <td class="text-center"><?= $tr['office_entries'] ?></td>
-                                            <td class="text-center" style="color:#3b82f6;font-weight:700;"><?= number_format((float)$tr['office_hours'],1) ?>h</td>
-                                            <td class="text-center"><?= $tr['office_clients'] ?></td>
-                                            <td>
-                                                <?php if ($tr['visit_logs'] > 0): ?>
-                                                    <div class="perf-bar">
-                                                        <div class="perf-bar-track">
-                                                            <div class="perf-bar-fill" style="width:<?= $vr ?>%;background:<?= $vrC ?>;"></div>
-                                                        </div>
-                                                        <span style="font-size:.78rem;font-weight:700;color:<?= $vrC ?>;min-width:35px;"><?= $vr ?>%</span>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <span style="font-size:.78rem;color:#9ca3af;">No logs</span>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    <?php endif; ?>
-                </div><!-- /tabTeam -->
+                        <?php endif; ?>
+                    </div><!-- /tabTeam -->
                 <?php endif; ?>
 
             </div><!-- /tab-content -->
@@ -1038,76 +1122,75 @@ include '../../includes/header.php';
 </div><!-- /app-wrapper -->
 
 <script>
-const chartLabels      = <?= json_encode($chartLabels) ?>;
-const chartVisitHours  = <?= json_encode($chartVisitHours) ?>;
-const chartOfficeHours = <?= json_encode($chartOfficeHours) ?>;
-const chartVisitLogs   = <?= json_encode($chartVisitLogs) ?>;
+    const chartLabels      = <?= json_encode($chartLabels) ?>;
+    const chartVisitHours  = <?= json_encode($chartVisitHours) ?>;
+    const chartOfficeHours = <?= json_encode($chartOfficeHours) ?>;
+    const chartVisitLogs   = <?= json_encode($chartVisitLogs) ?>;
 
-new Chart(document.getElementById('trendChart'), {
-    type: 'bar',
-    data: {
-        labels: chartLabels,
-        datasets: [
-            {
-                label: 'Visit Hours',
-                data: chartVisitHours,
-                backgroundColor: 'rgba(201,168,76,0.7)',
-                borderColor: '#c9a84c',
-                borderWidth: 1.5,
-                borderRadius: 5,
-                yAxisID: 'y'
-            },
-            {
-                label: 'Office Hours',
-                data: chartOfficeHours,
-                backgroundColor: 'rgba(59,130,246,0.65)',
-                borderColor: '#3b82f6',
-                borderWidth: 1.5,
-                borderRadius: 5,
-                yAxisID: 'y'
-            },
-            {
-                label: 'Total Visits',
-                data: chartVisitLogs,
-                type: 'line',
-                borderColor: '#10b981',
-                backgroundColor: 'rgba(16,185,129,0.10)',
-                borderWidth: 2,
-                pointRadius: 4,
-                pointHoverRadius: 6,
-                tension: 0.3,
-                fill: false,
-                yAxisID: 'y1'
-            }
-        ]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        scales: {
-            x: { ticks: { color: '#4b5563', font: { size: 11 } }, grid: { display: false } },
-            y: {
-                position: 'left',
-                stacked: false,
-                beginAtZero: true,
-                ticks: { color: '#c9a84c', font: { size: 11 }, callback: v => v + 'h' },
-                grid: { color: '#f1f5f9' }
-            },
-            y1: {
-                position: 'right',
-                beginAtZero: true,
-                ticks: { color: '#10b981', font: { size: 11 } },
-                grid: { drawOnChartArea: false }
-            }
+    new Chart(document.getElementById('trendChart'), {
+        type: 'bar',
+        data: {
+            labels: chartLabels,
+            datasets: [
+                {
+                    label: 'Visit Hours',
+                    data: chartVisitHours,
+                    backgroundColor: 'rgba(201,168,76,0.7)',
+                    borderColor: '#c9a84c',
+                    borderWidth: 1.5,
+                    borderRadius: 5,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Office Hours',
+                    data: chartOfficeHours,
+                    backgroundColor: 'rgba(59,130,246,0.65)',
+                    borderColor: '#3b82f6',
+                    borderWidth: 1.5,
+                    borderRadius: 5,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Total Visits',
+                    data: chartVisitLogs,
+                    type: 'line',
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16,185,129,0.10)',
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    tension: 0.3,
+                    fill: false,
+                    yAxisID: 'y1'
+                }
+            ]
         },
-        plugins: {
-            legend: {
-                display: true,
-                position: 'top',
-                labels: { font: { size: 11 }, boxWidth: 12, color: '#374151' }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                x:  { ticks: { color: '#4b5563', font: { size: 11 } }, grid: { display: false } },
+                y:  {
+                    position: 'left',
+                    beginAtZero: true,
+                    ticks: { color: '#c9a84c', font: { size: 11 }, callback: v => v + 'h' },
+                    grid: { color: '#f1f5f9' }
+                },
+                y1: {
+                    position: 'right',
+                    beginAtZero: true,
+                    ticks: { color: '#10b981', font: { size: 11 } },
+                    grid: { drawOnChartArea: false }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: { font: { size: 11 }, boxWidth: 12, color: '#374151' }
+                }
             }
         }
-    }
-});
+    });
 </script>

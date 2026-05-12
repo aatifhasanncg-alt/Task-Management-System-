@@ -68,9 +68,16 @@ $plannedHours = (float) $db->query("
       AND wp.plan_month='{$monthStart}'
 ")->fetchColumn();
 
-$rawEfficiency = $plannedHours > 0 ? round(($totalHours / $plannedHours) * 100) : 0;
-$efficiency = min($rawEfficiency, 100);
-$overDelivered = $rawEfficiency > 100;
+// Time Efficiency: planned ÷ actual × 100
+// planned=2h, actual=1h → 200% (finished faster = more efficient)
+// planned=2h, actual=2h → 100%
+// planned=2h, actual=4h →  50% (took longer than planned)
+// In index.php, change efficiency line to:
+$rawEfficiency = ($plannedHours > 0 && $totalHours > 0)
+    ? round(($plannedHours / $totalHours) * 100)  // $totalHours = visit only
+    : 0;
+$efficiency    = min($rawEfficiency, 200); // cap display at 200%
+$overDelivered = $rawEfficiency > 100;     // finished faster than planned
 // Office log KPIs
 $officeTotalLogs = (int)$db->query("
     SELECT COUNT(*) FROM office_work_logs
@@ -263,23 +270,27 @@ include '../../includes/header.php';
                         <?= $officeWip ?> WIP · <?= $officeHolding ?> holding
                     </div>
                 </div>
-                <?php $effColor = $rawEfficiency >= 80 ? '#10b981' : ($rawEfficiency >= 50 ? '#f59e0b' : '#ef4444'); ?>
+                <?php $effColor = $rawEfficiency >= 100 ? '#10b981' : ($rawEfficiency >= 60 ? '#f59e0b' : '#ef4444'); ?>
                 <div class="kpi-tile" style="--kpi-color:<?= $effColor ?>;">
                     <div class="kpi-icon"><i class="fas fa-tachometer-alt" style="color:<?= $effColor ?>;"></i></div>
                     <div class="kpi-val" style="color:<?= $effColor ?>;">
                         <?= $efficiency ?>%
                         <?php if ($overDelivered): ?>
-                            <span style="font-size:.6rem;background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:4px;vertical-align:middle;">+<?= $rawEfficiency - 100 ?>%</span>
+                            <span style="font-size:.6rem;background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:4px;vertical-align:middle;">
+                                ↑ Fast
+                            </span>
                         <?php endif; ?>
                     </div>
-                    <div class="kpi-label">Efficiency</div>
+                    <div class="kpi-label">Time Efficiency</div>
                     <div class="kpi-delta" style="color:#9ca3af;font-size:.7rem;">
-                        <?= number_format($plannedHours, 1) ?>h planned
+                        <?= number_format($plannedHours, 1) ?>h planned · <?= number_format($totalHours, 1) ?>h used
+                    </div>
+                    <div style="font-size:.63rem;margin-top:3px;color:<?= $effColor ?>;font-weight:600;">
+                        <?= $overDelivered ? '✅ Ahead of plan' : ($rawEfficiency > 0 ? '⚠ Behind plan' : '—') ?>
                     </div>
                 </div>
             </div>
 
-            <!-- PROGRESS -->
             <!-- PROGRESS + CHARTS -->
             <?php
             $maxH = max($plannedHours, $combinedTotalHours, 1);
@@ -287,7 +298,7 @@ include '../../includes/header.php';
             $aw   = round(($combinedTotalHours  / $maxH) * 100);
             $vw   = round(($totalHours          / $maxH) * 100);
             $ow   = round(($officeTotalHours    / $maxH) * 100);
-            $ec   = $rawEfficiency >= 80 ? '#10b981' : ($rawEfficiency >= 50 ? '#f59e0b' : '#ef4444');
+            $ec   = $rawEfficiency >= 100 ? '#10b981' : ($rawEfficiency >= 60 ? '#f59e0b' : '#ef4444');
             ?>
             <div class="row g-4 mb-4">
 
