@@ -95,97 +95,9 @@ $recentTasks = $db->query("
     LIMIT 8
 ")->fetchAll();
 
-// Top staff — count ALL tasks assigned regardless of department
-// Show all departments (primary + secondary) as a combined label
-$topStaff = $db->query("
-    SELECT
-        u.full_name,
-        u.employee_id,
-        b.branch_name,
-        /* Primary dept name */
-        d.dept_name,
-        /* All dept names this user belongs to (primary + secondary assignments) */
-        (
-            SELECT GROUP_CONCAT(DISTINCT d2.dept_name ORDER BY d2.dept_name SEPARATOR ', ')
-            FROM departments d2
-            WHERE d2.id = u.department_id
-               OR d2.id IN (
-                   SELECT uda2.department_id
-                   FROM user_department_assignments uda2
-                   WHERE uda2.user_id = u.id
-               )
-        ) AS all_dept_names,
-        COUNT(t.id)                                                    AS total,
-        SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END)      AS done
-    FROM users u
-    JOIN roles r         ON r.id  = u.role_id AND r.role_name = 'staff'
-    LEFT JOIN branches b ON b.id  = u.branch_id
-    LEFT JOIN departments d ON d.id = u.department_id
-    LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
-    LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE u.is_active = 1
-      /* Exclude anyone whose primary OR any secondary dept is Consulting */
-      AND NOT EXISTS (
-          SELECT 1 FROM departments dc
-          WHERE dc.dept_code = 'CON'
-            AND (
-                dc.id = u.department_id
-                OR dc.id IN (
-                    SELECT uda.department_id
-                    FROM user_department_assignments uda
-                    WHERE uda.user_id = u.id
-                )
-            )
-      )
-    GROUP BY u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
-    ORDER BY done DESC
-    LIMIT 5
-")->fetchAll();
-// Top admins — same pattern as topStaff but role = admin, exclude CON dept
-$topAdmins = $db->query("
-    SELECT
-        u.full_name,
-        u.employee_id,
-        b.branch_name,
-        d.dept_name,
-        (
-            SELECT GROUP_CONCAT(DISTINCT d2.dept_name ORDER BY d2.dept_name SEPARATOR ', ')
-            FROM departments d2
-            WHERE d2.id = u.department_id
-               OR d2.id IN (
-                   SELECT uda2.department_id
-                   FROM user_department_assignments uda2
-                   WHERE uda2.user_id = u.id
-               )
-        ) AS all_dept_names,
-        COUNT(t.id)                                                AS total,
-        SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END) AS done
-    FROM users u
-    JOIN roles r         ON r.id  = u.role_id AND r.role_name = 'admin'
-    LEFT JOIN branches b ON b.id  = u.branch_id
-    LEFT JOIN departments d ON d.id = u.department_id
-    LEFT JOIN tasks t        ON t.assigned_to = u.id AND t.is_active = 1
-    LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE u.is_active = 1
-      AND NOT EXISTS (
-          SELECT 1 FROM departments dc
-          WHERE dc.dept_code = 'CON'
-            AND (
-                dc.id = u.department_id
-                OR dc.id IN (
-                    SELECT uda.department_id
-                    FROM user_department_assignments uda
-                    WHERE uda.user_id = u.id
-                )
-            )
-      )
-    GROUP BY u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
-    ORDER BY done DESC
-    LIMIT 5
-")->fetchAll();
-// Department-wise performance with per-status breakdown
-// Per-department top performers (staff only, grouped by department)
-$deptPerfTabs = [];
+// ── Unified performers: one tab per dept, shows all users (staff+admin)
+// including UDA secondary assignments, ranked by done tasks ──
+$perfTabs = [];
 
 $deptList = $db->query("
     SELECT id, dept_name, color, icon
@@ -200,6 +112,7 @@ foreach ($deptList as $dept) {
         SELECT
             u.full_name,
             u.employee_id,
+            r.role_name,
             b.branch_name,
             COUNT(t.id)                                                AS total,
             SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END)  AS done
@@ -218,19 +131,24 @@ foreach ($deptList as $dept) {
                   WHERE uda.department_id = ?
               )
           )
-        GROUP BY u.id, u.full_name, u.employee_id, b.branch_name
+        GROUP BY u.id, u.full_name, u.employee_id, r.role_name, b.branch_name
         HAVING total > 0
-        ORDER BY done DESC
-        LIMIT 5
+        ORDER BY done DESC, total DESC
+        LIMIT 8
     ");
     $stmt->execute([$deptId, $deptId, $deptId]);
     $dept['performers'] = $stmt->fetchAll();
-    $deptPerfTabs[] = $dept;
+    $perfTabs[] = $dept;
 }
 include '../../includes/header.php';
 ?>
 <style>
-    * {
+.page-hero {
+        overflow: visible !important;
+    }
+    .stat-card,
+    .card-mis,
+    .dropdown-menu {
         overflow: visible !important;
     }
 
@@ -301,22 +219,60 @@ include '../../includes/header.php';
         max-width: none;
     }
 
-    @media (max-width: 768px) {
+    /* KPI cards responsive */
+    .stat-card-value {
+        font-size: 1.5rem;
+    }
 
-        /* Page hero: stack buttons */
-        .page-hero .d-flex.gap-2 {
-            flex-wrap: wrap;
+    @media (max-width: 576px) {
+        .stat-card-value {
+            font-size: 1.15rem;
+        }
+
+        .stat-card-icon {
+            width: 36px;
+            height: 36px;
+            font-size: .85rem;
+        }
+
+        .stat-card-label {
+            font-size: .65rem;
+        }
+
+        .page-hero h4 {
+            font-size: 1.1rem;
+        }
+
+        .page-hero p {
+            font-size: .78rem;
+        }
+
+        .page-hero-badge {
+            font-size: .68rem;
+        }
+
+        #dept-tabs {
+            overflow-x: auto;
+            flex-wrap: nowrap !important;
+            padding-bottom: 2px;
+        }
+
+        #dept-tabs .btn {
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+    }
+
+    /* Page hero button group on mobile */
+    @media (max-width: 640px) {
+        .hero-actions {
+            flex-wrap: wrap !important;
             width: 100%;
         }
 
-        .page-hero .btn {
-            font-size: .78rem;
-            padding: .35rem .7rem;
-        }
-
-        /* Topbar date hide on very small screens */
-        .topbar-date {
-            display: none !important;
+        .hero-actions .btn {
+            flex: 1 1 calc(50% - .5rem);
+            justify-content: center;
         }
     }
 </style>
@@ -329,15 +285,17 @@ include '../../includes/header.php';
 
             <!-- Page Hero -->
             <div class="page-hero">
-                <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-                    <div>
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+                    <div style="min-width:0;flex:1;">
                         <div class="page-hero-badge"><i class="fas fa-crown"></i> Executive View</div>
-                        <h4>Good <?= (date('H') < 12) ? 'Morning' : ((date('H') < 17) ? 'Afternoon' : 'Evening') ?>,
+                        <h4 style="margin-bottom:.25rem;">Good
+                            <?= (date('H') < 12) ? 'Morning' : ((date('H') < 17) ? 'Afternoon' : 'Evening') ?>,
                             <?= htmlspecialchars(explode(' ', $user['full_name'] ?? $user['username'] ?? 'Executive')[0]) ?>
                         </h4>
-                        <p>Overview of all tasks, branches, and staff across ASK Global Advisory.</p>
+                        <p style="margin-bottom:0;">Overview of all tasks, branches, and staff across ASK Global
+                            Advisory.</p>
                     </div>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex gap-2 flex-wrap hero-actions" style="flex-shrink:0;">
                         <a href="<?= APP_URL ?>/executive/tasks/assign.php"
                             class="btn-gold btn d-flex align-items-center gap-2">
                             <i class="fas fa-plus"></i> Assign Task
@@ -448,7 +406,7 @@ include '../../includes/header.php';
                     $iClass = str_starts_with($rawIcon, 'fa') ? $rawIcon : 'fa-' . $rawIcon;
                     $link = APP_URL . '/executive/tasks/index.php?status=' . urlencode($sr['status_name']);
                     ?>
-                    <div class="col-6 col-md-3 col-xl-2">
+                    <div class="col-4 col-md-3 col-xl-2">
                         <a href="<?= $link ?>" class="stat-card-link">
                             <div class="stat-card">
                                 <div class="stat-card-icon"
@@ -570,7 +528,165 @@ include '../../includes/header.php';
                     </div>
                 </div>
             </div>
+            <!-- ── Performers by Department ── -->
+            <div class="mt-4 mb-4">
+                <div class="card-mis">
+                    <div class="card-mis-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <h5 class="mb-0">
+                            <i class="fas fa-trophy text-warning me-2"></i>Top Performers by Department
+                        </h5>
+                        <div class="d-flex gap-1 flex-wrap" id="dept-tabs" style="max-width:100%;overflow-x:auto;">
+                            <?php foreach ($perfTabs as $i => $dept): ?>
+                                <button onclick="switchDeptTab('dept-<?= $dept['id'] ?>')" id="dtab-<?= $dept['id'] ?>"
+                                    class="btn btn-sm <?= $i === 0 ? 'btn-gold' : 'btn-outline-secondary' ?> dept-tab">
+                                    <?php if ($dept['color']): ?>
+                                        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;
+                                         background:<?= htmlspecialchars($dept['color']) ?>;
+                                         margin-right:4px;vertical-align:middle;"></span>
+                                    <?php endif; ?>
+                                    <?= htmlspecialchars($dept['dept_name']) ?>
+                                </button>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <div class="card-mis-body">
+                        <?php foreach ($perfTabs as $i => $dept):
+                            $dColor = $dept['color'] ?: '#6b7280';
+                            $panelId = 'dept-' . $dept['id'];
+                            // Pre-split performers by role for PHP rendering
+                            $staffPerfs = array_values(array_filter($dept['performers'], fn($p) => $p['role_name'] === 'staff'));
+                            $adminPerfs = array_values(array_filter($dept['performers'], fn($p) => $p['role_name'] === 'admin'));
+                            ?>
+                            <div id="<?= $panelId ?>" class="dept-panel" style="<?= $i !== 0 ? 'display:none;' : '' ?>">
 
+                                <!-- Role sub-tabs -->
+                                <div class="d-flex gap-1 mb-3">
+                                    <button onclick="switchRoleTab(<?= $dept['id'] ?>, 'staff')"
+                                        id="rtab-<?= $dept['id'] ?>-staff"
+                                        class="btn btn-sm btn-gold role-tab-<?= $dept['id'] ?>">
+                                        <i class="fas fa-users me-1"></i>Staff
+                                        <span style="font-size:.65rem;background:rgba(255,255,255,.25);
+                                         padding:.05rem .35rem;border-radius:99px;margin-left:3px;">
+                                            <?= count($staffPerfs) ?>
+                                        </span>
+                                    </button>
+                                    <button onclick="switchRoleTab(<?= $dept['id'] ?>, 'admin')"
+                                        id="rtab-<?= $dept['id'] ?>-admin"
+                                        class="btn btn-sm btn-outline-secondary role-tab-<?= $dept['id'] ?>">
+                                        <i class="fas fa-user-shield me-1"></i>Admin
+                                        <span style="font-size:.65rem;background:#f3f4f6;
+                                         padding:.05rem .35rem;border-radius:99px;margin-left:3px;color:#6b7280;">
+                                            <?= count($adminPerfs) ?>
+                                        </span>
+                                    </button>
+                                </div>
+
+                                <!-- Staff panel -->
+                                <div id="rp-<?= $dept['id'] ?>-staff">
+                                    <?php if (empty($staffPerfs)): ?>
+                                        <div class="empty-state" style="padding:1.5rem 0;">
+                                            <i class="fas fa-users"></i> No staff with tasks in this department
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="row g-3">
+                                            <?php foreach ($staffPerfs as $j => $p):
+                                                $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
+                                                $pct = $p['total'] ? round(($p['done'] / $p['total']) * 100) : 0;
+                                                ?>
+                                                <div class="col-12 col-md-6">
+                                                    <div class="d-flex align-items-center gap-3">
+                                                        <div style="width:26px;text-align:center;font-weight:700;font-size:.9rem;
+                                                        color:<?= $medals[$j] ?? '#6b7280' ?>;flex-shrink:0;">
+                                                            #<?= $j + 1 ?>
+                                                        </div>
+                                                        <div class="avatar-circle avatar-sm" style="background:<?= htmlspecialchars($dColor) ?>22;
+                                                       color:<?= htmlspecialchars($dColor) ?>;flex-shrink:0;">
+                                                            <?= strtoupper(substr($p['full_name'], 0, 2)) ?>
+                                                        </div>
+                                                        <div class="flex-grow-1" style="min-width:0;">
+                                                            <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
+                                                                <?= htmlspecialchars($p['full_name']) ?>
+                                                            </div>
+                                                            <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;">
+                                                                <?= htmlspecialchars($p['branch_name'] ?? '—') ?>
+                                                            </div>
+                                                            <div style="background:#f3f4f6;border-radius:50px;height:4px;
+                                                            margin-top:.3rem;overflow:hidden;">
+                                                                <div style="width:<?= $pct ?>%;background:<?= htmlspecialchars($dColor) ?>;
+                                                                height:4px;border-radius:50px;"></div>
+                                                            </div>
+                                                        </div>
+                                                        <div style="text-align:right;flex-shrink:0;">
+                                                            <div style="font-size:.95rem;font-weight:700;color:#10b981;">
+                                                                <?= (int) $p['done'] ?>
+                                                            </div>
+                                                            <div style="font-size:.68rem;color:#9ca3af;">
+                                                                / <?= (int) $p['total'] ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+
+                                <!-- Admin panel -->
+                                <div id="rp-<?= $dept['id'] ?>-admin" style="display:none;">
+                                    <?php if (empty($adminPerfs)): ?>
+                                        <div class="empty-state" style="padding:1.5rem 0;">
+                                            <i class="fas fa-user-shield"></i> No admins with tasks in this department
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="row g-3">
+                                            <?php foreach ($adminPerfs as $j => $p):
+                                                $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
+                                                $pct = $p['total'] ? round(($p['done'] / $p['total']) * 100) : 0;
+                                                ?>
+                                                <div class="col-12 col-md-6">
+                                                    <div class="d-flex align-items-center gap-3">
+                                                        <div style="width:26px;text-align:center;font-weight:700;font-size:.9rem;
+                                                        color:<?= $medals[$j] ?? '#6b7280' ?>;flex-shrink:0;">
+                                                            #<?= $j + 1 ?>
+                                                        </div>
+                                                        <div class="avatar-circle avatar-sm"
+                                                            style="background:#db277722;color:#db2777;flex-shrink:0;">
+                                                            <?= strtoupper(substr($p['full_name'], 0, 2)) ?>
+                                                        </div>
+                                                        <div class="flex-grow-1" style="min-width:0;">
+                                                            <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
+                                                                <?= htmlspecialchars($p['full_name']) ?>
+                                                            </div>
+                                                            <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;">
+                                                                <?= htmlspecialchars($p['branch_name'] ?? '—') ?>
+                                                            </div>
+                                                            <div style="background:#f3f4f6;border-radius:50px;height:4px;
+                                                            margin-top:.3rem;overflow:hidden;">
+                                                                <div style="width:<?= $pct ?>%;
+                                                                background:linear-gradient(90deg,#db2777,#f472b6);
+                                                                height:4px;border-radius:50px;"></div>
+                                                            </div>
+                                                        </div>
+                                                        <div style="text-align:right;flex-shrink:0;">
+                                                            <div style="font-size:.95rem;font-weight:700;color:#10b981;">
+                                                                <?= (int) $p['done'] ?>
+                                                            </div>
+                                                            <div style="font-size:.68rem;color:#9ca3af;">
+                                                                / <?= (int) $p['total'] ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
             <!-- ── Recent Tasks (full width) ── -->
             <div class="mb-4">
                 <div class="card-mis">
@@ -681,274 +797,34 @@ include '../../includes/header.php';
                 </div>
             </div>
 
-            <!-- ── Top Performers + Tasks by Branch (side by side) ── -->
-            <div class="row g-4">
 
-                <!-- Top Performers (tabbed: Staff / Admin) -->
-                <div class="col-lg-5">
-                    <div class="card-mis">
-                        <div class="card-mis-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <h5 class="mb-0"><i class="fas fa-trophy text-warning me-2"></i>Top Performers</h5>
-                            <div class="d-flex gap-1">
-                                <button onclick="switchPerfTab('staff')" id="tab-staff"
-                                    class="btn btn-sm btn-gold perf-tab active-tab">
-                                    <i class="fas fa-users me-1"></i>Staff
-                                </button>
-                                <button onclick="switchPerfTab('admin')" id="tab-admin"
-                                    class="btn btn-sm btn-outline-secondary perf-tab">
-                                    <i class="fas fa-user-shield me-1"></i>Admin
-                                </button>
-                            </div>
-                        </div>
-                        <div class="card-mis-body">
-
-                            <!-- Staff tab -->
-                            <div id="perf-staff">
-                                <?php if (empty($topStaff)): ?>
-                                    <div class="empty-state"><i class="fas fa-users"></i>No staff data</div>
-                                <?php endif; ?>
-                                <?php foreach ($topStaff as $i => $s):
-                                    $pct = $s['total'] ? round(($s['done'] / $s['total']) * 100) : 0;
-                                    $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
-                                    $deptLabel = $s['all_dept_names'] ?? $s['dept_name'] ?? '';
-                                    ?>
-                                    <div class="d-flex align-items-center gap-3 mb-3">
-                                        <div
-                                            style="width:26px;text-align:center;font-weight:700;font-size:.9rem;color:<?= $medals[$i] ?? '#6b7280' ?>;">
-                                            #<?= $i + 1 ?>
-                                        </div>
-                                        <div class="avatar-circle avatar-sm">
-                                            <?= strtoupper(substr($s['full_name'], 0, 2)) ?>
-                                        </div>
-                                        <div class="flex-grow-1" style="min-width:0;">
-                                            <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
-                                                <?= htmlspecialchars(explode(' ', $s['full_name'])[0]) ?>
-                                            </div>
-                                            <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;"
-                                                title="<?= htmlspecialchars($deptLabel) ?>">
-                                                <?= htmlspecialchars($s['branch_name'] ?? '') ?>
-                                                <?php if ($deptLabel): ?> ·
-                                                    <?= htmlspecialchars($deptLabel) ?>     <?php endif; ?>
-                                            </div>
-                                            <div
-                                                style="background:#f3f4f6;border-radius:50px;height:4px;margin-top:.3rem;overflow:hidden;">
-                                                <div
-                                                    style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:4px;border-radius:50px;">
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div style="text-align:right;flex-shrink:0;">
-                                            <div style="font-size:.95rem;font-weight:700;color:#10b981;"><?= $s['done'] ?>
-                                            </div>
-                                            <div style="font-size:.7rem;color:#9ca3af;">done / <?= $s['total'] ?> total
-                                            </div>
-                                        </div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-
-                            <!-- Admin tab -->
-                            <div id="perf-admin" style="display:none;">
-                                <?php if (empty($topAdmins)): ?>
-                                    <div class="empty-state"><i class="fas fa-user-shield"></i>No admin data</div>
-                                <?php endif; ?>
-                                <?php foreach ($topAdmins as $i => $s):
-                                    $pct = $s['total'] ? round(($s['done'] / $s['total']) * 100) : 0;
-                                    $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
-                                    $deptLabel = $s['all_dept_names'] ?? $s['dept_name'] ?? '';
-                                    ?>
-                                    <div class="d-flex align-items-center gap-3 mb-3">
-                                        <div
-                                            style="width:26px;text-align:center;font-weight:700;font-size:.9rem;color:<?= $medals[$i] ?? '#6b7280' ?>;">
-                                            #<?= $i + 1 ?>
-                                        </div>
-                                        <div class="avatar-circle avatar-sm" style="background:#db277722;color:#db2777;">
-                                            <?= strtoupper(substr($s['full_name'], 0, 2)) ?>
-                                        </div>
-                                        <div class="flex-grow-1" style="min-width:0;">
-                                            <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
-                                                <?= htmlspecialchars(explode(' ', $s['full_name'])[0]) ?>
-                                            </div>
-                                            <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;"
-                                                title="<?= htmlspecialchars($deptLabel) ?>">
-                                                <?= htmlspecialchars($s['branch_name'] ?? '') ?>
-                                                <?php if ($deptLabel): ?> ·
-                                                    <?= htmlspecialchars($deptLabel) ?>     <?php endif; ?>
-                                            </div>
-                                            <div
-                                                style="background:#f3f4f6;border-radius:50px;height:4px;margin-top:.3rem;overflow:hidden;">
-                                                <div
-                                                    style="width:<?= $pct ?>%;background:linear-gradient(90deg,#db2777,#f472b6);height:4px;border-radius:50px;">
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div style="text-align:right;flex-shrink:0;">
-                                            <div style="font-size:.95rem;font-weight:700;color:#10b981;"><?= $s['done'] ?>
-                                            </div>
-                                            <div style="font-size:.7rem;color:#9ca3af;">done / <?= $s['total'] ?> total
-                                            </div>
-                                        </div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tasks by Branch (unchanged) -->
-                <div class="col-lg-7">
-                    <div class="card-mis h-100">
-                        <div class="card-mis-header">
-                            <h5><i class="fas fa-map-marker-alt text-warning me-2"></i>Tasks by Branch</h5>
-                        </div>
-                        <div class="card-mis-body">
-                            <?php foreach ($branchTasks as $bt):
-                                $pct = $bt['total'] ? round(($bt['done'] / $bt['total']) * 100) : 0;
-                                ?>
-                                <div class="d-flex align-items-center gap-3 mb-3 pb-3 border-bottom">
-                                    <div style="width:40px;height:40px;border-radius:10px;
-                                    background:<?= $bt['is_head_office'] ? '#fef9ec' : '#f0f4f8' ?>;
-                                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                        <i class="fas <?= $bt['is_head_office'] ? 'fa-building-columns' : 'fa-map-marker-alt' ?>"
-                                            style="color:<?= $bt['is_head_office'] ? '#c9a84c' : '#6b7280' ?>;font-size:.85rem;"></i>
-                                    </div>
-                                    <div class="flex-grow-1">
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <span style="font-weight:600;font-size:.88rem;">
-                                                <?= htmlspecialchars($bt['branch_name']) ?>
-                                                <?php if ($bt['is_head_office']): ?>
-                                                    <span class="ms-1"
-                                                        style="font-size:.65rem;background:#fefce8;color:#ca8a04;border-radius:50px;padding:.1rem .45rem;font-weight:600;">HO</span>
-                                                <?php endif; ?>
-                                            </span>
-                                            <span style="font-weight:700;font-size:.9rem;"><?= $bt['total'] ?></span>
-                                        </div>
-                                        <div
-                                            style="background:#f3f4f6;border-radius:50px;height:5px;margin:.4rem 0;overflow:hidden;">
-                                            <div
-                                                style="width:<?= $pct ?>%;background:linear-gradient(90deg,#c9a84c,#e8c96a);height:5px;border-radius:50px;">
-                                            </div>
-                                        </div>
-                                        <div class="d-flex gap-3 flex-wrap" style="font-size:.72rem;color:#9ca3af;">
-                                            <span>WIP: <strong style="color:#f59e0b;"><?= $bt['wip'] ?></strong></span>
-                                            <span>Pending: <strong
-                                                    style="color:#ef4444;"><?= $bt['pending'] ?></strong></span>
-                                            <span>Done: <strong style="color:#10b981;"><?= $bt['done'] ?></strong></span>
-                                            <span style="margin-left:auto;color:#6b7280;"><?= $pct ?>% complete</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                            <?php if (empty($branchTasks)): ?>
-                                <div class="text-center py-4" style="color:#9ca3af;font-size:.83rem;">No branch data</div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-
-            </div><!-- /row -->
-
-            <!-- ── Department-wise Performance (tabbed) ── -->
-            <div class="mt-4 mb-4">
-                <div class="card-mis">
-                    <div class="card-mis-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <h5 class="mb-0"><i class="fas fa-layer-group text-warning me-2"></i>Department-wise Performance
-                        </h5>
-                        <div class="d-flex gap-1 flex-wrap" id="dept-tabs">
-                            <?php foreach ($deptPerfTabs as $i => $dept): ?>
-                                <button onclick="switchDeptTab('dept-<?= $dept['id'] ?>')" id="dtab-<?= $dept['id'] ?>"
-                                    class="btn btn-sm <?= $i === 0 ? 'btn-gold' : 'btn-outline-secondary' ?> dept-tab">
-                                    <?php if ($dept['color']): ?>
-                                        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;
-                                background:<?= htmlspecialchars($dept['color']) ?>;margin-right:4px;"></span>
-                                    <?php endif; ?>
-                                    <?= htmlspecialchars($dept['dept_name']) ?>
-                                </button>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <div class="card-mis-body">
-                        <?php foreach ($deptPerfTabs as $i => $dept):
-                            $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
-                            $dColor = $dept['color'] ?: '#6b7280';
-                            ?>
-                            <div id="dept-<?= $dept['id'] ?>" class="dept-panel"
-                                style="<?= $i !== 0 ? 'display:none;' : '' ?>">
-
-                                <?php if (empty($dept['performers'])): ?>
-                                    <div class="empty-state" style="padding:2rem 0;">
-                                        <i class="fas fa-users"></i> No task data for this department yet
-                                    </div>
-                                <?php else: ?>
-                                    <?php foreach ($dept['performers'] as $j => $p):
-                                        $pct = $p['total'] ? round(($p['done'] / $p['total']) * 100) : 0;
-                                        ?>
-                                        <div class="d-flex align-items-center gap-3 mb-3">
-                                            <div style="width:26px;text-align:center;font-weight:700;font-size:.9rem;
-                                            color:<?= $medals[$j] ?? '#6b7280' ?>;">
-                                                #<?= $j + 1 ?>
-                                            </div>
-                                            <div class="avatar-circle avatar-sm" style="background:<?= htmlspecialchars($dColor) ?>22;
-                                           color:<?= htmlspecialchars($dColor) ?>;">
-                                                <?= strtoupper(substr($p['full_name'], 0, 2)) ?>
-                                            </div>
-                                            <div class="flex-grow-1" style="min-width:0;">
-                                                <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
-                                                    <?= htmlspecialchars($p['full_name']) ?>
-                                                </div>
-                                                <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($p['branch_name'] ?? '—') ?>
-                                                </div>
-                                                <div style="background:#f3f4f6;border-radius:50px;height:4px;
-                                                margin-top:.3rem;overflow:hidden;">
-                                                    <div style="width:<?= $pct ?>%;
-                                                    background:<?= htmlspecialchars($dColor) ?>;
-                                                    height:4px;border-radius:50px;"></div>
-                                                </div>
-                                            </div>
-                                            <div style="text-align:right;flex-shrink:0;">
-                                                <div style="font-size:.95rem;font-weight:700;color:#10b981;">
-                                                    <?= (int) $p['done'] ?>
-                                                </div>
-                                                <div style="font-size:.7rem;color:#9ca3af;">
-                                                    done / <?= (int) $p['total'] ?> total
-                                                </div>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
 
         </div>
         <?php include '../../includes/footer.php'; ?>
     </div>
 </div>
 <script>
-    function switchPerfTab(tab) {
-        document.getElementById('perf-staff').style.display = tab === 'staff' ? 'block' : 'none';
-        document.getElementById('perf-admin').style.display = tab === 'admin' ? 'block' : 'none';
-        document.getElementById('tab-staff').className = 'btn btn-sm perf-tab ' + (tab === 'staff' ? 'btn-gold' : 'btn-outline-secondary');
-        document.getElementById('tab-admin').className = 'btn btn-sm perf-tab ' + (tab === 'admin' ? 'btn-gold' : 'btn-outline-secondary');
-    }
     function switchDeptTab(panelId) {
-        // Hide all panels and reset all tab buttons
         document.querySelectorAll('.dept-panel').forEach(p => p.style.display = 'none');
         document.querySelectorAll('.dept-tab').forEach(b => {
             b.className = b.className.replace('btn-gold', 'btn-outline-secondary');
         });
-
-        // Show selected panel and activate its button
         document.getElementById(panelId).style.display = 'block';
-        const tabId = 'dtab-' + panelId.replace('dept-', '');
-        const activeBtn = document.getElementById(tabId);
-        if (activeBtn) {
-            activeBtn.className = activeBtn.className.replace('btn-outline-secondary', 'btn-gold');
-        }
+        const activeBtn = document.getElementById('dtab-' + panelId.replace('dept-', ''));
+        if (activeBtn) activeBtn.className = activeBtn.className.replace('btn-outline-secondary', 'btn-gold');
+    }
+
+    function switchRoleTab(deptId, role) {
+        // Hide both role panels for this dept
+        ['staff', 'admin'].forEach(r => {
+            const panel = document.getElementById('rp-' + deptId + '-' + r);
+            if (panel) panel.style.display = r === role ? 'block' : 'none';
+        });
+        // Update role tab buttons for this dept only
+        document.querySelectorAll('.role-tab-' + deptId).forEach(b => {
+            b.className = b.className.replace('btn-gold', 'btn-outline-secondary');
+        });
+        const active = document.getElementById('rtab-' + deptId + '-' + role);
+        if (active) active.className = active.className.replace('btn-outline-secondary', 'btn-gold');
     }
 </script>

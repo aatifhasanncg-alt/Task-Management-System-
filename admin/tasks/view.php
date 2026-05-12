@@ -148,7 +148,7 @@ if (!$isStaff && $adminDeptCode !== $task['dept_code']) {
           AND d.dept_code = ?
     ");
     $udaEditStmt->execute([$user['id'], $task['dept_code']]);
-    $udaEditCheck = (int)$udaEditStmt->fetchColumn() > 0;
+    $udaEditCheck = (int) $udaEditStmt->fetchColumn() > 0;
 }
 
 // canViewDept: can see the dept detail section (read-only or editable)
@@ -528,7 +528,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
         $lastDate = $lastFu->fetchColumn();
         if ($lastDate !== $newFuDate) {
             $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
-               ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
+                ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
         }
     }
 
@@ -539,7 +539,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
         ($r2['file_type_id'] ?? '') !== '' ? (int) $r2['file_type_id'] : null,
         ($r2['pan_vat_id'] ?? '') !== '' ? (int) $r2['pan_vat_id'] : null,
         ($r2['vat_client_id'] ?? '') !== '' ? (int) $r2['vat_client_id'] : null,
-        $r2['return_type'] ?? null,
+        in_array($r2['return_type'] ?? '', ['N/A', 'D1', 'D2', 'D3', 'D4']) ? $r2['return_type'] : null,
         $retFy ?: null,
         $retFyId,
         (int) ($r2['no_of_audit_year'] ?? 1),
@@ -631,7 +631,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEd
         ($t2['total_amount'] ?? '') !== '' ? (float) $t2['total_amount'] : 0,           // DEFAULT 0
         $t2['completed_date'] ?: null,
         trim($t2['remarks'] ?? '') ?: null,
-       trim($t2['notes'] ?? '') ?: null,
+        trim($t2['notes'] ?? '') ?: null,
     ];
 
     $ex = $db->prepare("SELECT id FROM task_tax WHERE task_id=?");
@@ -747,42 +747,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
 // NOT NULL: task_id (auto), company_id (from task). All other columns nullable.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
     verifyCsrf();
-    $co    = $_POST['corporate'] ?? [];
-    $coFyId = ($co['fiscal_year_id'] ?? '') !== '' ? (int)$co['fiscal_year_id'] : getFiscalYearId($db, $co['fiscal_year_id'] ?? '');
+    $co = $_POST['corporate'] ?? [];
+    $coFyId = ($co['fiscal_year_id'] ?? '') !== '' ? (int) $co['fiscal_year_id'] : getFiscalYearId($db, $co['fiscal_year_id'] ?? '');
     // Save follow-up to task_followups ONLY
-        $newFuDate = trim($co['follow_up_date'] ?? '');
-        $newFuNote = trim($co['follow_up_note'] ?? '');
-        if ($newFuDate) {
-            $lastFu = $db->prepare("SELECT followup_date FROM task_followups WHERE task_id=? ORDER BY created_at DESC LIMIT 1");
-            $lastFu->execute([$id]);
-            $lastDate = $lastFu->fetchColumn();
-            if ($lastDate !== $newFuDate) {
-                $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
+    $newFuDate = trim($co['follow_up_date'] ?? '');
+    $newFuNote = trim($co['follow_up_note'] ?? '');
+    if ($newFuDate) {
+        $lastFu = $db->prepare("SELECT followup_date FROM task_followups WHERE task_id=? ORDER BY created_at DESC LIMIT 1");
+        $lastFu->execute([$id]);
+        $lastDate = $lastFu->fetchColumn();
+        if ($lastDate !== $newFuDate) {
+            $db->prepare("INSERT INTO task_followups(task_id,followup_date,notes,created_by) VALUES(?,?,?,?)")
                 ->execute([$id, $newFuDate, $newFuNote ?: null, $user['id']]);
-            }
         }
+    }
     $p = [
         $task['company_id'],                                                                      // company_id
-        ($co['company_type_id'] ?? '') !== '' ? (int)$co['company_type_id'] : null,               // company_type_id
-        ($co['file_type_id']    ?? '') !== '' ? (int)$co['file_type_id']    : null,               // file_type_id
-        ($co['pan_vat_id']      ?? '') !== '' ? (int)$co['pan_vat_id']      : null,               // pan_vat_id
-        ($co['vat_client_id']   ?? '') !== '' ? (int)$co['vat_client_id']   : null,               // vat_client_id
-        $co['return_type'] ?? null,                                                               // return_type
+        ($co['company_type_id'] ?? '') !== '' ? (int) $co['company_type_id'] : null,               // company_type_id
+        ($co['file_type_id'] ?? '') !== '' ? (int) $co['file_type_id'] : null,               // file_type_id
+        ($co['pan_vat_id'] ?? '') !== '' ? (int) $co['pan_vat_id'] : null,               // pan_vat_id
+        ($co['vat_client_id'] ?? '') !== '' ? (int) $co['vat_client_id'] : null,               // vat_client_id
+        in_array($co['return_type'] ?? '', ['N/A', 'D1', 'D2', 'D3', 'D4']) ? $co['return_type'] : null,                                                               // return_type
         trim($co['firm_name'] ?? '') ?: ($task['company_name'] ?? ''),                            // firm_name
-        trim($co['pan_no']    ?? '') ?: ($companyData['pan_number'] ?? null),                     // pan_no
-        ($co['grade_id'] ?? '') !== '' ? (int)$co['grade_id'] : null,                            // grade_id
-        ($co['assigned_to'] ?? '') !== '' ? (int)$co['assigned_to'] : $taskAssignedToId,          // assigned_to
-        ($co['finalised_by'] ?? '') !== '' ? (int)$co['finalised_by'] : null,                    // finalised_by
+        trim($co['pan_no'] ?? '') ?: ($companyData['pan_number'] ?? null),                     // pan_no
+        ($co['grade_id'] ?? '') !== '' ? (int) $co['grade_id'] : null,                            // grade_id
+        ($co['assigned_to'] ?? '') !== '' ? (int) $co['assigned_to'] : $taskAssignedToId,          // assigned_to
+        ($co['finalised_by'] ?? '') !== '' ? (int) $co['finalised_by'] : null,                    // finalised_by
         $co['completed_date'] ?: null,                                                            // completed_date
         trim($co['remarks'] ?? '') ?: null,                                                       // remarks
         $coFyId,                                                                                  // fiscal_year_id
-        (int)($co['no_of_audit_year'] ?? 1),                                                     // no_of_audit_year
-        ($co['audit_type_id'] ?? '') !== '' ? (int)$co['audit_type_id'] : null,                  // audit_type_id
+        (int) ($co['no_of_audit_year'] ?? 1),                                                     // no_of_audit_year
+        ($co['audit_type_id'] ?? '') !== '' ? (int) $co['audit_type_id'] : null,                  // audit_type_id
         $co['ecd'] ?: null,                                                                       // ecd
-        ($co['opening_due'] ?? '') !== '' ? (float)$co['opening_due'] : 0,                       // opening_due
-        ($co['finalisation_status_id']  ?? '') !== '' ? (int)$co['finalisation_status_id']  : null, // finalisation_status_id
-        ($co['tax_clearance_status_id'] ?? '') !== '' ? (int)$co['tax_clearance_status_id'] : null, // tax_clearance_status_id
-        ($co['backup_status_id'] ?? '') !== '' ? (int)$co['backup_status_id'] : null,             // backup_status_id
+        ($co['opening_due'] ?? '') !== '' ? (float) $co['opening_due'] : 0,                       // opening_due
+        ($co['finalisation_status_id'] ?? '') !== '' ? (int) $co['finalisation_status_id'] : null, // finalisation_status_id
+        ($co['tax_clearance_status_id'] ?? '') !== '' ? (int) $co['tax_clearance_status_id'] : null, // tax_clearance_status_id
+        ($co['backup_status_id'] ?? '') !== '' ? (int) $co['backup_status_id'] : null,             // backup_status_id
         trim($co['notes'] ?? '') ?: null,                                                         // notes
     ];
 
@@ -1146,7 +1146,7 @@ include '../../includes/header.php';
                                         recorded yet.</div>
                                 <?php endif; ?>
 
-                                
+
 
                                 <!-- Edit form — all fields nullable so no required except firm_name hint -->
                                 <?php if ($canEditDept): ?>
@@ -1765,7 +1765,7 @@ include '../../includes/header.php';
                                         details yet.</div>
                                 <?php endif; ?>
 
-                                
+
                                 <?php if ($canEditDept):
                                     $ro = 'readonly style="background:#f0fdf4;color:#374151;font-weight:500;cursor:not-allowed;"';
                                     $roCo = $task['company_id'] ? $ro : '';
@@ -1859,12 +1859,13 @@ include '../../includes/header.php';
                                                 <?php if ($cReturnType && $task['company_id']): ?>
                                                     <input type="text" class="form-control form-control-sm"
                                                         value="<?= htmlspecialchars($cReturnType) ?>" <?= $ro ?>>
+                                                    <?php $validRT = in_array($cReturnType, ['N/A', 'D1', 'D2', 'D3', 'D4']) ? $cReturnType : null; ?>
                                                     <input type="hidden" name="retail[return_type]"
-                                                        value="<?= htmlspecialchars($cReturnType) ?>">
+                                                        value="<?= htmlspecialchars($validRT ?? '') ?>">
                                                 <?php else: ?>
                                                     <select name="retail[return_type]" class="form-select form-select-sm">
                                                         <option value="">-- Select --</option>
-                                                        <?php foreach (['D1', 'D2', 'D3', 'D4'] as $rt): ?>
+                                                        <?php foreach (['N/A', 'D1', 'D2', 'D3', 'D4'] as $rt): ?>
                                                             <option value="<?= $rt ?>" <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?>
                                                             </option><?php endforeach; ?>
                                                     </select>
@@ -2001,8 +2002,7 @@ include '../../includes/header.php';
                                             class="fas fa-eye me-1"></i>View Only</span><?php endif; ?>
                             </div>
                             <div class="vw-section-body">
-                                <?php if ($detail): ?>
-                                <?php elseif ($task['dept_code'] === 'CORP'): ?>
+                                <?php if ($detail && $task['dept_code'] === 'CORP'): ?>
                                     <div class="row g-3 mb-4">
                                         <?php foreach ([
                                             'Firm Name' => htmlspecialchars($detail['firm_name'] ?? $task['company_name'] ?? '—'),
@@ -2044,7 +2044,7 @@ include '../../includes/header.php';
                                             </div>
                                         <?php endif; ?>
                                     </div>
-                                    
+
                                     <?php if ($canEditDept): ?>
                                         <hr style="border-color:#f3f4f6;"><?php endif; ?>
 
@@ -2053,7 +2053,7 @@ include '../../includes/header.php';
                                             class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No corporate
                                         details yet.</div>
                                 <?php endif; ?>
-                                
+
                                 <?php if ($canEditDept):
                                     $cf_firm = $detail['firm_name'] ?? $task['company_name'] ?? '';
                                     $cf_pan = $detail['pan_no'] ?? ($companyData['pan_number'] ?? '');
@@ -2198,12 +2198,13 @@ include '../../includes/header.php';
                                                 <?php if ($cReturnType && $isLinked): ?>
                                                     <input type="text" class="form-control form-control-sm"
                                                         value="<?= htmlspecialchars($cReturnType) ?>" <?= $firmRo ?>>
+                                                    <?php $validCoRT = in_array($cReturnType, ['N/A', 'D1', 'D2', 'D3', 'D4']) ? $cReturnType : null; ?>
                                                     <input type="hidden" name="corporate[return_type]"
-                                                        value="<?= htmlspecialchars($cReturnType) ?>">
+                                                        value="<?= htmlspecialchars($validCoRT ?? '') ?>">
                                                 <?php else: ?>
                                                     <select name="corporate[return_type]" class="form-select form-select-sm">
                                                         <option value="">--</option>
-                                                        <?php foreach (['D1', 'D2', 'D3', 'D4'] as $rt): ?>
+                                                        <?php foreach (['N/A', 'D1', 'D2', 'D3', 'D4'] as $rt): ?>
                                                             <option value="<?= $rt ?>" <?= ($detail['return_type'] ?? '') === $rt ? 'selected' : '' ?>><?= $rt ?></option>
                                                         <?php endforeach; ?>
                                                     </select>
@@ -2361,7 +2362,7 @@ include '../../includes/header.php';
                                 <?php endif; ?>
                             </div>
                         </div>
-                        
+
                     <?php elseif ($detailTable && !$detail && $canEditDept): ?>
                         <div class="vw-section" style="border-left:3px solid #f59e0b;">
                             <div class="vw-section-body text-center py-4">
@@ -2533,8 +2534,7 @@ include '../../includes/header.php';
                                                     <?= htmlspecialchars($fu['added_by_name']) ?></span>
                                             </div>
                                             <?php if ($fu['notes']): ?>
-                                                <div
-                                                    style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
+                                                <div style="font-size:.78rem;color:#6b7280;margin-top:.2rem;font-style:italic;">
                                                     "<?= htmlspecialchars($fu['notes']) ?>"</div><?php endif; ?>
                                         </div>
                                     </div>
