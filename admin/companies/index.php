@@ -9,32 +9,48 @@ $user = currentUser();
 $deptId = (int) $user['department_id'];
 $pageTitle = 'Companies';
 
-$search = trim($_GET['search'] ?? '');
-$filterB = (int) ($_GET['branch_id'] ?? 0);
-$filterT = (int) ($_GET['type_id'] ?? 0);
-$filterInd = (int) ($_GET['industry_id'] ?? 0);
-$page = max(1, (int) ($_GET['page'] ?? 1));
-$perPage = 20;
-$offset = ($page - 1) * $perPage;
+$search    = trim($_GET['search']    ?? '');
+$filterB   = (int)($_GET['branch_id'] ?? 0);
+$filterT   = (int)($_GET['type_id']   ?? 0);
+$filterInd = (int)($_GET['industry_id'] ?? 0);
+$page      = max(1, (int)($_GET['page'] ?? 1));
+$perPage   = 20;
+$offset    = ($page - 1) * $perPage;
 
-$where = ['c.is_active = 1'];
+// ── Detect core admin and get branch BEFORE building WHERE ────────────────
+$coreCheckQ = $db->prepare("
+    SELECT d.dept_code, u.branch_id
+    FROM users u LEFT JOIN departments d ON d.id = u.department_id
+    WHERE u.id = ?
+");
+$coreCheckQ->execute([$user['id']]);
+$coreCheckRow    = $coreCheckQ->fetch();
+$isCoreAdminUser = (($coreCheckRow['dept_code'] ?? '') === 'CORE');
+$userBranchId    = (int)($coreCheckRow['branch_id'] ?? 0);
+
+$where  = ['c.is_active = 1'];
 $params = [];
 
+// Lock non-core admins to their own branch
+if (!$isCoreAdminUser && $userBranchId) {
+    $where[]  = 'c.branch_id = ?';
+    $params[] = $userBranchId;
+} elseif ($filterB) {
+    // Core admins can optionally filter by branch
+    $where[]  = 'c.branch_id = ?';
+    $params[] = $filterB;
+}
 
 if ($search) {
     $where[] = '(c.company_name LIKE ? OR c.pan_number LIKE ? OR c.contact_person LIKE ? OR c.company_code LIKE ?)';
-    $params = array_merge($params, ["%$search%", "%$search%", "%$search%", "%$search%"]);
-}
-if ($filterB) {
-    $where[] = 'c.branch_id = ?';
-    $params[] = $filterB;
+    $params  = array_merge($params, ["%$search%", "%$search%", "%$search%", "%$search%"]);
 }
 if ($filterT) {
-    $where[] = 'c.company_type_id = ?';
+    $where[]  = 'c.company_type_id = ?';
     $params[] = $filterT;
 }
 if ($filterInd) {
-    $where[] = 'c.industry_id = ?';
+    $where[]  = 'c.industry_id = ?';
     $params[] = $filterInd;
 }
 
@@ -44,33 +60,29 @@ $countSt = $db->prepare("SELECT COUNT(*) FROM companies c WHERE {$ws}");
 $countSt->execute($params);
 $total = (int) $countSt->fetchColumn();
 $pages = (int) ceil($total / $perPage);
-// CORE admins see all tasks in their branch; others scoped to their depts
-$isCoreAdminUser = false;
-$coreCheckQ = $db->prepare("SELECT d.dept_code, u.branch_id FROM users u LEFT JOIN departments d ON d.id=u.department_id WHERE u.id=?");
-$coreCheckQ->execute([$user['id']]);
-$coreCheckRow = $coreCheckQ->fetch();
-$isCoreAdminUser = (($coreCheckRow['dept_code'] ?? '') === 'CORE');
-$userBranchId = (int)($coreCheckRow['branch_id'] ?? 0);
+
 $list = $db->prepare("
     SELECT c.*,
            ct.type_name    AS company_type_name,
            b.branch_name,
            i.industry_name,
            (SELECT COUNT(*) FROM tasks t
-            WHERE t.company_id = c.id AND t.is_active = 1
-            AND " . ($isCoreAdminUser
-                ? "t.branch_id = {$userBranchId}"
-                : "(t.department_id = ? OR t.department_id IN (SELECT department_id FROM user_department_assignments WHERE user_id = ?))"
-            ) . "
-            ) AS task_count,
+            WHERE t.company_id = c.id
+              AND t.is_active = 1
+              AND t.department_id NOT IN (
+                  SELECT id FROM departments WHERE dept_code IN ('CON','CORE')
+              )
+              " . ($isCoreAdminUser ? "" : "AND t.branch_id = {$userBranchId}") .  "
+           ) AS task_count,
            (SELECT COUNT(*) FROM tasks t
             JOIN task_status ts ON ts.id = t.status_id
-            WHERE t.company_id = c.id AND ts.status_name = 'Done'
-            AND " . ($isCoreAdminUser
-                ? "t.branch_id = {$userBranchId}"
-                : "(t.department_id = ? OR t.department_id IN (SELECT department_id FROM user_department_assignments WHERE user_id = ?))"
-            ) . "
-            ) AS done_count
+            WHERE t.company_id = c.id
+              AND ts.status_name = 'Done'
+              AND t.department_id NOT IN (
+                  SELECT id FROM departments WHERE dept_code IN ('CON','CORE')
+              )
+              AND t.branch_id = {$userBranchId}
+           ) AS done_count
     FROM companies c
     LEFT JOIN company_types ct ON ct.id = c.company_type_id
     LEFT JOIN branches b       ON b.id  = c.branch_id
@@ -79,10 +91,7 @@ $list = $db->prepare("
     ORDER BY c.company_name ASC
     LIMIT {$perPage} OFFSET {$offset}
 ");
-$list->execute(array_merge(
-    $isCoreAdminUser ? [] : [$deptId, $user['id'], $deptId, $user['id']],
-    $params
-));
+$list->execute($params);
 $companies = $list->fetchAll();
 
 $allTypes = $db->query("SELECT id, type_name FROM company_types ORDER BY type_name")->fetchAll();

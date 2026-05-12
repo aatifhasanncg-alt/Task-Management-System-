@@ -40,53 +40,59 @@ if ($filterDept) {
 }
 
 $staffStmt = $db->prepare("
-        SELECT u.id, u.full_name, u.employee_id,
+    SELECT u.id, u.full_name, u.employee_id,
            u.department_id,
            b.branch_name, d.dept_name, d.color AS dept_color,
-           COUNT(DISTINCT t.id)                                       AS total,
-           SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END) AS done,
+           COUNT(DISTINCT t.id)                                        AS total,
+           SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END)  AS done,
            SUM(CASE WHEN t.due_date < CURDATE()
-               AND ts.status_name != 'Done'      THEN 1 ELSE 0 END) AS overdue,
+               AND ts.status_name != 'Done'      THEN 1 ELSE 0 END)  AS overdue,
            {$sumCols}
            MAX(t.created_at) AS last_task_date
     FROM users u
-    LEFT JOIN roles r        ON r.id  = u.role_id
-    LEFT JOIN branches b     ON b.id  = u.branch_id
-    LEFT JOIN departments d  ON d.id  = u.department_id
+    LEFT JOIN roles r       ON r.id  = u.role_id
+    LEFT JOIN branches b    ON b.id  = u.branch_id
+    LEFT JOIN departments d ON d.id  = u.department_id
     LEFT JOIN tasks t
         ON  t.assigned_to = u.id
         AND t.is_active   = 1
         AND t.created_at BETWEEN ? AND ?
-        AND (
-            t.department_id = u.department_id
-            OR EXISTS (
-                SELECT 1 FROM user_department_assignments uda_ex
-                WHERE uda_ex.user_id = u.id
-                  AND uda_ex.department_id = t.department_id
-                  AND uda_ex.department_id NOT IN (
-                      SELECT id FROM departments WHERE dept_code = 'CON'
-                  )
-            )
-        )
+        " . ($filterDept ? "AND t.department_id = ?" : "") . "
     LEFT JOIN task_status ts ON ts.id = t.status_id
-    WHERE r.role_name IN ('staff','admin')
+    WHERE r.role_name IN ('staff', 'admin')
       AND u.is_active = 1
-      AND (dept_code IS NULL OR dept_code NOT IN ('CON','CORE'))
-      " . ($filterDept ? "AND (u.department_id = ? OR EXISTS (
-          SELECT 1 FROM user_department_assignments uda_f
-          WHERE uda_f.user_id = u.id AND uda_f.department_id = ?
-          AND uda_f.department_id NOT IN (SELECT id FROM departments WHERE dept_code='CON')
-      ))" : "") . "
+      AND (d.dept_code IS NULL OR d.dept_code NOT IN ('CON', 'CORE'))
+      " . ($filterDept ? "AND (
+          u.department_id = ?
+          OR EXISTS (
+              SELECT 1 FROM user_department_assignments uda_f
+              WHERE uda_f.user_id      = u.id
+                AND uda_f.department_id = ?
+                AND uda_f.department_id NOT IN (
+                    SELECT id FROM departments WHERE dept_code = 'CON'
+                )
+          )
+      )" : "") . "
       " . ($filterBranch ? "AND u.branch_id = ?" : "") . "
     GROUP BY u.id, u.full_name, u.employee_id,
              b.branch_name, d.dept_name, d.color
     ORDER BY done DESC, total DESC
 ");
 
-// Build params: date range first (for JOIN), then filters
+// Params:
+// 1. date range for JOIN
+// 2. dept_id for t.department_id filter in JOIN (only if filterDept)
+// 3. dept_id x2 for user WHERE filter (only if filterDept)
+// 4. branch_id (only if filterBranch)
 $execParams = [$fromDate . ' 00:00:00', $toDate . ' 23:59:59'];
-if ($filterDept)   { $execParams[] = $filterDept; $execParams[] = $filterDept; }
-if ($filterBranch) { $execParams[] = $filterBranch; }
+if ($filterDept) {
+    $execParams[] = $filterDept;  // t.department_id = ? in JOIN
+    $execParams[] = $filterDept;  // u.department_id = ? in WHERE
+    $execParams[] = $filterDept;  // uda_f.department_id = ? in WHERE EXISTS
+}
+if ($filterBranch) {
+    $execParams[] = $filterBranch;
+}
 
 $staffStmt->execute($execParams);
 $staffReport = $staffStmt->fetchAll(PDO::FETCH_ASSOC);

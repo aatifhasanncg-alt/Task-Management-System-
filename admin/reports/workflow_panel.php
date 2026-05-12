@@ -1,22 +1,24 @@
 <?php
-/**
- * workflow_panel.php
- * Loaded via fetch() from company_wise.php to render
- * the task list + workflow chain for a single company.
- * Returns plain HTML fragment — no layout wrappers.
- */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 
 $db = getDB();
-$companyId = (int) ($_GET['company_id'] ?? 0);
+$companyId = (int)($_GET['company_id'] ?? 0);
 if (!$companyId) {
     echo '<p style="color:#ef4444;text-align:center;padding:1rem;">Invalid company.</p>';
     exit;
 }
 
-// Tasks
+// Determine role folder for task view links
+$__viewer     = currentUser();
+$__viewerRole = $__viewer['role_name'] ?? 'staff';
+$roleFolder   = match($__viewerRole) {
+    'executive'          => 'executive',
+    'admin', 'superadmin'=> 'admin',
+    default              => 'staff'
+};
+
 $taskSt = $db->prepare("
     SELECT t.*,
            ts.status_name AS status,
@@ -38,30 +40,29 @@ if (empty($tasks)) {
 }
 
 $actionColors = [
-    'created' => '#3b82f6',
-    'assigned' => '#f59e0b',
-    'status_changed' => '#8b5cf6',
-    'transferred_staff' => '#06b6d4',
-    'transferred_dept' => '#ec4899',
-    'completed' => '#10b981',
-    'remarked' => '#9ca3af',
+    'created'            => '#3b82f6',
+    'assigned'           => '#f59e0b',
+    'status_changed'     => '#8b5cf6',
+    'transferred_staff'  => '#06b6d4',
+    'transferred_dept'   => '#ec4899',
+    'completed'          => '#10b981',
+    'remarked'           => '#9ca3af',
 ];
 $actionLabels = [
-    'created' => 'Created',
-    'assigned' => 'Assigned',
-    'status_changed' => 'Status Updated',
-    'transferred_staff' => 'Transferred',
-    'transferred_dept' => 'Dept Transfer',
-    'completed' => 'Completed',
-    'remarked' => 'Remarked',
+    'created'            => 'Created',
+    'assigned'           => 'Assigned',
+    'status_changed'     => 'Status Updated',
+    'transferred_staff'  => 'Transferred',
+    'transferred_dept'   => 'Dept Transfer',
+    'completed'          => 'Completed',
+    'remarked'           => 'Remarked',
 ];
 ?>
 <div style="padding:.25rem 0;">
     <?php foreach ($tasks as $t):
-        $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
+        $sClass  = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
         $overdue = $t['due_date'] && strtotime($t['due_date']) < time() && $t['status'] !== 'Done';
 
-        // Workflow for this task
         $wfSt = $db->prepare("
             SELECT tw.*,
                    u1.full_name AS from_name,
@@ -85,13 +86,14 @@ $actionLabels = [
         ?>
         <div style="border-bottom:1px solid #f3f4f6;padding:.85rem .5rem;<?= $overdue ? 'background:#fef8f8;' : '' ?>">
 
-            <!-- Task header row -->
+            <!-- Task header -->
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
                 <div class="d-flex align-items-center gap-2 flex-wrap">
                     <span class="task-number"><?= htmlspecialchars($t['task_number']) ?></span>
                     <strong style="font-size:.88rem;color:#1f2937;"><?= htmlspecialchars($t['title']) ?></strong>
                     <?php if ($t['dept_name']): ?>
-                        <span style="font-size:.72rem;background:<?= htmlspecialchars($t['color'] ?? '#ccc') ?>22;
+                        <span style="font-size:.72rem;
+                                     background:<?= htmlspecialchars($t['color'] ?? '#ccc') ?>22;
                                      color:<?= htmlspecialchars($t['color'] ?? '#666') ?>;
                                      padding:.2rem .5rem;border-radius:99px;">
                             <?= htmlspecialchars($t['dept_name']) ?>
@@ -108,9 +110,12 @@ $actionLabels = [
                     <?php endif; ?>
                 </div>
                 <div class="d-flex gap-2 align-items-center">
-                    <span style="font-size:.7rem;color:#9ca3af;"><?= date('d M Y', strtotime($t['created_at'])) ?></span>
-                    <a href="<?= APP_URL ?>/admin/tasks/view.php?id=<?= $t['id'] ?>"
-                        class="btn btn-sm btn-outline-secondary" style="padding:.2rem .5rem;">
+                    <span style="font-size:.7rem;color:#9ca3af;">
+                        <?= date('d M Y', strtotime($t['created_at'])) ?>
+                    </span>
+                    <!-- Role-aware task view link -->
+                    <a href="<?= APP_URL ?>/<?= $roleFolder ?>/tasks/view.php?id=<?= $t['id'] ?>"
+                       class="btn btn-sm btn-outline-secondary" style="padding:.2rem .5rem;">
                         <i class="fas fa-eye" style="font-size:.7rem;"></i>
                     </a>
                 </div>
@@ -126,13 +131,18 @@ $actionLabels = [
                         ?>
                         <div style="background:<?= $isLast ? $aColor . '14' : '#f9fafb' ?>;
                                     border:1px solid <?= $isLast ? $aColor : '#e5e7eb' ?>;
-                                    border-radius:8px;padding:.4rem .65rem;text-align:center;min-width:88px;">
-                            <div style="font-size:.68rem;font-weight:700;color:<?= $aColor ?>;"><?= $aLabel ?></div>
+                                    border-radius:8px;padding:.4rem .65rem;
+                                    text-align:center;min-width:88px;">
+                            <div style="font-size:.68rem;font-weight:700;color:<?= $aColor ?>;">
+                                <?= $aLabel ?>
+                            </div>
                             <div style="font-size:.72rem;font-weight:500;color:#1f2937;margin:.1rem 0;">
                                 <?= htmlspecialchars($w['from_name'] ?? 'System') ?>
                             </div>
                             <?php if ($w['from_dept']): ?>
-                                <div style="font-size:.62rem;color:#9ca3af;"><?= htmlspecialchars($w['from_dept']) ?></div>
+                                <div style="font-size:.62rem;color:#9ca3af;">
+                                    <?= htmlspecialchars($w['from_dept']) ?>
+                                </div>
                             <?php endif; ?>
                             <?php if ($w['old_status'] && $w['new_status'] && $w['old_status'] !== $w['new_status']): ?>
                                 <div style="font-size:.6rem;color:#6b7280;margin-top:.1rem;">
@@ -143,9 +153,10 @@ $actionLabels = [
                                 <?= date('d M, H:i', strtotime($w['created_at'])) ?>
                             </div>
                             <?php if (!empty($w['remarks'])): ?>
-                                <div style="font-size:.6rem;color:#6b7280;font-style:italic;margin-top:.15rem;
-                                            max-width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
-                                    title="<?= htmlspecialchars($w['remarks']) ?>">
+                                <div style="font-size:.6rem;color:#6b7280;font-style:italic;
+                                            margin-top:.15rem;max-width:90px;
+                                            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                                     title="<?= htmlspecialchars($w['remarks']) ?>">
                                     "<?= htmlspecialchars($w['remarks']) ?>"
                                 </div>
                             <?php endif; ?>
