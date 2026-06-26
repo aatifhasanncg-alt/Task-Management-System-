@@ -47,7 +47,7 @@ if ($__isConsultingPrimary) {
 
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 

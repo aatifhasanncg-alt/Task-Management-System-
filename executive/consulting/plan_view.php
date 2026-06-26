@@ -14,7 +14,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireExecutive();
 
 $db = getDB();
 $user = currentUser();

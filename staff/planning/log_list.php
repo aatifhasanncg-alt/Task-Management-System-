@@ -51,7 +51,7 @@ if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
     $month = $now->format('Y-m');
 }
 
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $prevMonth = (clone $monthDate)->modify('-1 month')->format('Y-m');
 $nextMonth = (clone $monthDate)->modify('+1 month')->format('Y-m');
 $monthLabel = $monthDate->format('F Y');

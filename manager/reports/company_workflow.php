@@ -1,9 +1,9 @@
 <?php
-// admin/reports/company_wise.php
+// manager/reports/company_wise.php
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
-requireExecutiveOrBM(); // ← CHANGED from requireExecutive()
+requireManager(); // ← CHANGED from requireExecutive()
 
 $db = getDB();
 $user = currentUser();
@@ -110,7 +110,7 @@ include '../../includes/header.php';
     }
 </style>
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include '../../includes/sidebar_manager.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
@@ -257,7 +257,7 @@ include '../../includes/header.php';
                                             class="btn btn-sm btn-outline-success d-flex align-items-center gap-1"
                                             onclick="event.stopPropagation();" title="Export to Excel"><i
                                                 class="fas fa-file-excel"></i><span class="d-none d-md-inline">Excel</span></a>
-                                        <a href="<?= APP_URL ?>/admin/companies/view.php?id=<?= $co['id'] ?>"
+                                        <a href="<?= APP_URL ?>/manager/companies/view.php?id=<?= $co['id'] ?>"
                                             class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation();"
                                             title="View company"><i class="fas fa-external-link-alt"></i></a>
                                     </div>
@@ -318,7 +318,7 @@ include '../../includes/header.php';
             panel.style.display = 'block'; chev.style.transform = 'rotate(180deg)';
             if (!loadedPanels.has(id)) {
                 loadedPanels.add(id);
-                fetch('<?= APP_URL ?>/admin/reports/workflow_panel.php?company_id=' + id)
+                fetch('<?= APP_URL ?>/manager/reports/workflow_panel.php?company_id=' + id)
                     .then(r => r.text()).then(html => { inner.innerHTML = html; })
                     .catch(() => { inner.innerHTML = '<p class="text-center py-3" style="color:#ef4444;">Failed to load. Please try again.</p>'; });
             }

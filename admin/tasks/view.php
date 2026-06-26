@@ -3,6 +3,8 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helper.php';
+require_once '../../config/notify.php';
+
 
 if (!function_exists('getFiscalYearId')) {
     require_once __DIR__ . '/../../config/fiscal_year_helper.php';
@@ -55,7 +57,7 @@ if (!function_exists('fiscalYearSelect')) {
 $isAdmin = false;
 $isStaff = false;
 $currentRole = $_SESSION['role'] ?? $_SESSION['user']['role'] ?? '';
-if (in_array($currentRole, ['admin', 'executive', 'superadmin'])) {
+if (in_array($currentRole, ['admin', 'executive'])) {
     $isAdmin = true;
 } else {
     $isStaff = true;
@@ -137,7 +139,6 @@ if ($isStaff && $task['assigned_to'] != $user['id']) {
     exit;
 }
 
-$isCoreAdminDept = ($adminDeptCode === 'CORE');
 // Check if user has UDA assignment for the task's department
 $udaEditCheck = false;
 if (!$isStaff && $adminDeptCode !== $task['dept_code']) {
@@ -152,8 +153,7 @@ if (!$isStaff && $adminDeptCode !== $task['dept_code']) {
 }
 
 // canViewDept: can see the dept detail section (read-only or editable)
-$canViewDept = $isCoreAdminDept
-    || ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code'])
+$canViewDept = ($adminDeptCode !== '' && $adminDeptCode === $task['dept_code'])
     || ($isStaff && $task['assigned_to'] == $user['id'])
     || $udaEditCheck;  // ← UDA users can view too
 
@@ -170,6 +170,7 @@ $detailTableMap = [
     'BANK' => 'task_banking',
     'CORP' => 'task_corporate',
     'FIN' => 'task_finance',
+    'IT' => 'task_it',
 ];
 $detailTable = $detailTableMap[$task['dept_code']] ?? null;
 $detail = null;
@@ -312,6 +313,19 @@ if ($detailTable) {
                 $dSt->execute([$id]);
                 $detail = $dSt->fetch();
                 break;
+            case 'IT':
+                $dSt = $db->prepare("
+                    SELECT ti.*,
+                        raiser.full_name   AS raiser_name,
+                        assignee.full_name AS assignee_name
+                    FROM task_it ti
+                    LEFT JOIN users raiser   ON raiser.id   = ti.token_raiser_id
+                    LEFT JOIN users assignee ON assignee.id = ti.assigned_it_staff
+                    WHERE ti.task_id = ?
+                ");
+                $dSt->execute([$id]);
+                $detail = $dSt->fetch(PDO::FETCH_ASSOC);
+                break;
         }
     } catch (Exception $e) {
         $detail = null;
@@ -325,7 +339,7 @@ $allStaff = $db->query("
     SELECT u.id,u.full_name FROM users u
     LEFT JOIN departments d ON d.id=u.department_id
     JOIN roles r ON r.id=u.role_id
-    WHERE r.role_name IN ('staff','admin') AND u.is_active=1
+    WHERE r.role_name IN ('staff','admin','manager') AND u.is_active=1
       AND (d.dept_code IS NULL OR d.dept_code!='CORE')
     ORDER BY r.role_name,u.full_name")->fetchAll();
 $allFinal = $db->query("
@@ -334,7 +348,7 @@ $allFinal = $db->query("
     JOIN roles r ON r.id=u.role_id
     WHERE u.is_active=1
       AND (d.dept_code IS NULL OR d.dept_code!='CORE')
-      AND r.role_name IN ('admin','executive')
+      AND r.role_name IN ('admin','executive', 'manager','staff')
     ORDER BY u.full_name ASC")->fetchAll();
 $allDepts = $db->query("SELECT id,dept_name,dept_code FROM departments WHERE is_active=1 ORDER BY dept_name")->fetchAll();
 $allBranches = $db->query("SELECT id,branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
@@ -362,6 +376,21 @@ $taskAssignedToName = $task['assigned_to_name'] ?? '—';
 $taxOfficeTypes = $taxTypes = $financeServiceTypes = $allBanks = $allCats = $allAuditors = [];
 $companyTypes = $fileTypes = $panVatTypes = $yesNoOpts = $auditTypes2 = $corpGrades = [];
 $taxStaff = [];
+$itStaffOptions = [];
+if ($canEditDept) {
+    try {
+        $itDeptIdLookup = (int) $db->query("SELECT id FROM departments WHERE dept_code='IT' LIMIT 1")->fetchColumn();
+        $itStaffOptions = $db->prepare("
+            SELECT DISTINCT u.id, u.full_name FROM users u
+            LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+            WHERE u.is_active = 1 AND (u.department_id = ? OR uda.department_id = ?)
+            ORDER BY u.full_name
+        ");
+        $itStaffOptions->execute([$itDeptIdLookup, $itDeptIdLookup]);
+        $itStaffOptions = $itStaffOptions->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+    }
+}
 if ($canEditDept) {
     try {
         $taxOfficeTypes = $db->query("SELECT id,office_name,address FROM tax_office_types ORDER BY office_name")->fetchAll();
@@ -488,7 +517,158 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
         exit;
     }
 }
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it']) && $canEditDept) {
+    verifyCsrf();
+    $it = $_POST['it'] ?? [];
 
+    $assignedItStaff = ($it['assigned_it_staff'] ?? '') !== '' ? (int) $it['assigned_it_staff'] : null;
+    $resolution = trim($it['resolution'] ?? '');
+    $isResolved = isset($it['is_resolved']) ? 1 : 0;
+    $issueCategory = trim($it['issue_category'] ?? '');
+    $severity = trim($it['severity'] ?? 'Medium');
+    $detailedDesc = trim($it['detailed_description'] ?? '');
+    $reportedDate = $it['reported_date'] ?: null;
+    $tokenRaiserId = ($it['token_raiser_id'] ?? '') !== '' ? (int) $it['token_raiser_id'] : null;
+
+    $prevAssignee = $detail['assigned_it_staff'] ?? null;
+
+    $itExStmt = $db->prepare("SELECT id, token_number, token_raiser_id FROM task_it WHERE task_id = ?");
+    $itExStmt->execute([$id]);
+    $itExisting = $itExStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($itExisting) {
+        $db->prepare("
+            UPDATE task_it SET
+                issue_category      = ?,
+                severity            = ?,
+                detailed_description= ?,
+                reported_date       = ?,
+                token_raiser_id     = ?,
+                assigned_it_staff   = ?,
+                assigned_at = CASE WHEN assigned_it_staff IS NULL AND ? IS NOT NULL THEN NOW() ELSE assigned_at END,
+                resolution          = ?,
+                resolution_date = CASE WHEN ? = 1 AND is_resolved = 0 THEN NOW() ELSE resolution_date END,
+                is_resolved         = ?
+            WHERE task_id = ?
+        ")->execute([
+                    $issueCategory ?: null,
+                    $severity,
+                    $detailedDesc ?: null,
+                    $reportedDate,
+                    $tokenRaiserId,
+                    $assignedItStaff,
+                    $assignedItStaff,
+                    $resolution ?: null,
+                    $isResolved,
+                    $isResolved,
+                    $id
+                ]);
+    } else {
+        $db->beginTransaction();
+        try {
+            $lastToken = $db->query("
+            SELECT token_number FROM task_it
+            WHERE token_number LIKE 'IT-%'
+            ORDER BY CAST(SUBSTRING(token_number, 4) AS UNSIGNED) DESC
+            LIMIT 1
+            FOR UPDATE
+        ")->fetchColumn();
+            $nextSeq = $lastToken ? ((int) substr($lastToken, 3)) + 1 : 1;
+            $tokenNumber = 'IT-' . str_pad((string) $nextSeq, 6, '0', STR_PAD_LEFT);
+
+            $raiserId = $tokenRaiserId ?: (int) ($task['created_by'] ?? $user['id']);
+            $deptIdForIt = (int) ($task['department_id'] ?? 0);
+            $branchIdForIt = (int) ($task['branch_id'] ?? 0);
+
+            $db->prepare("
+            INSERT INTO task_it
+                (task_id, token_number, token_raiser_id, department_id, branch_id,
+                 issue_category, detailed_description, assigned_it_staff,
+                 resolution, severity, is_resolved, reported_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ")->execute([
+                        $id,
+                        $tokenNumber,
+                        $raiserId,
+                        $deptIdForIt,
+                        $branchIdForIt,
+                        $issueCategory ?: 'Other',
+                        $detailedDesc ?: (trim($task['description'] ?? '') ?: null),
+                        $assignedItStaff,
+                        $resolution ?: null,
+                        $severity,
+                        $isResolved,
+                        $reportedDate
+                    ]);
+
+            if ($assignedItStaff) {
+                $db->prepare("UPDATE task_it SET assigned_at = NOW() WHERE task_id = ? AND assigned_at IS NULL")->execute([$id]);
+            }
+            if ($isResolved) {
+                $db->prepare("UPDATE task_it SET resolution_date = NOW() WHERE task_id = ? AND resolution_date IS NULL")->execute([$id]);
+            }
+            $db->commit();
+        } catch (Exception $e) {
+            $db->rollBack();
+            setFlash('error', 'Could not create IT ticket: ' . $e->getMessage());
+            header("Location: view.php?id={$id}");
+            exit;
+        }
+    }
+
+    // ── fetch fresh state so notify/messages always reflect what was just saved ──
+    $freshIt = $db->prepare("SELECT token_number, token_raiser_id FROM task_it WHERE task_id = ?");
+    $freshIt->execute([$id]);
+    $freshItRow = $freshIt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    if ($assignedItStaff) {
+        $db->prepare("UPDATE tasks SET assigned_to = ? WHERE id = ?")->execute([$assignedItStaff, $id]);
+    }
+    if ($isResolved) {
+        $doneId = (int) $db->query("SELECT id FROM task_status WHERE status_name='Done' LIMIT 1")->fetchColumn();
+        if ($doneId)
+            $db->prepare("UPDATE tasks SET status_id = ?, updated_at = NOW() WHERE id = ?")->execute([$doneId, $id]);
+    }
+
+    if ($assignedItStaff && $assignedItStaff != $prevAssignee) {
+        $raiserId = $freshItRow['token_raiser_id'] ?? $task['created_by'] ?? null;
+        $tokenForMsg = $freshItRow['token_number'] ?? '';
+        $staffNameStmt = $db->prepare("SELECT full_name FROM users WHERE id=?");
+        $staffNameStmt->execute([$assignedItStaff]);
+        $staffName = $staffNameStmt->fetchColumn() ?: 'a staff member';
+
+        if ($raiserId) {
+            notify(
+                (int) $raiserId,
+                'IT Ticket Assigned',
+                "Your IT ticket {$task['task_number']} ({$tokenForMsg}) has been assigned to {$staffName}.",
+                'task',
+                APP_URL . '/includes/issue_view.php?id=' . $id,
+                true,
+                ['template' => 'task_status_changed']
+            );
+        }
+        if ($assignedItStaff != $raiserId) {
+            $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = ?");
+            $assigneeRoleStmt->execute([$assignedItStaff]);
+            $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+            notify(
+                (int) $assignedItStaff,
+                'IT Ticket Assigned to You',
+                "You have been assigned IT ticket {$task['task_number']} ({$tokenForMsg}).",
+                'task',
+                APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                true,
+                ['template' => 'task_status_changed']
+            );
+        }
+    }
+
+    logActivity("IT issue updated: {$task['task_number']}", 'it_support');
+    setFlash('success', 'IT issue details saved.');
+    header("Location: view.php?id={$id}");
+    exit;
+}
 // transfer_department
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_department'])) {
     verifyCsrf();
@@ -1076,7 +1256,7 @@ include '../../includes/header.php';
                          TAX DEPT — task_tax
                          Nullable: all except task_id, company_id
                     ════════════════════════════════════════════ -->
-                    <?php if ($task['dept_code'] === 'TAX' && ($isCoreAdminDept || $canViewDept)): ?>
+                    <?php if ($task['dept_code'] === 'TAX' &&  $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-receipt text-warning me-2"></i>Tax Details</h5>
@@ -1365,7 +1545,7 @@ include '../../includes/header.php';
                          BANKING DEPT — task_banking
                          NOT NULL: task_id only. All others nullable.
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'BANK' && ($isCoreAdminDept || $canViewDept)): ?>
+                    <?php elseif ($task['dept_code'] === 'BANK' &&  $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-landmark text-warning me-2"></i>Banking Details</h5>
@@ -1547,7 +1727,7 @@ include '../../includes/header.php';
                          NOT NULL: task_id, company_id
                          due_amount: GENERATED — never in INSERT/UPDATE
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'FIN' && ($isCoreAdminDept || $canViewDept)): ?>
+                    <?php elseif ($task['dept_code'] === 'FIN' &&  $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-coins text-warning me-2"></i>Finance Details</h5>
@@ -1718,7 +1898,192 @@ include '../../includes/header.php';
                                    company_type_id, file_type_id,
                                    pan_vat_id, vat_client_id
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'RETAIL' && ($isCoreAdminDept || $canViewDept)): ?>
+                    <?php elseif ($task['dept_code'] === 'IT' &&  $canViewDept): ?>
+                        <div class="vw-section">
+                            <div class="vw-section-header">
+                                <h5><i class="fas fa-headset text-warning me-2"></i>IT Support Details</h5>
+                                <?php if (!$canEditDept): ?>
+                                    <span
+                                        style="font-size:.73rem;color:#92400e;background:#fef3c7;padding:.2rem .6rem;border-radius:99px;">
+                                        <i class="fas fa-eye me-1"></i>View Only
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="vw-section-body">
+
+                                <?php if ($detail): ?>
+                                    <div class="row g-3 mb-4">
+                                        <?php foreach ([
+                                            'IT Record ID' => htmlspecialchars((string) ($detail['id'] ?? '—')),
+                                            'Token Number' => htmlspecialchars($detail['token_number'] ?? '—'),
+                                            'Category' => htmlspecialchars($detail['issue_category'] ?? '—'),
+                                            'Severity' => htmlspecialchars($detail['severity'] ?? '—'),
+                                            'Raised By' => htmlspecialchars($detail['raiser_name'] ?? '—'),
+                                            'Department' => htmlspecialchars($task['dept_name'] ?? '—'),
+                                            'Branch' => htmlspecialchars($task['branch_name'] ?? '—'),
+                                            'Assigned To' => htmlspecialchars($detail['assignee_name'] ?? 'Unassigned'),
+                                            'Reported Date' => ($detail['reported_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['reported_date'])) : '—',
+                                            'Assigned At' => ($detail['assigned_at'] ?? '') ? date('d M Y, H:i', strtotime($detail['assigned_at'])) : '—',
+                                            'Resolved' => ($detail['is_resolved'] ?? 0) ? '✅ Yes' : 'No',
+                                            'Resolution Date' => ($detail['resolution_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['resolution_date'])) : '—',
+                                            'Created At' => ($detail['created_at'] ?? '') ? date('d M Y, H:i', strtotime($detail['created_at'])) : '—',
+                                            'Updated At' => ($detail['updated_at'] ?? '') ? date('d M Y, H:i', strtotime($detail['updated_at'])) : '—',
+                                        ] as $lbl => $val): ?>
+                                            <div class="col-md-4">
+                                                <div class="vw-label">
+                                                    <?= $lbl ?>
+                                                </div>
+                                                <div class="vw-value">
+                                                    <?= $val ?>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+
+                                        <?php if (!empty($detail['detailed_description'])): ?>
+                                            <div class="col-12">
+                                                <div class="vw-label">Description</div>
+                                                <div class="vw-value">
+                                                    <?= nl2br(htmlspecialchars($detail['detailed_description'])) ?>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+
+                                        <?php if (!empty($detail['resolution'])): ?>
+                                            <div class="col-12">
+                                                <div class="vw-label">Resolution</div>
+                                                <div class="vw-value">
+                                                    <?= nl2br(htmlspecialchars($detail['resolution'])) ?>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if ($canEditDept): ?>
+                                        <hr style="border-color:#f3f4f6;">
+                                    <?php endif; ?>
+                                <?php elseif (!$canEditDept): ?>
+                                    <div class="text-center py-4 text-muted">
+                                        <i class="fas fa-file-circle-question fa-2x mb-2 d-block opacity-50"></i>No IT details
+                                        recorded yet.
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php if ($canEditDept): ?>
+                                    <div
+                                        style="font-size:.8rem;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:.75rem;">
+                                        <i class="fas fa-pen me-1"></i><?= $detail ? 'Update' : 'Add' ?> IT Issue Details
+                                    </div>
+                                    <form method="POST">
+                                        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                        <input type="hidden" name="save_it" value="1">
+                                        <div class="row g-3">
+
+                                            <!-- Token Raiser -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Token Raised By</label>
+                                                <select name="it[token_raiser_id]" class="form-select form-select-sm">
+                                                    <option value="">-- Select --</option>
+                                                    <?php foreach ($allStaff as $s): ?>
+                                                        <option value="<?= $s['id'] ?>" <?= ($detail['token_raiser_id'] ?? $task['created_by'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($s['full_name']) ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
+
+                                            <!-- Reported Date -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Reported Date</label>
+                                                <input type="datetime-local" name="it[reported_date]"
+                                                    class="form-control form-control-sm"
+                                                    value="<?= htmlspecialchars(isset($detail['reported_date']) && $detail['reported_date'] ? date('Y-m-d\TH:i', strtotime($detail['reported_date'])) : '') ?>">
+                                            </div>
+
+                                            <!-- Issue Category -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Issue Category</label>
+                                                <select name="it[issue_category]" class="form-select form-select-sm">
+                                                    <?php foreach ([
+                                                        'Task System',
+                                                        'Computer or Laptop Issue',
+                                                        'Printer Issue',
+                                                        'Other Software Issue',
+                                                        'Client Software Issue',
+                                                        'Network/Internet Issue',
+                                                        'Email Issue',
+                                                        'Hardware Issue',
+                                                        'Other',
+                                                    ] as $cat): ?>
+                                                        <option value="<?= htmlspecialchars($cat) ?>" <?= ($detail['issue_category'] ?? 'Other') === $cat ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($cat) ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
+
+                                            <!-- Severity -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Severity</label>
+                                                <select name="it[severity]" class="form-select form-select-sm">
+                                                    <?php foreach (['Low', 'Medium', 'High', 'Critical'] as $sev): ?>
+                                                        <option value="<?= $sev ?>" <?= ($detail['severity'] ?? 'Medium') === $sev ? 'selected' : '' ?>>
+                                                            <?= $sev ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
+
+                                            <!-- Detailed Description -->
+                                            <div class="col-12">
+                                                <label class="form-label-mis">Detailed Description</label>
+                                                <textarea name="it[detailed_description]" class="form-control form-control-sm"
+                                                    rows="3"
+                                                    placeholder="Describe the issue in detail..."><?= htmlspecialchars($detail['detailed_description'] ?? $task['description'] ?? '') ?></textarea>
+                                            </div>
+
+                                            <!-- Assign To IT Staff -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Assign To IT Staff</label>
+                                                <select name="it[assigned_it_staff]" id="it_assigned_to"
+                                                    class="form-select form-select-sm">
+                                                    <option value="">-- Unassigned --</option>
+                                                    <?php foreach ($itStaffOptions as $s): ?>
+                                                        <option value="<?= $s['id'] ?>" <?= ($detail['assigned_it_staff'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                                            <?= htmlspecialchars($s['full_name']) ?>
+                                                        </option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
+
+                                            <!-- Resolution Notes -->
+                                            <div class="col-md-6">
+                                                <label class="form-label-mis">Resolution Notes</label>
+                                                <textarea name="it[resolution]" class="form-control form-control-sm" rows="3"
+                                                    placeholder="Describe how the issue was resolved..."><?= htmlspecialchars($detail['resolution'] ?? '') ?></textarea>
+                                            </div>
+
+                                            <!-- Mark Resolved -->
+                                            <div class="col-12">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="it[is_resolved]"
+                                                        value="1" id="itResolved" <?= ($detail['is_resolved'] ?? 0) ? 'checked' : '' ?>>
+                                                    <label class="form-check-label" for="itResolved" style="font-size:.85rem;">
+                                                        Mark as Resolved <span style="color:#9ca3af;font-size:.78rem;">(sets
+                                                            task status to Done)</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm">
+                                                    <i class="fas fa-save me-1"></i>Save IT Details
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </form>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php elseif ($task['dept_code'] === 'RETAIL' &&  $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-store text-warning me-2"></i>Retail Details</h5>
@@ -1993,7 +2358,7 @@ include '../../includes/header.php';
                          NOT NULL: task_id, company_id
                          All other columns nullable
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'CORP' && ($isCoreAdminDept || $canViewDept)): ?>
+                    <?php elseif ($task['dept_code'] === 'CORP' &&  $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-building text-warning me-2"></i>Corporate Details</h5>
@@ -2585,5 +2950,7 @@ include '../../includes/header.php';
             });
         }
     });
+    if (document.getElementById('it_assigned_to'))
+        new TomSelect('#it_assigned_to', { placeholder: 'Search IT staff…', allowEmptyOption: true, maxOptions: 500 });
 </script>
 <?php include '../../includes/footer.php'; ?>

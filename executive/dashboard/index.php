@@ -40,6 +40,10 @@ $stats['admins'] = $db->query("
     SELECT COUNT(*) FROM users u JOIN roles r ON r.id = u.role_id
     WHERE r.role_name = 'admin' AND u.is_active = 1
 ")->fetchColumn();
+$stats['managers'] = $db->query("
+    SELECT COUNT(*) FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE r.role_name = 'manager' AND u.is_active = 1
+")->fetchColumn();
 
 // ── Dept tasks: one dynamic CASE column per status ──
 $statusCases = '';
@@ -117,7 +121,7 @@ foreach ($deptList as $dept) {
             COUNT(t.id)                                                AS total,
             SUM(CASE WHEN ts.status_name = 'Done' THEN 1 ELSE 0 END)  AS done
         FROM users u
-        JOIN roles r         ON r.id = u.role_id AND r.role_name IN ('staff', 'admin')
+        JOIN roles r         ON r.id = u.role_id AND r.role_name IN ('staff', 'admin', 'manager')
         LEFT JOIN branches b ON b.id = u.branch_id
         LEFT JOIN tasks t        ON t.assigned_to = u.id
                                  AND t.is_active = 1
@@ -134,7 +138,7 @@ foreach ($deptList as $dept) {
         GROUP BY u.id, u.full_name, u.employee_id, r.role_name, b.branch_name
         HAVING total > 0
         ORDER BY done DESC, total DESC
-        LIMIT 8
+        LIMIT 5
     ");
     $stmt->execute([$deptId, $deptId, $deptId]);
     $dept['performers'] = $stmt->fetchAll();
@@ -143,9 +147,10 @@ foreach ($deptList as $dept) {
 include '../../includes/header.php';
 ?>
 <style>
-.page-hero {
+    .page-hero {
         overflow: visible !important;
     }
+
     .stat-card,
     .card-mis,
     .dropdown-menu {
@@ -431,6 +436,7 @@ include '../../includes/header.php';
                     ['Tasks Total', $stats['total_tasks'], 'fa-layer-group', '#2563eb', '#eff6ff', APP_URL . '/executive/tasks/index.php'],
                     ['Companies', $stats['companies'], 'fa-building', '#0ea5e9', '#ecfeff', APP_URL . '/executive/companies/index.php'],
                     ['Staff', $stats['staff'], 'fa-users', '#14b8a6', '#f0fdfa', APP_URL . '/executive/staff/index.php?role=staff'],
+                    ['Managers', $stats['managers'], 'fa-sitemap', '#7c3aed', '#f5f3ff', APP_URL . '/executive/staff/index.php?role=manager'],
                     ['Admins', $stats['admins'], 'fa-user-shield', '#db2777', '#fdf2f8', APP_URL . '/executive/staff/index.php?role=admin'],
                 ];
                 foreach ($otherCards as [$label, $val, $icon, $color, $bg, $link]): ?>
@@ -556,6 +562,7 @@ include '../../includes/header.php';
                             // Pre-split performers by role for PHP rendering
                             $staffPerfs = array_values(array_filter($dept['performers'], fn($p) => $p['role_name'] === 'staff'));
                             $adminPerfs = array_values(array_filter($dept['performers'], fn($p) => $p['role_name'] === 'admin'));
+                            $managerPerfs = array_values(array_filter($dept['performers'], fn($p) => $p['role_name'] === 'manager'));
                             ?>
                             <div id="<?= $panelId ?>" class="dept-panel" style="<?= $i !== 0 ? 'display:none;' : '' ?>">
 
@@ -577,6 +584,15 @@ include '../../includes/header.php';
                                         <span style="font-size:.65rem;background:#f3f4f6;
                                          padding:.05rem .35rem;border-radius:99px;margin-left:3px;color:#6b7280;">
                                             <?= count($adminPerfs) ?>
+                                        </span>
+                                    </button>
+                                    <button onclick="switchRoleTab(<?= $dept['id'] ?>, 'manager')"
+                                        id="rtab-<?= $dept['id'] ?>-manager"
+                                        class="btn btn-sm btn-outline-secondary role-tab-<?= $dept['id'] ?>">
+                                        <i class="fas fa-user-tie me-1"></i>Manager
+                                        <span style="font-size:.65rem;background:#f3f4f6;
+                                         padding:.05rem .35rem;border-radius:99px;margin-left:3px;color:#6b7280;">
+                                            <?= count($managerPerfs) ?>
                                         </span>
                                     </button>
                                 </div>
@@ -664,6 +680,57 @@ include '../../includes/header.php';
                                                             margin-top:.3rem;overflow:hidden;">
                                                                 <div style="width:<?= $pct ?>%;
                                                                 background:linear-gradient(90deg,#db2777,#f472b6);
+                                                                height:4px;border-radius:50px;"></div>
+                                                            </div>
+                                                        </div>
+                                                        <div style="text-align:right;flex-shrink:0;">
+                                                            <div style="font-size:.95rem;font-weight:700;color:#10b981;">
+                                                                <?= (int) $p['done'] ?>
+                                                            </div>
+                                                            <div style="font-size:.68rem;color:#9ca3af;">
+                                                                / <?= (int) $p['total'] ?>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+
+                                <!-- Manager panel -->
+                                <div id="rp-<?= $dept['id'] ?>-manager" style="display:none;">
+                                    <?php if (empty($managerPerfs)): ?>
+                                        <div class="empty-state" style="padding:1.5rem 0;">
+                                            <i class="fas fa-user-tie"></i> No managers with tasks in this department
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="row g-3">
+                                            <?php foreach ($managerPerfs as $j => $p):
+                                                $medals = ['#c9a84c', '#9ca3af', '#cd7f32'];
+                                                $pct = $p['total'] ? round(($p['done'] / $p['total']) * 100) : 0;
+                                                ?>
+                                                <div class="col-12 col-md-6">
+                                                    <div class="d-flex align-items-center gap-3">
+                                                        <div style="width:26px;text-align:center;font-weight:700;font-size:.9rem;
+                                                        color:<?= $medals[$j] ?? '#6b7280' ?>;flex-shrink:0;">
+                                                            #<?= $j + 1 ?>
+                                                        </div>
+                                                        <div class="avatar-circle avatar-sm"
+                                                            style="background:#8b5cf622;color:#8b5cf6;flex-shrink:0;">
+                                                            <?= strtoupper(substr($p['full_name'], 0, 2)) ?>
+                                                        </div>
+                                                        <div class="flex-grow-1" style="min-width:0;">
+                                                            <div class="ellipsis" style="font-size:.85rem;font-weight:500;">
+                                                                <?= htmlspecialchars($p['full_name']) ?>
+                                                            </div>
+                                                            <div class="ellipsis" style="font-size:.72rem;color:#9ca3af;">
+                                                                <?= htmlspecialchars($p['branch_name'] ?? '—') ?>
+                                                            </div>
+                                                            <div style="background:#f3f4f6;border-radius:50px;height:4px;
+                                                            margin-top:.3rem;overflow:hidden;">
+                                                                <div style="width:<?= $pct ?>%;
+                                                                background:linear-gradient(90deg,#8b5cf6,#c4b5fd);
                                                                 height:4px;border-radius:50px;"></div>
                                                             </div>
                                                         </div>
@@ -816,7 +883,7 @@ include '../../includes/header.php';
 
     function switchRoleTab(deptId, role) {
         // Hide both role panels for this dept
-        ['staff', 'admin'].forEach(r => {
+        ['staff', 'admin', 'manager'].forEach(r => {
             const panel = document.getElementById('rp-' + deptId + '-' + r);
             if (panel) panel.style.display = r === role ? 'block' : 'none';
         });

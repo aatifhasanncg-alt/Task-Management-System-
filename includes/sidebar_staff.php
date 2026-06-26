@@ -201,7 +201,7 @@ if (!function_exists('conNavActive')) {
             <a href="<?= APP_URL ?>staff/planning/today_tomorrow.php"
                 class="nav-item<?= conNavActive('today_tomorrow.php', 'planning') ?>">
                 <i class="fas fa-calendar-day"></i>
-                <span>Today & Tomorrow</span>
+                <span>This Week Plans</span>
                 <?php if ($__planNotifCount > 0): ?>
                     <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
                         <?= $__planNotifCount ?>
@@ -266,8 +266,7 @@ if (!function_exists('conNavActive')) {
                         <span class="nav-badge nav-badge-warning"><?= $todayCnt ?></span>
                     <?php endif; ?>
                 </a>
-                <a href="<?= APP_URL ?>staff/tasks/tomorrow.php"
-                    class="nav-item <?= isActiveStaff('/staff/tasks/tomorrow') ?>">
+                <a href="<?= APP_URL ?>staff/tasks/tomorrow.php" class="nav-item <?= isActiveStaff('/staff/tasks/tomorrow') ?>">
                     <i class="fas fa-forward"></i><span>Tomorrow</span>
                 </a>
                 <a href="<?= APP_URL ?>staff/tasks/index.php"
@@ -280,6 +279,10 @@ if (!function_exists('conNavActive')) {
                 <?php if ($__isMinu): ?>
                     <a href="<?= APP_URL ?>staff/tasks/assign.php" class="nav-item <?= isActiveStaff('/staff/tasks/assign') ?>">
                         <i class="fas fa-plus-circle"></i><span>Assign Task</span>
+                    </a>
+                    <a href="<?= APP_URL ?>staff/companies/index.php"
+                        class="nav-item <?= isActiveStaff('/staff/companies/index') ?>">
+                        <i class="fas fa-building"></i><span>Companies</span>
                     </a>
                 <?php endif; ?>
             <?php endif; ?>
@@ -299,7 +302,7 @@ if (!function_exists('conNavActive')) {
                 <a href="<?= APP_URL ?>staff/planning/today_tomorrow.php"
                     class="nav-item<?= conNavActive('today_tomorrow.php', 'planning') ?>">
                     <i class="fas fa-calendar-day"></i>
-                    <span>Today & Tomorrow</span>
+                    <span>This Week Plans</span>
                     <?php if ($__planNotifCount > 0): ?>
                         <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
                             <?= $__planNotifCount ?>

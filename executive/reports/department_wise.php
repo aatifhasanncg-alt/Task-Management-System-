@@ -8,7 +8,7 @@ $db = getDB();
 $pageTitle = 'Department-wise Report';
 
 $statusRows = $db->query("
-    SELECT id, status_name, color, bg_color, icon
+    SELECT id, status_name, color, bg_color, icon, counts_as_done
     FROM task_status
     ORDER BY id ASC
 ")->fetchAll();
@@ -28,7 +28,7 @@ $deptStmt = $db->prepare("
            COUNT(t.id) as total,
            {$statusCases}
            SUM(CASE WHEN t.due_date < CURDATE()
-               AND ts.status_name != 'Done' THEN 1 ELSE 0 END) as overdue
+               AND ts.counts_as_done = 0 THEN 1 ELSE 0 END) as overdue
     FROM departments d
     LEFT JOIN tasks t        ON t.department_id = d.id
         AND t.is_active = 1

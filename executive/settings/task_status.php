@@ -29,6 +29,11 @@ catch (Exception $e) {
     $db->exec("ALTER TABLE task_status
         ADD COLUMN icon VARCHAR(80) DEFAULT 'fa-circle-dot' AFTER bg_color");
 }
+try { $db->query("SELECT counts_as_done FROM task_status LIMIT 1"); }
+catch (Exception $e) {
+    $db->exec("ALTER TABLE task_status
+        ADD COLUMN counts_as_done TINYINT(1) NOT NULL DEFAULT 0 AFTER icon");
+}
 
 // ── POST: Add ─────────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add') {
@@ -37,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
     $color = trim($_POST['color']       ?? '#9ca3af');
     $bg    = trim($_POST['bg_color']    ?? '#f3f4f6');
     $icon  = trim($_POST['icon']        ?? 'fa-circle-dot');
-
+    $countsAsDone = isset($_POST['counts_as_done']) ? 1 : 0;
     if ($name === '')         $errors[] = 'Status name is required.';
     elseif (strlen($name) > 50) $errors[] = 'Max 50 characters.';
     else {
@@ -46,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
         if ($dup->fetch()) {
             $errors[] = "Status \"$name\" already exists.";
         } else {
-            $db->prepare("INSERT INTO task_status (status_name, color, bg_color, icon) VALUES (?,?,?,?)")
-               ->execute([$name, $color, $bg, $icon]);
+            $db->prepare("INSERT INTO task_status (status_name, color, bg_color, icon, counts_as_done) VALUES (?,?,?,?,?)")
+               ->execute([$name, $color, $bg, $icon, $countsAsDone]);
             logActivity("Added task status: $name", 'task_status');
             setFlash('success', "Status \"$name\" added.");
             header('Location: task_status.php'); exit;
@@ -63,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit'
     $color = trim($_POST['color']        ?? '#9ca3af');
     $bg    = trim($_POST['bg_color']     ?? '#f3f4f6');
     $icon  = trim($_POST['icon']         ?? 'fa-circle-dot');
-
+    $countsAsDone = isset($_POST['counts_as_done']) ? 1 : 0;
     if (!$sid)        $errors[] = 'Invalid status.';
     if ($name === '') $errors[] = 'Status name is required.';
 
@@ -73,8 +78,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit'
         if ($dup->fetch()) {
             $errors[] = "Status \"$name\" already exists.";
         } else {
-            $db->prepare("UPDATE task_status SET status_name=?, color=?, bg_color=?, icon=? WHERE id=?")
-               ->execute([$name, $color, $bg, $icon, $sid]);
+            $db->prepare("UPDATE task_status SET status_name=?, color=?, bg_color=?, icon=?, counts_as_done=? WHERE id=?")
+               ->execute([$name, $color, $bg, $icon, $countsAsDone, $sid]);
             logActivity("Updated task status ID $sid → $name", 'task_status');
             setFlash('success', 'Status updated.');
             header('Location: task_status.php'); exit;
@@ -109,10 +114,11 @@ $statuses = $db->query("
            COALESCE(ts.color,    '#9ca3af')      AS color,
            COALESCE(ts.bg_color, '#f3f4f6')      AS bg_color,
            COALESCE(ts.icon,     'fa-circle-dot') AS icon,
+           COALESCE(ts.counts_as_done, 0)         AS counts_as_done,
            COUNT(t.id) AS task_count
     FROM task_status ts
     LEFT JOIN tasks t ON t.status_id = ts.id AND t.is_active = 1
-    GROUP BY ts.id, ts.status_name, ts.color, ts.bg_color, ts.icon
+    GROUP BY ts.id, ts.status_name, ts.color, ts.bg_color, ts.icon, ts.counts_as_done
     ORDER BY ts.id ASC
 ")->fetchAll();
 
@@ -163,6 +169,13 @@ include '../../includes/header.php';
                 <i class="fas <?= htmlspecialchars($s['icon']) ?>"></i>
                 <?= htmlspecialchars($s['status_name']) ?>
             </span>
+            <?php if ($s['counts_as_done']): ?>
+            <span style="font-size:.65rem;color:#10b981;background:#ecfdf5;
+                         border:1px solid #a7f3d0;padding:.1rem .5rem;
+                         border-radius:99px;font-weight:600;white-space:nowrap;">
+                <i class="fas fa-circle-check" style="font-size:.6rem;"></i> Counts as Done
+            </span>
+            <?php endif; ?>
             <?php if ($s['task_count'] > 0): ?>
             <span style="font-size:.7rem;color:#9ca3af;white-space:nowrap;">
                 <?= $s['task_count'] ?> task<?= $s['task_count'] > 1 ? 's' : '' ?>
@@ -175,7 +188,8 @@ include '../../includes/header.php';
                         '<?= htmlspecialchars(addslashes($s['status_name'])) ?>',
                         '<?= $s['color'] ?>',
                         '<?= $s['bg_color'] ?>',
-                        '<?= htmlspecialchars(addslashes($s['icon'])) ?>'
+                        '<?= htmlspecialchars(addslashes($s['icon'])) ?>',
+                        <?= $s['counts_as_done'] ? 'true' : 'false' ?>
                     )"
                     style="background:#eff6ff;color:#3b82f6;border:none;
                            border-radius:6px;padding:.3rem .6rem;
@@ -320,6 +334,24 @@ include '../../includes/header.php';
                             gap:.3rem;max-height:180px;overflow-y:auto;
                             border:1px solid #f3f4f6;border-radius:8px;padding:.4rem;">
                 </div>
+            </div>
+
+            <!-- Counts as done -->
+            <div class="mb-3">
+                <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;
+                              background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;
+                              padding:.6rem .9rem;">
+                    <input type="checkbox" name="counts_as_done" id="form-counts-as-done"
+                           style="width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+                    <div>
+                        <div style="font-size:.82rem;font-weight:600;color:#374151;">
+                            Counts as Done
+                        </div>
+                        <div style="font-size:.7rem;color:#9ca3af;">
+                            Tasks in this status are excluded from overdue calculations
+                        </div>
+                    </div>
+                </label>
             </div>
 
             <!-- Live preview -->
@@ -486,6 +518,7 @@ function openAdd() {
     document.getElementById('form-status-id').value     = '';
     document.getElementById('form-name').value          = '';
     document.getElementById('icon-search').value        = '';
+    document.getElementById('form-counts-as-done').checked = false;
     setColor('form-color', 'form-color-hex', '#9ca3af');
     setColor('form-bg',    'form-bg-hex',    '#f3f4f6');
     selectIcon('fa-circle-dot');
@@ -495,13 +528,14 @@ function openAdd() {
     setTimeout(() => document.getElementById('form-name').focus(), 50);
 }
 
-function openEdit(id, name, color, bg, icon) {
+function openEdit(id, name, color, bg, icon, countsAsDone) {
     document.getElementById('modal-title').textContent  = 'Edit Status';
     document.getElementById('form-submit').textContent  = 'Save Changes';
     document.getElementById('form-action').value        = 'edit';
     document.getElementById('form-status-id').value     = id;
     document.getElementById('form-name').value          = name;
     document.getElementById('icon-search').value        = '';
+    document.getElementById('form-counts-as-done').checked = !!countsAsDone;
     setColor('form-color', 'form-color-hex', color || '#9ca3af');
     setColor('form-bg',    'form-bg-hex',    bg    || '#f3f4f6');
     selectIcon(icon || 'fa-circle-dot');

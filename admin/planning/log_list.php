@@ -41,7 +41,7 @@ if ($__isConsPrimary) {
 // ── Filters ────────────────────────────────────────────────────────────────
 $now = new DateTime();
 $month = preg_match('/^\d{4}-\d{2}$/', $_GET['month'] ?? '') ? $_GET['month'] : $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthLabel = $monthDate->format('F Y');
 
 $staffFilter = (int) ($_GET['staff_id'] ?? 0);
@@ -79,13 +79,13 @@ if ($isAdmin) {
 $inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
 
 // ── WHERE clauses ─────────────────────────────────────────────────────────
-$whereVisit = "wl.month_year = ? AND wl.user_id IN ({$inList})";
-$whereOffice = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND owl.user_id IN ({$inList})";
-$whereKpi = "wl.month_year = ? AND wl.department_id = ? AND wl.user_id IN ({$inList})";
-
-$paramsVisit = [$month];
-$paramsOffice = [$month];
-$paramsKpi = [$month, $deptId];
+// ── WHERE clauses ─────────────────────────────────────────────────────────
+$whereVisit = "wl.month_year = ? AND wl.user_id IN ({$inList}) AND wl.user_id != ?";
+$whereOffice = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND owl.user_id IN ({$inList}) AND owl.user_id != ?";
+$whereKpi = "wl.month_year = ? AND wl.department_id = ? AND wl.user_id IN ({$inList}) AND wl.user_id != ?";
+$paramsVisit = [$month, $uid];
+$paramsOffice = [$month, $uid];
+$paramsKpi = [$month, $deptId, $uid];
 
 if ($staffFilter) {
     $whereVisit .= " AND wl.user_id = ?";

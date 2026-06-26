@@ -3,7 +3,9 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helper.php';
-requireAdmin();
+require_once '../../config/notify.php';
+
+requireExecutive();
 
 $db = getDB();
 $user = currentUser();
@@ -13,10 +15,6 @@ if (!$id) {
     header('Location: index.php');
     exit;
 }
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/logs/php-error.log');
 /* ── Fiscal years ─────────────────────────────────────────────────────────── */
 $fys = getFiscalYears($db);
 $currentFy = getCurrentFiscalYear($db);
@@ -68,6 +66,7 @@ $detailTableMap = [
     'BANK' => 'task_banking',
     'CORP' => 'task_corporate',
     'FIN' => 'task_finance',
+    'IT' => 'task_it',
 ];
 $detailTable = $detailTableMap[$task['dept_code']] ?? null;
 $detail = null;
@@ -167,7 +166,23 @@ if ($detailTable) {
                 $dSt->execute([$id]);
                 $detail = $dSt->fetch(PDO::FETCH_ASSOC);
                 break;
-
+            case 'IT':
+                $dSt = $db->prepare("
+                    SELECT ti.*,
+                        tr.full_name  AS token_raiser_name,
+                        d.dept_name   AS department_name,
+                        b.branch_name AS branch_name_it,
+                        st.full_name  AS assigned_staff_name
+                    FROM task_it ti
+                    LEFT JOIN users       tr ON tr.id = ti.token_raiser_id
+                    LEFT JOIN departments d  ON d.id  = ti.department_id
+                    LEFT JOIN branches    b  ON b.id  = ti.branch_id
+                    LEFT JOIN users       st ON st.id = ti.assigned_it_staff
+                    WHERE ti.task_id = ?
+                ");
+                $dSt->execute([$id]);
+                $detail = $dSt->fetch(PDO::FETCH_ASSOC);
+                break;
             case 'BANK':
                 $dSt = $db->prepare("
                     SELECT tb.*,
@@ -486,7 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax'])) {
         business_type,pan_number,assigned_to,file_received_by,updated_by,
         verify_by,tax_clearance_status_id,total_amount,completed_date,
         remarks,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        ->execute(array_merge([$id], $p));
+            ->execute(array_merge([$id], $p));
     if (!empty($t2['status_id']))
         $db->prepare("UPDATE tasks SET status_id=?,updated_at=NOW() WHERE id=?")->execute([(int) $t2['status_id'], $id]);
     syncTaskFiscalYear($db, $id);
@@ -495,7 +510,151 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax'])) {
     header("Location: view.php?id={$id}");
     exit;
 }
+/* POST: save_it — create OR update task_it for this task */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it'])) {
+    verifyCsrf();
+    $it = $_POST['it'] ?? [];
 
+    $newAssignedItStaff = ($it['assigned_it_staff'] ?? '') !== '' ? (int) $it['assigned_it_staff'] : null;
+    $issueCategory = trim($it['issue_category'] ?? '');
+    $detailedDesc = trim($it['detailed_description'] ?? '');
+    $resolution = trim($it['resolution'] ?? '');
+    $resolutionDate = $it['resolution_date'] ?: null;
+    $severity = $it['severity'] ?? 'Medium';
+    $isResolved = isset($it['is_resolved']) ? 1 : 0;
+
+    // ── capture previous assignee BEFORE overwriting ──
+    $prevAssignee = $detail['assigned_it_staff'] ?? null;
+
+    $ex = $db->prepare("SELECT id, token_number, token_raiser_id FROM task_it WHERE task_id = ?");
+    $ex->execute([$id]);
+    $itExisting = $ex->fetch(PDO::FETCH_ASSOC);
+
+    if ($itExisting) {
+        $p = [
+            $issueCategory ?: null,
+            $detailedDesc ?: null,
+            $newAssignedItStaff,
+            $resolution ?: null,
+            $resolutionDate,
+            $severity,
+            $isResolved,
+        ];
+        $db->prepare("UPDATE task_it SET
+            issue_category=?, detailed_description=?, assigned_it_staff=?,
+            resolution=?, resolution_date=?, severity=?, is_resolved=?
+            WHERE task_id=?")->execute(array_merge($p, [$id]));
+    } else {
+        // No task_it row yet — create it now (e.g. task assigned directly into IT dept).
+        $db->beginTransaction();
+        try {
+            $lastToken = $db->query("
+                SELECT token_number FROM task_it
+                WHERE token_number LIKE 'IT-%'
+                ORDER BY CAST(SUBSTRING(token_number, 4) AS UNSIGNED) DESC
+                LIMIT 1
+                FOR UPDATE
+            ")->fetchColumn();
+            $nextSeq = $lastToken ? ((int) substr($lastToken, 3)) + 1 : 1;
+            $tokenNumber = 'IT-' . str_pad((string) $nextSeq, 6, '0', STR_PAD_LEFT);
+
+            $raiserId = (int) ($task['created_by'] ?? $user['id']);
+            $deptIdForIt = (int) ($task['department_id'] ?? 0);
+            $branchIdForIt = (int) ($task['branch_id'] ?? 0);
+
+            $db->prepare("
+                INSERT INTO task_it
+                    (task_id, token_number, token_raiser_id, department_id, branch_id,
+                     issue_category, detailed_description, assigned_it_staff,
+                     resolution, resolution_date, severity, is_resolved)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ")->execute([
+                        $id,
+                        $tokenNumber,
+                        $raiserId,
+                        $deptIdForIt,
+                        $branchIdForIt,
+                        $issueCategory ?: 'Other',
+                        $detailedDesc ?: (trim($task['description'] ?? '') ?: null),
+                        $newAssignedItStaff,
+                        $resolution ?: null,
+                        $resolutionDate,
+                        $severity,
+                        $isResolved
+                    ]);
+
+            if ($newAssignedItStaff) {
+                $db->prepare("UPDATE task_it SET assigned_at = NOW() WHERE task_id = ? AND assigned_at IS NULL")->execute([$id]);
+            }
+            $db->commit();
+        } catch (Exception $e) {
+            $db->rollBack();
+            setFlash('error', 'Could not create IT ticket: ' . $e->getMessage());
+            header("Location: view.php?id={$id}");
+            exit;
+        }
+    }
+
+    // ── fetch fresh state so notify/messages always reflect what was just saved ──
+    $freshIt = $db->prepare("SELECT token_number, token_raiser_id FROM task_it WHERE task_id = ?");
+    $freshIt->execute([$id]);
+    $freshItRow = $freshIt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    if ($isResolved) {
+        $did = $db->query("SELECT id FROM task_status WHERE status_name='Done'")->fetchColumn();
+        if ($did)
+            $db->prepare("UPDATE tasks SET status_id=?,updated_at=NOW() WHERE id=?")->execute([$did, $id]);
+    }
+
+    // ── notify raiser and the newly assigned staff member ──
+    if ($newAssignedItStaff && $newAssignedItStaff != $prevAssignee) {
+        $raiserId = $freshItRow['token_raiser_id'] ?? $task['created_by'] ?? null;
+        $tokenForMsg = $freshItRow['token_number'] ?? '';
+
+        $staffNameStmt = $db->prepare("SELECT full_name FROM users WHERE id=?");
+        $staffNameStmt->execute([$newAssignedItStaff]);
+        $staffName = $staffNameStmt->fetchColumn() ?: 'a staff member';
+
+        // 1. Notify the raiser/creator
+        if ($raiserId) {
+            notify(
+                (int) $raiserId,
+                'IT Ticket Assigned',
+                "Your IT ticket {$task['task_number']} ({$tokenForMsg}) has been assigned to {$staffName}.",
+                'task',
+                APP_URL . '/includes/issue_view.php?id=' . $id,
+                true,
+                ['template' => 'task_status_changed']
+            );
+        }
+
+        // 2. Notify the assigned staff member — role-aware link
+        if ($newAssignedItStaff != $raiserId) {
+            $assigneeRoleStmt = $db->prepare("
+                SELECT r.role_name FROM users u
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE u.id = ?
+            ");
+            $assigneeRoleStmt->execute([$newAssignedItStaff]);
+            $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+
+            notify(
+                (int) $newAssignedItStaff,
+                'IT Ticket Assigned to You',
+                "You have been assigned IT ticket {$task['task_number']} ({$tokenForMsg}).",
+                'task',
+                APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                true,
+                ['template' => 'task_status_changed']
+            );
+        }
+    }
+
+    logActivity("IT saved: {$task['task_number']}", 'tasks');
+    setFlash('success', 'IT details saved.');
+    header("Location: view.php?id={$id}");
+    exit;
+}
 /* POST: save_retail */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail'])) {
     verifyCsrf();
@@ -585,35 +744,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
     verifyCsrf();
     $co = $_POST['corporate'] ?? [];
 
-    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int)$v   : null;
-    $fltOrNull = fn($v) => ($v !== '' && $v !== null) ? (float)$v : null;
-    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? trim($v)  : null;
+    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int) $v : null;
+    $fltOrNull = fn($v) => ($v !== '' && $v !== null) ? (float) $v : null;
+    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? trim($v) : null;
 
     $coFyId = $intOrNull($co['fiscal_year_id'] ?? '');
 
     $sharedParams = [
         $task['company_id'],                                                              // company_id
-        $intOrNull($co['company_type_id']          ?? ''),                                // company_type_id
-        $intOrNull($co['file_type_id']             ?? ''),                                // file_type_id
-        $intOrNull($co['pan_vat_id']               ?? ''),                                // pan_vat_id
-        $intOrNull($co['vat_client_id']            ?? ''),                                // vat_client_id
-        $strOrNull($co['return_type']              ?? ''),                                // return_type
+        $intOrNull($co['company_type_id'] ?? ''),                                // company_type_id
+        $intOrNull($co['file_type_id'] ?? ''),                                // file_type_id
+        $intOrNull($co['pan_vat_id'] ?? ''),                                // pan_vat_id
+        $intOrNull($co['vat_client_id'] ?? ''),                                // vat_client_id
+        $strOrNull($co['return_type'] ?? ''),                                // return_type
         trim($co['firm_name'] ?? '') ?: ($task['company_name'] ?? ''),                   // firm_name
-        trim($co['pan_no']    ?? '') ?: ($companyData['pan_number'] ?? null),             // pan_no
-        $intOrNull($co['grade_id']                 ?? ''),                                // grade_id
-        $intOrNull($co['assigned_to']              ?? '') ?? $taskAssignedToId,           // assigned_to
-        $intOrNull($co['finalised_by']             ?? ''),                                // finalised_by
-        $strOrNull($co['completed_date']           ?? ''),                                // completed_date
-        $strOrNull($co['remarks']                  ?? ''),                                // remarks
+        trim($co['pan_no'] ?? '') ?: ($companyData['pan_number'] ?? null),             // pan_no
+        $intOrNull($co['grade_id'] ?? ''),                                // grade_id
+        $intOrNull($co['assigned_to'] ?? '') ?? $taskAssignedToId,           // assigned_to
+        $intOrNull($co['finalised_by'] ?? ''),                                // finalised_by
+        $strOrNull($co['completed_date'] ?? ''),                                // completed_date
+        $strOrNull($co['remarks'] ?? ''),                                // remarks
         $coFyId,                                                                          // fiscal_year_id
-        (int)($co['no_of_audit_year']              ?? 1),                                 // no_of_audit_year
-        $intOrNull($co['audit_type_id']            ?? ''),                                // audit_type_id
-        $strOrNull($co['ecd']                      ?? ''),                                // ecd
-        $fltOrNull($co['opening_due']              ?? '') ?? 0,                           // opening_due
-        $intOrNull($co['finalisation_status_id']   ?? ''),                                // finalisation_status_id
-        $intOrNull($co['tax_clearance_status_id']  ?? ''),                                // tax_clearance_status_id
-        $intOrNull($co['backup_status_id']         ?? ''),                                // backup_status_id
-        $strOrNull($co['notes']                    ?? ''),                                // notes
+        (int) ($co['no_of_audit_year'] ?? 1),                                 // no_of_audit_year
+        $intOrNull($co['audit_type_id'] ?? ''),                                // audit_type_id
+        $strOrNull($co['ecd'] ?? ''),                                // ecd
+        $fltOrNull($co['opening_due'] ?? '') ?? 0,                           // opening_due
+        $intOrNull($co['finalisation_status_id'] ?? ''),                                // finalisation_status_id
+        $intOrNull($co['tax_clearance_status_id'] ?? ''),                                // tax_clearance_status_id
+        $intOrNull($co['backup_status_id'] ?? ''),                                // backup_status_id
+        $strOrNull($co['notes'] ?? ''),                                // notes
     ];
 
     // Save follow-up
@@ -736,25 +895,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking'])) {
     $b = $_POST['banking'] ?? [];
 
     // Helper to convert empty string to null for integer fields
-    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int)$v : null;
-    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? (string)$v : null;
+    $intOrNull = fn($v) => ($v !== '' && $v !== null) ? (int) $v : null;
+    $strOrNull = fn($v) => ($v !== '' && $v !== null) ? (string) $v : null;
 
-    $bank_reference_id  = $intOrNull($b['bank_reference_id']  ?? '');
+    $bank_reference_id = $intOrNull($b['bank_reference_id'] ?? '');
     $client_category_id = $intOrNull($b['client_category_id'] ?? '');
-    $ecd             = !empty($b['ecd'])             ? $b['ecd']             : null;
+    $ecd = !empty($b['ecd']) ? $b['ecd'] : null;
     $completion_date = !empty($b['completion_date']) ? $b['completion_date'] : null;
 
-    $sales_check                    = $intOrNull($b['sales_check']                    ?? '');
-    $audit_check                    = $intOrNull($b['audit_check']                    ?? '');
+    $sales_check = $intOrNull($b['sales_check'] ?? '');
+    $audit_check = $intOrNull($b['audit_check'] ?? '');
     $provisional_financial_statement = $intOrNull($b['provisional_financial_statement'] ?? '');
-    $projected                      = $intOrNull($b['projected']                      ?? '');
-    $consulting                     = $intOrNull($b['consulting']                     ?? '');
-    $nta                            = $intOrNull($b['nta']                            ?? '');
-    $salary_certificate             = $intOrNull($b['salary_certificate']             ?? '');
-    $ca_certification               = $intOrNull($b['ca_certification']               ?? '');
-    $etds                           = $intOrNull($b['etds']                           ?? '');
-    $bill_issued                    = isset($b['bill_issued']) ? 1 : 0;
-    $remarks                        = $strOrNull($b['remarks'] ?? '');
+    $projected = $intOrNull($b['projected'] ?? '');
+    $consulting = $intOrNull($b['consulting'] ?? '');
+    $nta = $intOrNull($b['nta'] ?? '');
+    $salary_certificate = $intOrNull($b['salary_certificate'] ?? '');
+    $ca_certification = $intOrNull($b['ca_certification'] ?? '');
+    $etds = $intOrNull($b['etds'] ?? '');
+    $bill_issued = isset($b['bill_issued']) ? 1 : 0;
+    $od = ($b['od'] ?? '') !== '' ? (float) $b['od'] : null;
+    $term = ($b['term'] ?? '') !== '' ? (float) $b['term'] : null;
+    $interest_rate = ($b['interest_rate'] ?? '') !== '' ? (float) $b['interest_rate'] : null;
+    $remarks = $strOrNull($b['remarks'] ?? '');
 
     $sharedParams = [
         $task['company_id'],
@@ -771,6 +933,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking'])) {
         $salary_certificate,
         $ca_certification,
         $etds,
+        $od,
+        $term,
+        $interest_rate,
         $bill_issued,
         $remarks,
     ];
@@ -795,6 +960,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking'])) {
                 salary_certificate=?,
                 ca_certification=?,
                 etds=?,
+                od=?,
+                term=?,
+                interest_rate=?,
                 bill_issued=?,
                 remarks=?
             WHERE task_id=?
@@ -806,8 +974,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking'])) {
                 ecd, completion_date,
                 sales_check, audit_check, provisional_financial_statement, projected,
                 consulting, nta, salary_certificate, ca_certification, etds,
+                od, term, interest_rate,
                 bill_issued, remarks
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ")->execute(array_merge([$task['id']], $sharedParams));
     }
 
@@ -844,7 +1013,7 @@ foreach ($taskStatuses as $ts) {
     }
 }
 
-$deptColors = ['RETAIL' => '#f59e0b', 'TAX' => '#3b82f6', 'BANK' => '#10b981', 'CORP' => '#8b5cf6', 'FIN' => '#ef4444'];
+$deptColors = ['RETAIL' => '#f59e0b', 'TAX' => '#3b82f6', 'BANK' => '#10b981', 'CORP' => '#8b5cf6', 'IT' => '#6366f1', 'FIN' => '#ef4444'];
 $deptColor = $deptColors[$task['dept_code'] ?? ''] ?? '#9ca3af';
 $methodLabels = [
     'cash' => 'Cash',
@@ -1263,7 +1432,7 @@ include '../../includes/header.php';
                     <?php if ($detailTable): ?>
                         <div class="tv-card">
                             <?php
-                            $deptIcons = ['RETAIL' => 'fas fa-store', 'TAX' => 'fas fa-receipt', 'BANK' => 'fas fa-landmark', 'CORP' => 'fas fa-building', 'FIN' => 'fas fa-coins'];
+                            $deptIcons = ['RETAIL' => 'fas fa-store', 'TAX' => 'fas fa-receipt', 'BANK' => 'fas fa-landmark', 'IT' => 'fas fa-laptop-code', 'CORP' => 'fas fa-building', 'FIN' => 'fas fa-coins'];
                             $deptIcon = $deptIcons[$task['dept_code']] ?? 'fas fa-file-alt';
                             ?>
                             <div class="tv-card-head">
@@ -1410,6 +1579,22 @@ include '../../includes/header.php';
                                                     </div>
                                                 </div>
                                             </div>
+                                            <!-- OD / Term / Interest -->
+                                            <div class="fsect" style="margin-top:.75rem;">Loan Details</div>
+                                            <div class="info-grid wide mb-3">
+                                                <?php foreach ([
+                                                    'OD Amount (Rs. lakh)' => $detail['od'] !== null ? '<span class="money">Rs. ' . number_format($detail['od'], 2) . ' L</span>' : '—',
+                                                    'Term Loan (Rs. lakh)' => $detail['term'] !== null ? '<span class="money">Rs. ' . number_format($detail['term'], 2) . ' L</span>' : '—',
+                                                    'Interest Rate' => $detail['interest_rate'] !== null ? '<span style="font-weight:700;color:#3b82f6;">' . $detail['interest_rate'] . '%</span>' : '—',
+                                                    'Assigned Date' => ($detail['assigned_date'] ?? '') ? date('d M Y', strtotime($detail['assigned_date'])) : '—',
+                                                    'Fiscal Year' => htmlspecialchars($detail['fiscal_year'] ?? '—'),
+                                                ] as $l => $v): ?>
+                                                    <div>
+                                                        <div class="ig-label"><?= $l ?></div>
+                                                        <div class="ig-value"><?= $v ?></div>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
                                             <?php if ($detail['remarks'] ?? ''): ?>
                                                 <div class="mt-2">
                                                     <div class="ig-label">Remarks</div>
@@ -1534,6 +1719,58 @@ include '../../includes/header.php';
                                                     </div>
                                                 <?php endif; ?>
                                             </div><!-- end row -->
+
+                                            <?php /* ─────────── IT VIEW ─────────── */ ?>
+                                        <?php elseif ($task['dept_code'] === 'IT'): ?>
+                                            <?php
+                                            $severityColors = [
+                                                'Low' => ['#f0fdf4', '#16a34a'],
+                                                'Medium' => ['#fefce8', '#ca8a04'],
+                                                'High' => ['#fff7ed', '#ea580c'],
+                                                'Critical' => ['#fef2f2', '#dc2626'],
+                                            ];
+                                            $sev = $detail['severity'] ?? 'Medium';
+                                            [$sevBg, $sevCol] = $severityColors[$sev] ?? ['#f3f4f6', '#374151'];
+                                            ?>
+                                            <div class="info-grid wide mb-3">
+                                                <?php foreach ([
+                                                    'Token Number' => '<code style="background:#f3f4f6;padding:.2rem .5rem;border-radius:5px;">' . htmlspecialchars($detail['token_number'] ?? '—') . '</code>',
+                                                    'Issue Category' => '<span style="background:#eff6ff;color:#3b82f6;padding:.2rem .55rem;border-radius:6px;font-weight:600;font-size:.84rem;">' . htmlspecialchars($detail['issue_category'] ?? '—') . '</span>',
+                                                    'Severity' => '<span style="background:' . $sevBg . ';color:' . $sevCol . ';padding:.2rem .55rem;border-radius:6px;font-weight:700;font-size:.84rem;">' . $sev . '</span>',
+                                                    'Status' => ($detail['is_resolved'] ?? 0)
+                                                        ? '<span style="background:#f0fdf4;color:#16a34a;padding:.2rem .55rem;border-radius:6px;font-weight:700;">✓ Resolved</span>'
+                                                        : '<span style="background:#fef2f2;color:#dc2626;padding:.2rem .55rem;border-radius:6px;font-weight:700;">⏳ Open</span>',
+                                                    'Raised By' => htmlspecialchars($detail['token_raiser_name'] ?? '—'),
+                                                    'Department' => htmlspecialchars($detail['department_name'] ?? '—'),
+                                                    'Branch' => htmlspecialchars($detail['branch_name_it'] ?? '—'),
+                                                    'Assigned Staff' => htmlspecialchars($detail['assigned_staff_name'] ?? 'Unassigned'),
+                                                    'Reported Date' => ($detail['reported_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['reported_date'])) : '—',
+                                                    'Resolution Date' => ($detail['resolution_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['resolution_date'])) : '—',
+                                                ] as $l => $v): ?>
+                                                    <div>
+                                                        <div class="ig-label"><?= $l ?></div>
+                                                        <div class="ig-value"><?= $v ?></div>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                            <?php if ($detail['detailed_description'] ?? ''): ?>
+                                                <div class="mb-3">
+                                                    <div class="ig-label">Detailed Description</div>
+                                                    <div class="ig-value"
+                                                        style="background:#f9fafb;border:1px solid #f3f4f6;border-radius:8px;padding:.75rem;white-space:pre-line;">
+                                                        <?= htmlspecialchars($detail['detailed_description']) ?>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if ($detail['resolution'] ?? ''): ?>
+                                                <div>
+                                                    <div class="ig-label">Resolution</div>
+                                                    <div class="ig-value"
+                                                        style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:.75rem;white-space:pre-line;">
+                                                        <?= htmlspecialchars($detail['resolution']) ?>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
 
                                         <?php endif; /* dept code switch end */ ?>
 
@@ -1839,6 +2076,27 @@ include '../../includes/header.php';
                                                                 <label class="form-check-label" for="billIssued">Yes</label>
                                                             </div>
                                                         </div>
+                                                        <div class="col-md-4 col-6">
+                                                            <label class="flabel">OD Amount (Rs. lakh)</label>
+                                                            <input type="number" name="banking[od]"
+                                                                class="form-control form-control-sm"
+                                                                value="<?= htmlspecialchars($detail['od'] ?? '') ?>" step="0.01"
+                                                                min="0" placeholder="—">
+                                                        </div>
+                                                        <div class="col-md-4 col-6">
+                                                            <label class="flabel">Term Loan (Rs. lakh)</label>
+                                                            <input type="number" name="banking[term]"
+                                                                class="form-control form-control-sm"
+                                                                value="<?= htmlspecialchars($detail['term'] ?? '') ?>"
+                                                                step="0.01" min="0" placeholder="—">
+                                                        </div>
+                                                        <div class="col-md-4 col-6">
+                                                            <label class="flabel">Interest Rate (%)</label>
+                                                            <input type="number" name="banking[interest_rate]"
+                                                                class="form-control form-control-sm"
+                                                                value="<?= htmlspecialchars($detail['interest_rate'] ?? '') ?>"
+                                                                step="0.01" min="0" max="100" placeholder="—">
+                                                        </div>
                                                     </div>
                                                 </div>
                                                 <div class="col-12">
@@ -1852,6 +2110,165 @@ include '../../includes/header.php';
                                                 </div>
                                             </div>
                                         </form>
+                                        <?php /* ─────────── IT EDIT ─────────── */ ?>
+                                    <?php elseif ($task['dept_code'] === 'IT'): ?>
+                                        <?php if ($detail): ?>
+                                            <form method="POST">
+                                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                                <input type="hidden" name="save_it" value="1">
+                                                <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="flabel">Issue Category <span class="req-star">*</span></label>
+                                                        <select name="it[issue_category]" class="form-select form-select-sm"
+                                                            required>
+                                                            <?php foreach ([
+                                                                'Task System',
+                                                                'Computer or Laptop Issue',
+                                                                'Printer Issue',
+                                                                'Other Software Issue',
+                                                                'Client Software Issue',
+                                                                'Network/Internet Issue',
+                                                                'Email Issue',
+                                                                'Hardware Issue',
+                                                                'Other'
+                                                            ] as $cat): ?>
+                                                                <option value="<?= $cat ?>" <?= ($detail['issue_category'] ?? '') === $cat ? 'selected' : '' ?>>
+                                                                    <?= htmlspecialchars($cat) ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="flabel">Severity</label>
+                                                        <select name="it[severity]" class="form-select form-select-sm">
+                                                            <?php foreach (['Low', 'Medium', 'High', 'Critical'] as $s): ?>
+                                                                <option value="<?= $s ?>" <?= ($detail['severity'] ?? 'Medium') === $s ? 'selected' : '' ?>><?= $s ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="flabel">Assign IT Staff</label>
+                                                        <select name="it[assigned_it_staff]" id="it_staff_select"
+                                                            class="form-select form-select-sm">
+                                                            <option value="">-- Unassigned --</option>
+                                                            <?php foreach ($allStaff as $s): ?>
+                                                                <option value="<?= $s['id'] ?>" <?= ($detail['assigned_it_staff'] ?? '') == $s['id'] ? 'selected' : '' ?>>
+                                                                    <?= htmlspecialchars($s['full_name']) ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="flabel">Detailed Description</label>
+                                                        <textarea name="it[detailed_description]"
+                                                            class="form-control form-control-sm"
+                                                            rows="3"><?= htmlspecialchars($detail['detailed_description'] ?? '') ?></textarea>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="flabel">Resolution</label>
+                                                        <textarea name="it[resolution]" class="form-control form-control-sm"
+                                                            rows="3"><?= htmlspecialchars($detail['resolution'] ?? '') ?></textarea>
+                                                    </div>
+                                                    <div class="col-md-5">
+                                                        <label class="flabel">Resolution Date &amp; Time</label>
+                                                        <input type="datetime-local" name="it[resolution_date]"
+                                                            class="form-control form-control-sm"
+                                                            value="<?= htmlspecialchars($detail['resolution_date'] ? date('Y-m-d\TH:i', strtotime($detail['resolution_date'])) : '') ?>">
+                                                    </div>
+                                                    <div class="col-md-4 d-flex align-items-end pb-1">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" name="it[is_resolved]"
+                                                                value="1" id="itResolved" <?= ($detail['is_resolved'] ?? 0) ? 'checked' : '' ?>>
+                                                            <label class="form-check-label" for="itResolved"
+                                                                style="font-size:.85rem;">
+                                                                Mark as Resolved (sets task to Done)
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="flabel">Token Number</label>
+                                                        <div class="ro-field">
+                                                            <code><?= htmlspecialchars($detail['token_number'] ?? '—') ?></code>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <button type="submit" class="btn btn-gold btn-sm"><i
+                                                                class="fas fa-save me-1"></i>Save IT Details</button>
+                                                    </div>
+                                                </div>
+                                            </form>
+                                        <?php else: ?>
+                                            <form method="POST">
+                                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                                <input type="hidden" name="save_it" value="1">
+                                                <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="flabel">Issue Category <span class="req-star">*</span></label>
+                                                        <select name="it[issue_category]" class="form-select form-select-sm"
+                                                            required>
+                                                            <?php foreach ([
+                                                                'Task System',
+                                                                'Computer or Laptop Issue',
+                                                                'Printer Issue',
+                                                                'Other Software Issue',
+                                                                'Client Software Issue',
+                                                                'Network/Internet Issue',
+                                                                'Email Issue',
+                                                                'Hardware Issue',
+                                                                'Other'
+                                                            ] as $cat): ?>
+                                                                <option value="<?= $cat ?>"><?= htmlspecialchars($cat) ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="flabel">Severity</label>
+                                                        <select name="it[severity]" class="form-select form-select-sm">
+                                                            <?php foreach (['Low', 'Medium', 'High', 'Critical'] as $s): ?>
+                                                                <option value="<?= $s ?>" <?= $s === 'Medium' ? 'selected' : '' ?>>
+                                                                    <?= $s ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="flabel">Assign IT Staff</label>
+                                                        <select name="it[assigned_it_staff]" id="it_staff_select_new"
+                                                            class="form-select form-select-sm">
+                                                            <option value="">-- Unassigned --</option>
+                                                            <?php foreach ($allStaff as $s): ?>
+                                                                <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['full_name']) ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="flabel">Detailed Description</label>
+                                                        <textarea name="it[detailed_description]"
+                                                            class="form-control form-control-sm" rows="3"
+                                                            placeholder="Describe the issue in detail…"><?= htmlspecialchars($task['description'] ?? '') ?></textarea>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="flabel">Resolution</label>
+                                                        <textarea name="it[resolution]" class="form-control form-control-sm"
+                                                            rows="3" placeholder="Describe how the issue was resolved…"></textarea>
+                                                    </div>
+                                                    <div class="col-md-4 d-flex align-items-end pb-1">
+                                                        <div class="form-check form-switch">
+                                                            <input class="form-check-input" type="checkbox" name="it[is_resolved]"
+                                                                value="1" id="itResolvedNew">
+                                                            <label class="form-check-label" for="itResolvedNew"
+                                                                style="font-size:.85rem;">
+                                                                Mark as Resolved (sets task to Done)
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <button type="submit" class="btn btn-gold btn-sm"><i
+                                                                class="fas fa-save me-1"></i>Save IT Details</button>
+                                                    </div>
+                                                </div>
+                                            </form>
+                                        <?php endif; ?>
 
                                         <?php /* ─────────── FINANCE EDIT ─────────── */ ?>
                                     <?php elseif ($task['dept_code'] === 'FIN'): ?>
@@ -2789,5 +3206,7 @@ include '../../includes/header.php';
         if (total) total.addEventListener('input', calcDue);
         if (paid) paid.addEventListener('input', calcDue);
     });
+    if (document.getElementById('it_staff_select'))
+        new TomSelect('#it_staff_select', { placeholder: 'Search staff…', allowEmptyOption: true, maxOptions: 500 });
 </script>
 <?php include '../../includes/footer.php'; ?>

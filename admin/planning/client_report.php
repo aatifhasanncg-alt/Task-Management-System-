@@ -1,15 +1,7 @@
 <?php
 /**
  * admin/planning/client_report.php
- * Client-wise Performance Report (Admin / Executive / Superadmin)
- *
- * Features:
- *  • Shows every client visited/planned by any in-scope staff
- *  • Includes staff with no department (multi-dept / unassigned)
- *  • Per-client: hours, visits, staff involved, planned vs actual, efficiency
- *  • Client detail drilldown: day-wise visit log per client
- *  • Top-clients horizontal bar chart
- *  • Notification badge via plan_notifications table
+ * Client-wise Performance Report (Admin view)
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
@@ -59,7 +51,7 @@ if ($__isConsultingPrimary) {
 // ── Month / filter ────────────────────────────────────────────
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthEnd = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');
@@ -276,6 +268,20 @@ $stmt = $db->prepare("
 
         GROUP_CONCAT(DISTINCT u.full_name ORDER BY u.full_name SEPARATOR ', ') AS field_staff_names,
 
+        /* ── Combined unique staff (dedup across field + office) ── */
+        /* ── Office-only staff not already in field_staff (avoids derived-table outer ref) ── */
+        (SELECT COUNT(DISTINCT owl3.user_id)
+         FROM office_work_logs owl3
+         WHERE owl3.client_id = c.id
+           AND owl3.user_id   IN ({$activeInList})
+           AND owl3.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}'
+           AND owl3.user_id NOT IN (
+               SELECT wl3.user_id FROM work_logs wl3
+               WHERE wl3.client_id = c.id
+                 AND wl3.month_year = '{$month}'
+                 AND wl3.user_id IN ({$activeInList})
+           ))                                      AS office_only_staff,
+
         /* ── Plan ── */
         (SELECT COALESCE(SUM(wpe.planned_hours),0)
          FROM work_plan_entries wpe
@@ -326,6 +332,17 @@ $stmt = $db->prepare("
         0 AS field_staff,
         COUNT(DISTINCT owl.user_id) AS office_staff,
         NULL AS field_staff_names,
+        (SELECT COUNT(DISTINCT owl3.user_id)
+         FROM office_work_logs owl3
+         WHERE owl3.client_id = c.id
+           AND owl3.user_id   IN ({$activeInList})
+           AND owl3.log_date  BETWEEN '{$monthStart}' AND '{$monthEnd}'
+           AND owl3.user_id NOT IN (
+               SELECT wl3.user_id FROM work_logs wl3
+               WHERE wl3.client_id = c.id
+                 AND wl3.month_year = '{$month}'
+                 AND wl3.user_id IN ({$activeInList})
+           ))                                      AS office_only_staff,
         (SELECT COALESCE(SUM(wpe.planned_hours),0)
          FROM work_plan_entries wpe
          JOIN work_plans wp ON wp.id=wpe.plan_id
@@ -903,10 +920,9 @@ include '../../includes/header.php';
                             </thead>
                             <tbody>
                                 <?php foreach ($clientPerf as $i => $cp):
-                                    $actualCombined = (float) $cp['field_hours'] + (float) $cp['office_hours'];
-                                    [$cEff, $cEffRaw, $cEffCol] = safeEffCR($actualCombined, (float) $cp['planned_hours']);
+                                    [$cEff, $cEffRaw, $cEffCol] = safeEffCR((float) $cp['field_hours'], (float) $cp['planned_hours']);
                                     [$vcEff, $vcEffRaw, $vcEffCol] = visitEffCR((int) $cp['matched_visits'], (int) $cp['planned_entries']);
-                                    $combinedStaff = $cp['field_staff'] + $cp['office_staff']; // rough; dedup not needed for display
+                                    $combinedStaff = (int) ($cp['field_staff'] ?? 0) + (int) ($cp['office_only_staff'] ?? 0);
                                     $lastActivity = max($cp['last_field'] ?? '', $cp['last_office'] ?? '');
                                     ?>
                                     <tr <?= $filterClientId == $cp['client_id'] ? 'style="background:#eff6ff;"' : '' ?>>
@@ -1112,8 +1128,8 @@ include '../../includes/header.php';
             data: {
                 labels: <?= json_encode($topClientNames) ?>,
                 datasets: [
-                    { label: 'Field Hours', data: <?= json_encode($topClientField) ?>, backgroundColor: 'rgba(59,130,246,.65)', borderColor: '#3b82f6', borderWidth: 1.5, borderRadius: 4, stack: 'hours' },
-                    { label: 'Office Hours', data: <?= json_encode($topClientOffice) ?>, backgroundColor: 'rgba(16,185,129,.55)', borderColor: '#10b981', borderWidth: 1.5, borderRadius: 4, stack: 'hours' },
+                    { label: 'Field Hours', data: <?= json_encode($topClientField) ?>, backgroundColor: 'rgba(59,130,246,.65)', borderColor: '#3b82f6', borderWidth: 1.5, borderRadius: 4, stack: 'field' },
+                    { label: 'Office Hours', data: <?= json_encode($topClientOffice) ?>, backgroundColor: 'rgba(16,185,129,.55)', borderColor: '#10b981', borderWidth: 1.5, borderRadius: 4, stack: 'office' },
                     { label: 'Field Visits', data: <?= json_encode($topClientVisits) ?>, backgroundColor: 'rgba(201,168,76,.4)', borderColor: '#c9a84c', borderWidth: 1.5, borderRadius: 4, stack: 'visits' }
                 ]
             },

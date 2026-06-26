@@ -15,7 +15,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireExecutive();
 
 $db       = getDB();
 $user     = currentUser();
@@ -26,7 +26,7 @@ $deptId   = (int)$user['department_id'];
 // ── Month / Filters ───────────────────────────────────────────
 $now        = new DateTime();
 $month      = $_GET['month']    ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthEnd   = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');

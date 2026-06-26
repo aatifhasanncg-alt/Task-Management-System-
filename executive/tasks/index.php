@@ -54,8 +54,7 @@ if ($filterCompany) {
 }
 if ($filterOverdue) {
     $where[] = 't.due_date < CURDATE()';
-    $where[] = 'ts.status_name != ?';
-    $params[] = 'Done';
+    $where[] = 'ts.counts_as_done = 0';
 }
 if ($filterDateFrom) {
     $where[] = 't.created_at >= ?';
@@ -93,6 +92,7 @@ $pages = (int) ceil($total / $perPage);
 $taskSt = $db->prepare("
     SELECT t.*,
            ts.status_name  AS status,
+           ts.counts_as_done,
            d.dept_name, d.dept_code, d.color,
            b.branch_name,
            c.company_name,
@@ -133,14 +133,9 @@ foreach ($statuses as $s) {
             $tabParams = array_values($tabParams);
         }
     }
-    // Also strip the overdue Done-exclusion so counts aren't distorted
+    // Also strip the overdue exclusion so counts aren't distorted
     if ($filterOverdue) {
-        $tabWhere = str_replace("ts.status_name != ?", '1=1', $tabWhere);
-        $doneIdx = array_search('Done', $tabParams);
-        if ($doneIdx !== false) {
-            unset($tabParams[$doneIdx]);
-            $tabParams = array_values($tabParams);
-        }
+        $tabWhere = str_replace('ts.counts_as_done = 0', '1=1', $tabWhere);
     }
 
     $cntSt = $db->prepare("
@@ -183,7 +178,7 @@ include '../../includes/header.php';
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
-        <?php require_once '../../includes/topbar.php'; ?>
+        <?php include '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
 
             <div class="page-hero">
@@ -375,7 +370,7 @@ include '../../includes/header.php';
                                 $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
                                 $overdue = $t['due_date']
                                     && strtotime($t['due_date']) < time()
-                                    && !in_array($t['status'], ['Done', 'Next Year']);
+                                    && !$t['counts_as_done'];
                                 ?>
                                 <tr <?= $overdue ? 'style="background:#fef8f8;"' : '' ?>>
                                     <td>

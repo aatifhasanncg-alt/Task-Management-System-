@@ -10,7 +10,7 @@ if (!empty($_SESSION['user_id'])) {
 
     // dept_code may be missing from old sessions — fetch fresh if needed
     if (!isset($_SESSION['dept_code']) && !empty($_SESSION['dept_id'])) {
-        $db   = getDB();
+        $db = getDB();
         $stmt = $db->prepare("SELECT dept_code FROM departments WHERE id = ?");
         $stmt->execute([$_SESSION['dept_id']]);
         $_SESSION['dept_code'] = $stmt->fetchColumn() ?: '';
@@ -20,6 +20,8 @@ if (!empty($_SESSION['user_id'])) {
 
     if ($deptCode === 'CON' && $role === 'admin') {
         header('Location: ' . APP_URL . 'admin/planning/index.php');
+    } elseif ($deptCode === 'CON' && $role === 'manager') {
+        header('Location: ' . APP_URL . 'manager/planning/index.php');
     } elseif ($deptCode === 'CON' && $role === 'staff') {
         header('Location: ' . APP_URL . 'staff/planning/index.php');
     } else {
@@ -33,7 +35,7 @@ $selectedRole = $_GET['role'] ?? ($_POST['role'] ?? 'staff');
 $selectedBranch = $_GET['branch_id'] ?? ($_POST['branch_id'] ?? '');
 
 // Sanitise role value
-if (!in_array($selectedRole, ['executive', 'admin', 'staff'])) {
+if (!in_array($selectedRole, ['executive', 'admin', 'manager', 'staff'])) {
     $selectedRole = 'staff';
 }
 
@@ -56,7 +58,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $role = $_POST['role'] ?? 'staff';
     $branchId = (int) ($_POST['branch_id'] ?? 0);
 
-    if (!in_array($role, ['executive', 'admin', 'staff']))
+    if (!in_array($role, ['executive', 'admin', 'manager', 'staff']))
         $role = 'staff';
 
     // Validation
@@ -64,37 +66,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Username or email is required.';
     if (!$password)
         $errors[] = 'Password is required.';
-    if ($role !== 'executive' && !$branchId)
+    if (!in_array($role, ['executive', 'manager']) && !$branchId)
         $errors[] = 'Please select your branch.';
 
     if (!$errors) {
-        /*
-         * Schema note:
-         *   users.role_id  →  FK to roles(id)
-         *   roles.role_name = 'executive' | 'admin' | 'staff'
-         * So we JOIN roles and filter by role_name, NOT a direct column.
-         */
-        $st = $db->prepare("
-            SELECT u.*, r.role_name AS role, b.branch_name
-            FROM   users    u
-            JOIN   roles    r ON r.id  = u.role_id
-            LEFT JOIN branches b ON b.id = u.branch_id
-            WHERE  (u.username = ? OR u.email = ?)
-              AND  r.role_name  = ?
-              AND  u.is_active  = 1
-            LIMIT  1
-        ");
-        $st->execute([$username, $username, $role]);
-        $user = $st->fetch(PDO::FETCH_ASSOC);
+    $st = $db->prepare("
+        SELECT u.*, r.role_name AS role, b.branch_name
+        FROM   users    u
+        JOIN   roles    r ON r.id  = u.role_id
+        LEFT JOIN branches b ON b.id = u.branch_id
+        WHERE  (u.username = ? OR u.email = ?)
+          AND  r.role_name  = ?
+          AND  u.is_active  = 1
+        LIMIT  1
+    ");
+    $st->execute([$username, $username, $role]);
+    $user = $st->fetch(PDO::FETCH_ASSOC);
 
-        if (!$user || !password_verify($password, $user['password'])) {
-            $errors[] = 'Invalid credentials. Please check your username, password, and role.';
+    // ── Lockout check — happens BEFORE password_verify ──────────────
+    // Important: check lockout even if $user is null is unnecessary (no account to lock),
+    // but if $user exists, the lock must be checked before we touch password_verify.
+    if ($user && !empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
+        $minutesLeft = ceil((strtotime($user['locked_until']) - time()) / 60);
+        $errors[] = "This account is temporarily locked due to multiple failed login attempts. Please try again in {$minutesLeft} minute(s).";
 
-        } elseif ($role !== 'executive' && (int) $user['branch_id'] !== $branchId) {
-            $errors[] = 'You are not assigned to the selected branch.';
+    } elseif (!$user || !password_verify($password, $user['password'])) {
 
+        // ── Record failed attempt only if the account exists ───────
+        // (Prevents wasting a write on usernames that don't exist at all,
+        //  and avoids leaking which usernames are real via timing/behavior.)
+        if ($user) {
+            $newAttempts = (int) $user['failed_attempts'] + 1;
+
+            if ($newAttempts >= LOGIN_MAX_ATTEMPTS) {
+                $lockUntil = (new DateTime())->modify('+' . LOGIN_LOCKOUT_MINUTES . ' minutes')->format('Y-m-d H:i:s');
+
+                $db->prepare("
+                    UPDATE users
+                    SET failed_attempts = ?, locked_until = ?
+                    WHERE id = ?
+                ")->execute([$newAttempts, $lockUntil, $user['id']]);
+
+                logActivity('Login locked', 'auth', "user_id={$user['id']}, attempts={$newAttempts}");
+
+                $errors[] = "Too many failed attempts. This account has been locked for " . LOGIN_LOCKOUT_MINUTES . " minutes.";
+            } else {
+                $db->prepare("
+                    UPDATE users
+                    SET failed_attempts = ?
+                    WHERE id = ?
+                ")->execute([$newAttempts, $user['id']]);
+
+                $remaining = LOGIN_MAX_ATTEMPTS - $newAttempts;
+                $errors[] = "Invalid credentials. Please check your username, password, and role. ({$remaining} attempt(s) remaining)";
+            }
         } else {
-            // ── 2FA pending ──────────────────────────────────────────────
+            $errors[] = 'Invalid credentials. Please check your username, password, and role.';
+        }
+
+    } elseif (!in_array($role, ['executive', 'manager']) && (int) $user['branch_id'] !== $branchId) {
+        $errors[] = 'You are not assigned to the selected branch.';
+
+    } else {
+        // ── Successful login — reset attempt counter ───────────────
+        $db->prepare("
+            UPDATE users
+            SET failed_attempts = 0, locked_until = NULL
+            WHERE id = ?
+        ")->execute([$user['id']]);
+
+            // ── Force password change takes priority over everything ───
+            if (!empty($user['must_change_password'])) {
+                session_regenerate_id(true);
+                $_SESSION['force_pw_change_user'] = $user['id'];
+                $_SESSION['force_pw_change_role'] = $user['role'];
+                header('Location: /auth/force_password_change.php');
+                exit;
+            }
+
             // ── 2FA pending ──────────────────────────────────────────────
             if ($user['ga_enabled'] && $user['ga_secret']) {
 
@@ -145,6 +194,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     WHERE id = ?
                 ")->execute([$loginIp, $user['id']]);
 
+            // Force password change check — BEFORE any session is written
+            if (!empty($user['must_change_password'])) {
+                session_regenerate_id(true);
+                $_SESSION['force_pw_change_user'] = $user['id'];
+                $_SESSION['force_pw_change_role'] = $user['role'];
+                header('Location: /auth/force_password_change.php');
+                exit;
+            }
+
             session_regenerate_id(true);
 
             $_SESSION['user'] = [
@@ -155,9 +213,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'role_id' => $user['role_id'] ?? 0
             ];
 
-            // Other session variables
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['full_name'] = $user['full_name'];
+            // ... rest of session vars
             $_SESSION['role'] = $user['role'];
             $_SESSION['branch_id'] = $user['branch_id'];
             $_SESSION['branch_name'] = $user['branch_name'] ?? '';
@@ -175,8 +233,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['dept_code'] = $deptRow['dept_code'] ?? '';
             }
 
-            // Admin access
-            if ($role === 'admin') {
+            // Admin / Manager access
+            if (in_array($role, ['admin', 'manager'])) {
                 $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id = ?");
                 $dSt->execute([$user['id']]);
                 $_SESSION['allowed_depts'] = array_column($dSt->fetchAll(PDO::FETCH_ASSOC), 'department_id');
@@ -187,18 +245,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // Log & redirect
-            // Log & redirect
             logActivity('Login', 'auth', "role={$role}, branch_id={$user['branch_id']}");
 
             // ✅ ADD THIS — persistent login token
             setRememberToken($user['id'], true);
 
             // Check if user belongs to Consulting department (dept_code = 'CORP' or id — adjust to your dept)
-           // Route based on whether a planning folder exists for this dept
+            // Route based on whether a planning folder exists for this dept
             $deptCode = $_SESSION['dept_code'] ?? '';
 
             if ($deptCode === 'CON' && $role === 'admin') {
                 header('Location: ' . APP_URL . 'admin/planning/index.php');
+            } elseif ($deptCode === 'CON' && $role === 'manager') {
+                header('Location: ' . APP_URL . 'manager/planning/index.php');
             } elseif ($deptCode === 'CON' && $role === 'staff') {
                 header('Location: ' . APP_URL . 'staff/planning/index.php');
             } else {
@@ -600,12 +659,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
                     <div class="role-card">
+                        <div class="role-card-icon"><i class="fas fa-sitemap"></i></div>
+                        <div>
+                            <div class="role-card-title">Manager</div>
+                            <div class="role-card-desc">Department &amp; cross-branch oversight</div>
+                        </div>
+                    </div>
+                    <div class="role-card">
                         <div class="role-card-icon"><i class="fas fa-user-shield"></i></div>
                         <div>
                             <div class="role-card-title">Admin</div>
                             <div class="role-card-desc">Branch &amp; department management</div>
                         </div>
                     </div>
+
                     <div class="role-card">
                         <div class="role-card-icon"><i class="fas fa-user"></i></div>
                         <div>
@@ -642,10 +709,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     onclick="setRole('executive',this)">
                     <i class="fas fa-crown me-1"></i>Executive
                 </button>
+                <button type="button" class="role-tab <?= $selectedRole === 'manager' ? 'active' : '' ?>"
+                    onclick="setRole('manager',this)">
+                    <i class="fas fa-sitemap me-1"></i>Manager
+                </button>
                 <button type="button" class="role-tab <?= $selectedRole === 'admin' ? 'active' : '' ?>"
                     onclick="setRole('admin',this)">
                     <i class="fas fa-user-shield me-1"></i>Admin
                 </button>
+
                 <button type="button" class="role-tab <?= $selectedRole === 'staff' ? 'active' : '' ?>"
                     onclick="setRole('staff',this)">
                     <i class="fas fa-user me-1"></i>Staff
@@ -695,12 +767,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Branch — hidden for executive -->
                 <div class="form-group" id="branchGroup"
-                    style="<?= $selectedRole === 'executive' ? 'display:none;' : '' ?>">
+                    style="<?= in_array($selectedRole, ['executive', 'manager']) ? 'display:none;' : '' ?>">
                     <label class="form-label" for="branchSelect">Branch</label>
                     <div class="input-wrap">
                         <i class="fas fa-map-marker-alt input-icon"></i>
                         <select id="branchSelect" name="branch_id" class="form-input form-select"
-                            <?= $selectedRole === 'executive' ? 'disabled' : '' ?>>
+                            <?= in_array($selectedRole, ['executive', 'manager']) ? 'disabled' : '' ?>>
                             <option value="">— Select Your Branch —</option>
                             <?php foreach ($branches as $b): ?>
                                 <option value="<?= $b['id'] ?>" <?= ((string) $selectedBranch === (string) $b['id']) ? 'selected' : '' ?>>
@@ -736,7 +808,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const bg = document.getElementById('branchGroup');
             const sel = document.getElementById('branchSelect');
 
-            if (role === 'executive') {
+            if (role === 'executive' || role === 'manager') {
                 bg.style.display = 'none';
                 sel.disabled = true;
                 sel.value = '';      // clear so no branch_id submitted accidentally

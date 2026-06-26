@@ -43,8 +43,9 @@ function requireRole(string ...$roles): void {
 }
 
 function requireExecutive(): void { requireRole('executive'); }
-function requireAdmin(): void     { requireRole('admin', 'executive'); }
-function requireAnyRole(): void   { requireRole('executive', 'admin', 'staff'); }
+function requireAdmin(): void     { requireRole('admin'); }
+function requireManager(): void   { requireRole('manager'); }
+function requireAnyRole(): void   { requireRole('executive', 'admin', 'manager', 'staff'); }
 
 function getClientIp(): string {
     $ip = $_SERVER['HTTP_X_FORWARDED_FOR']
@@ -92,26 +93,56 @@ function currentUser(): array {
 
 function isExecutive(): bool { return ($_SESSION['role'] ?? '') === 'executive'; }
 function isAdmin(): bool     { return ($_SESSION['role'] ?? '') === 'admin'; }
+function isManager(): bool   { return ($_SESSION['role'] ?? '') === 'manager'; }
 function isStaff(): bool     { return ($_SESSION['role'] ?? '') === 'staff'; }
 
 function isCoreAdmin(): bool {
     $user = currentUser();
     if (!$user['id']) return false;
     try {
-        $db   = getDB();
-        $stmt = $db->prepare("
-            SELECT d.dept_code FROM users u
-            LEFT JOIN departments d ON d.id = u.department_id
-            WHERE u.id = ?
-        ");
-        $stmt->execute([$user['id']]);
-        $row = $stmt->fetch();
-        return ($row['dept_code'] ?? '') === 'CORE';
+        return hasAdminDeptAccess(getDB(), (int) $user['id']);
     } catch (Exception $e) {
         return false;
     }
 }
+/**
+ * Determine if a user has branch-wide admin access (CORE or ADM department),
+ * checking BOTH their primary department (users.department_id) and any
+ * department assigned via user_department_assignments (UDA).
+ *
+ * @param PDO $db
+ * @param int|null $userId Defaults to the logged-in user.
+ * @return bool
+ */
+function hasAdminDeptAccess(PDO $db, ?int $userId = null): bool
+{
+    $userId = $userId ?? (int) ($_SESSION['user_id'] ?? 0);
+    if (!$userId) {
+        return false;
+    }
 
+    $stmt = $db->prepare("
+        SELECT d.dept_code
+        FROM users u
+        LEFT JOIN departments d ON d.id = u.department_id
+        WHERE u.id = ?
+    ");
+    $stmt->execute([$userId]);
+    $primaryCode = $stmt->fetchColumn() ?: '';
+
+    $udaStmt = $db->prepare("
+        SELECT d.dept_code
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id = ?
+    ");
+    $udaStmt->execute([$userId]);
+    $udaCodes = array_column($udaStmt->fetchAll(PDO::FETCH_ASSOC), 'dept_code');
+
+    $allCodes = array_merge([$primaryCode], $udaCodes);
+
+    return !empty(array_intersect(['CORE', 'ADM'], $allCodes));
+}
 // ── PASSWORD CHANGE REMINDER ──────────────────────────────────
 // Returns true if user hasn't changed password in 30+ days
 
@@ -159,10 +190,8 @@ function shouldPromptPasswordChange(): bool {
 // ── ADMIN SCOPE CHECKS ────────────────────────────────────────
 function requireExecutiveOrBM(): void
 {
-    // Allow if user is executive role
     if (isExecutive()) return;
- 
-    // Allow if user is admin AND belongs to CORE dept (Branch Manager)
+
     if (function_exists('isAdmin') && isAdmin()) {
         $db   = getDB();
         $user = currentUser();

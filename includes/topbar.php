@@ -37,8 +37,6 @@ try {
 } catch (Exception $e) {
 }
 
-// Password change reminder
-$__showPwReminder = function_exists('shouldPromptPasswordChange') && shouldPromptPasswordChange();
 
 // Type → icon + colour
 $__typeMap = [
@@ -91,7 +89,8 @@ if (($__viewerRole === 'staff') || ($__viewerRole === 'admin') || ($__viewerRole
 if (!function_exists('__rewriteLink')) {
     function __rewriteLink(string $link, string $role): string
     {
-        if (empty($link)) return $link;
+        if (empty($link))
+            return $link;
 
         // Rewrite task links
         $link = preg_replace(
@@ -112,41 +111,7 @@ if (!function_exists('__rewriteLink')) {
 }
 ?>
 
-<!-- ── Password change reminder modal ── -->
-<?php if ($__showPwReminder): ?>
-    <div id="pw-reminder-modal" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;
-            display:flex;align-items:center;justify-content:center;">
-        <div style="background:#fff;border-radius:16px;padding:2rem;max-width:420px;width:90%;
-                box-shadow:0 20px 60px rgba(0,0,0,.25);text-align:center;">
-            <div style="width:56px;height:56px;background:#fef3c7;border-radius:50%;
-                    display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;">
-                <i class="fas fa-key" style="color:#f59e0b;font-size:1.3rem;"></i>
-            </div>
-            <h5 style="font-size:1rem;font-weight:700;color:#111827;margin-bottom:.4rem;">
-                Time to update your password
-            </h5>
-            <p style="font-size:.85rem;color:#6b7280;margin-bottom:1.25rem;line-height:1.5;">
-                Your password hasn't been changed in over 30 days.
-                Keeping it fresh helps protect your account.
-            </p>
-            <div class="d-flex gap-2 justify-content-center">
-                <?php
-                $baseUrl = rtrim(APP_URL, '/');
-                $rolePath = $__u['role_name'] === 'admin' ? 'admin' : ($__u['role_name'] === 'staff' ? 'staff' : ($__u['role_name'] ?? 'staff'));
-                ?>
-                <a href="<?= $baseUrl ?>/<?= $rolePath ?>/profile/index.php" style="background:#c9a84c;color:#fff;border:none;border-radius:8px;
-                      padding:.55rem 1.25rem;font-size:.85rem;font-weight:600;
-                      text-decoration:none;display:inline-block;">
-                    <i class="fas fa-key me-1"></i>Change Now
-                </a>
-                <button onclick="dismissPwReminder()" style="background:#f3f4f6;color:#6b7280;border:none;border-radius:8px;
-                           padding:.55rem 1.25rem;font-size:.85rem;font-weight:600;cursor:pointer;">
-                    Remind me later
-                </button>
-            </div>
-        </div>
-    </div>
-<?php endif; ?>
+
 
 <!-- ── Topbar ── -->
 <div class="topbar">
@@ -265,6 +230,25 @@ if (!function_exists('__rewriteLink')) {
             </div>
         </div><!-- end notif dropdown -->
 
+        <!-- Technical support dropdown -->
+        <div class="dropdown">
+            <button class="topbar-icon-btn" data-bs-toggle="dropdown" title="Technical Support">
+                <i class="fas fa-headset"></i>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end" style="min-width:220px;">
+                <li>
+                    <a class="dropdown-item" href="<?= APP_URL ?>/includes/technical_support.php">
+                        <i class="fas fa-exclamation-circle me-2 text-warning"></i>Report an Issue
+                    </a>
+                </li>
+                <li>
+                    <a class="dropdown-item" href="<?= APP_URL ?>/includes/technical_support_reports.php">
+                        <i class="fas fa-list-alt me-2 text-warning"></i>My Issue Reports
+                    </a>
+                </li>
+            </ul>
+        </div>
+
         <!-- User dropdown -->
         <div class="dropdown">
             <button class="topbar-user-btn" data-bs-toggle="dropdown">
@@ -298,6 +282,7 @@ if (!function_exists('__rewriteLink')) {
                 $rolePath = match ($role) {
                     'admin' => 'admin',
                     'executive' => 'executive',
+                    'manager' => 'manager',
                     default => 'staff'
                 };
 
@@ -324,11 +309,11 @@ if (!function_exists('__rewriteLink')) {
                     $__hasUdaCon = false;
                     try {
                         $stmtU = $db->prepare("
-            SELECT COUNT(*) 
-            FROM user_department_assignments uda
-            INNER JOIN departments d ON d.id = uda.department_id
-            WHERE uda.user_id = ? AND d.dept_code = 'CON'
-        ");
+                            SELECT COUNT(*) 
+                            FROM user_department_assignments uda
+                            INNER JOIN departments d ON d.id = uda.department_id
+                            WHERE uda.user_id = ? AND d.dept_code = 'CON'
+                        ");
                         $stmtU->execute([$__uid]);
                         $__hasUdaCon = (int) $stmtU->fetchColumn() > 0;
                     } catch (Exception $e) {
@@ -431,24 +416,22 @@ box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
                         <div style="display:flex;gap:.5rem;">
                             <?php
                             // Build correct plan view URL based on viewer role
-                            $planViewPath = match($__viewerRole) {
-                                'admin'     => APP_URL . '/admin/planning/plan_view.php',
-                                'staff'     => APP_URL . '/staff/planning/plan_view.php',
+                            $planViewPath = match ($__viewerRole) {
+                                'admin' => APP_URL . '/admin/planning/plan_view.php',
+                                'staff' => APP_URL . '/staff/planning/plan_view.php',
                             };
                             $planViewUrl = !empty($pr['plan_id'])
-                                ? $planViewPath . '?id=' . (int)$pr['plan_id']
+                                ? $planViewPath . '?id=' . (int) $pr['plan_id']
                                 : (!empty($planLink) ? $planLink : '');
                             ?>
                             <?php if (!empty($planViewUrl)): ?>
-                                <a href="<?= htmlspecialchars($planViewUrl) ?>"
-                                    style="background:#3b82f6;color:#fff;padding:.35rem .85rem;
+                                <a href="<?= htmlspecialchars($planViewUrl) ?>" style="background:#3b82f6;color:#fff;padding:.35rem .85rem;
                                             border-radius:6px;text-decoration:none;font-size:.8rem;font-weight:600;">
                                     <i class="fas fa-calendar-week me-1"></i>Open Plan
                                 </a>
                             <?php endif; ?>
 
-                            <button onclick="markPlanRead(<?= $pr['id'] ?>, this)"
-                                    style="background:#f3f4f6;border:none;color:#6b7280;
+                            <button onclick="markPlanRead(<?= $pr['id'] ?>, this)" style="background:#f3f4f6;border:none;color:#6b7280;
                                             padding:.35rem .85rem;border-radius:6px;
                                             cursor:pointer;font-size:.8rem;font-weight:600;">
                                 <i class="fas fa-check me-1"></i>Mark Read
@@ -575,19 +558,7 @@ box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;">
         });
     })();
 
-    // ── Password reminder dismiss ─────────────────────────────────
-    function dismissPwReminder() {
-        const modal = document.getElementById('pw-reminder-modal');
-        if (modal) modal.style.display = 'none';
 
-        fetch("<?= APP_URL ?>/ajax/snooze_pw_reminder.php", {
-            method: "POST",
-            credentials: "same-origin"
-        })
-            .then(res => res.json())
-            .then(data => console.log(data))
-            .catch(err => console.error(err));
-    }
     function closeFollowupModal() {
         const m = document.getElementById('followup-modal');
         if (m) m.style.display = 'none';

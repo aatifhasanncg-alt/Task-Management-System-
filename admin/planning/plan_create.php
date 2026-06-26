@@ -8,13 +8,14 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
+require_once '../../config/plan_notify.php';
 requireAnyRole();
 
 $db      = getDB();
 $user    = currentUser();
 $uid     = (int)$user['id'];
 $currentRole = $_SESSION['role'] ?? ($user['role'] ?? '');
-$isAdmin = in_array($currentRole, ['admin', 'executive']);
+$isAdmin = in_array($currentRole, ['admin', 'executive', 'manager'], true);
 
 
 $deptId   = (int)$user['department_id'];
@@ -47,21 +48,26 @@ if ($__isConsPrimary) {
 // ── Month ──────────────────────────────────────────────────────
 $now        = new DateTime();
 $month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
 // ── Build week blocks for month ───────────────────────────────
 $weeks = [];
-$first = (clone $monthDate)->modify('first day of this month');
 $last  = (clone $monthDate)->modify('last day of this month');
-$cur   = clone $first;
-$wn    = 1;
-while ($cur <= $last && $wn <= 5) {
-    $ws  = clone $cur;
-    $dow = (int)$cur->format('w');           // 0=Sun
-    $daysToSat = (6 - $dow + 7) % 7 ?: 6;
-    $we  = (clone $cur)->modify("+{$daysToSat} days");
+
+// Rewind to the Sunday that starts the week containing the 1st
+$first = clone $monthDate;
+$dowFirst = (int)$first->format('w'); // 0=Sun
+if ($dowFirst !== 0) {
+    $first->modify('-' . $dowFirst . ' days');
+}
+
+$cur = clone $first;
+$wn  = 1;
+while ($cur <= $last && $wn <= 6) {
+    $ws = clone $cur;
+    $we = (clone $cur)->modify('+6 days'); // Sun → Sat
     if ($we > $last) $we = clone $last;
     $weeks[] = [
         'week_number'     => $wn,
@@ -377,37 +383,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
             } // ── end if (!empty($newEntries)) ──────────────────────────
-            $planId = $planId ?? 0; // fallback if only injections happened
-            notify(
-                    $planUserId,
-                    'Work Plan Created for You',
-                    $user['full_name'] . ' created a work plan for you — Week ' . $weekNum . ', ' . $monthLabel,
-                    'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
-                    true,
-                    [
-                        'template' => 'work_plan',
-                        'week' => $weekNum,
-                        'month' => $monthLabel
-                    ]
-                );
-            logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
-            // ── Auto-approve if admin creates plan for themselves ──────────
-            if ($isAdmin && $planUserId === $uid) {
-                $db->prepare("
-                    UPDATE work_plans 
-                    SET status='approved', approved_by=?, approved_at=NOW()
-                    WHERE id=?
-                ")->execute([$uid, $planId]);
+            // REPLACE WITH:
+            $planId = $planId ?? 0;
+            
+            // ── Auto-submit when creating for self ──────────────────────────
+            if ($planUserId === $uid) {
+                $db->prepare("UPDATE work_plans SET status='submitted', updated_at=NOW() WHERE id=?")
+                   ->execute([$planId]);
             }
 
             $db->commit();
-
             logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
+
+            // Notify approvers
+            $context = ($planUserId === $uid) ? 'created_for_self' : 'created_for_staff';
+            notifyPlanApprovers(
+                $db, $planId, $planUserId, $uid,
+                $user['full_name'] ?? ('User #' . $uid),
+                $weekNum, $monthLabel, $month, $context
+            );
+
             setFlash('success', 'Work plan created successfully!');
             header('Location: ' . APP_URL . '/admin/planning/plan_list.php?month=' . $month);
             exit;
-        
 
         } catch (Exception $e) {
             $db->rollBack();
@@ -433,7 +431,7 @@ include '../../includes/header.php';
 </style>
 
 <div class="app-wrapper">
-    <?php include $isAdmin ? '../../includes/sidebar_admin.php' : '../../includes/sidebar_staff.php'; ?>
+    <?php include '../../includes/sidebar_admin.php' ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">

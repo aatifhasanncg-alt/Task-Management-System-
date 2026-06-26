@@ -6,6 +6,13 @@ requireAdmin();
 
 $db = getDB();
 $user = currentUser();
+$__isCoreOnly = false;
+if (!empty($__user['id'])) {
+    $db = getDB();
+    $stmt = $db->prepare("SELECT d.dept_code FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ?");
+    $stmt->execute([$__user['id']]);
+    $__isCoreOnly = ($stmt->fetchColumn() ?: '') === 'CORE';
+}
 $deptId = (int) $user['department_id'];
 $pageTitle = 'Companies';
 
@@ -247,7 +254,7 @@ include '../../includes/header.php';
                                                 title="View Company">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <?php if (isCoreAdmin()): ?>
+                                            <?php if ($__isCoreOnly): ?>
                                                 <!-- Workflow -->
                                                 <a href="../reports/company_workflow.php?company_id=<?= $co['id'] ?>"
                                                     class="btn btn-sm btn-outline-warning" title="View Workflow">

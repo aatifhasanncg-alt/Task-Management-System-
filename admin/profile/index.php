@@ -285,14 +285,7 @@ include '../../includes/header.php';
 
                             <div class="mt-3">
                                 <?php
-                                // Display Branch Manager or Branch Admin only if the department is "Core Admin"
-                                if ($profile['dept_name'] === 'Core Admin') {
-                                    // You can define who is the branch manager or admin based on your logic, e.g., fetching branch manager details
-                                    $roleDisplay = 'Branch Manager';  // For simplicity, we display "Branch Manager" for Core Admin department
-                                } else {
-                                    // Default role for other departments
                                     $roleDisplay = $profile['role_name'] ?? 'Admin';
-                                }
                                 ?>
                                 <span
                                     style="background:#fef3c7;color:#92400e;font-size:.72rem;padding:.25rem .75rem;border-radius:99px;font-weight:600;text-transform:uppercase;">

@@ -64,7 +64,7 @@ if ($filterDept) {
     $filterParams[] = $filterDept;
 }
 if (isset($_GET['overdue'])) {
-    $filterWhere[] = "t.due_date < CURDATE() AND ts.status_name != 'Done'";
+    $filterWhere[] = "t.due_date < CURDATE() AND ts.counts_as_done = 0";
 }
 if ($search) {
     $filterWhere[] = '(t.title LIKE ? OR t.task_number LIKE ? OR c.company_name LIKE ?)';
@@ -89,6 +89,7 @@ $pages = (int) ceil($total / $perPage);
 $taskStmt = $db->prepare("
     SELECT t.*,
            ts.status_name          AS status,
+           ts.counts_as_done,
            d.dept_name, d.color    AS dept_color,
            c.company_name,
            b.branch_name,
@@ -164,7 +165,7 @@ $ovSt = $db->prepare("
     JOIN task_status ts ON ts.id = t.status_id
     WHERE t.is_active = 1
       AND t.due_date < CURDATE()
-      AND ts.status_name != 'Done'
+      AND ts.counts_as_done = 0
       AND t.id IN ({$scopeSub})
 ");
 $ovSt->execute([]);
@@ -421,7 +422,7 @@ include '../../includes/header.php';
 
                             <?php foreach ($taskList as $t):
                                 $today = date('Y-m-d');
-                                $isOverdue = $t['due_date'] && $t['due_date'] < $today && $t['status'] !== 'Done';
+                                $isOverdue = $t['due_date'] && $t['due_date'] < $today && !$t['counts_as_done'];
                                 $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status']));
                                 $pColor = $pColors[$t['priority']] ?? '#9ca3af';
                                 $isXfer = (bool) $t['is_transferred'];

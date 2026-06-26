@@ -121,13 +121,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notifMsg .= " has been assigned to you";
             if ($dueDate) $notifMsg .= " · Due " . date('M j, Y', strtotime($dueDate));
             $notifMsg .= ".";
+            $role = strtolower($assigneeTo);
 
+            $rolePathMap = [
+                'admin'     => 'admin',
+                'executive' => 'admin',
+                'manager'   => 'manager',
+                'staff'     => 'staff',
+            ];
+
+            $basePath = $rolePathMap[$role] ?? 'staff';
+
+            $taskUrl = APP_URL . '/' . $basePath . '/tasks/view.php?id=' . $taskId;
             notify(
                 $assignedTo,
                 "New Task: {$title}",
                 $notifMsg,
                 'task',
-                APP_URL . '/staff/tasks/view.php?id=' . $taskId,
+                $taskUrl,
                 true,
                 [
                     'template'     => 'task_assigned',
@@ -386,30 +397,31 @@ include '../../includes/header.php';
         function onDeptChange() { loadStaff(); loadDeptFields(); }
 
         function loadStaff() {
-            const b = document.getElementById('branch_id').value;
-            const d = document.getElementById('dept_id').value;
-            if (!b && !d) return;
+    const b = document.getElementById('branch_id').value;
+    const d = document.getElementById('dept_id').value;
+    if (!b || !d) return;   // require BOTH now, since executive file needs both
 
-            fetch(`<?= APP_URL ?>/ajax/get_staff_by_admin.php?branch_id=${b}&dept_id=${d}`)
-                .then(r => r.json())
-                .then(data => {
-                    // Destroy existing Tom Select if any
-                    if (tomStaff) { tomStaff.destroy(); tomStaff = null; }
+    fetch(`<?= APP_URL ?>/ajax/get_staff_by_executive.php?branch_id=${b}&dept_id=${d}`)
+        .then(r => r.json())
+        .then(data => {
+            if (tomStaff) { tomStaff.destroy(); tomStaff = null; }
 
-                    const s = document.getElementById('assigned_to_sel');
-                    s.innerHTML = '<option value="">-- Select Staff --</option>';
-                    data.forEach(u => {
-                        s.innerHTML += `<option value="${u.id}">${u.full_name}${u.employee_id ? ' (' + u.employee_id + ')' : ''}</option>`;
-                    });
+            const s = document.getElementById('assigned_to_sel');
+            s.innerHTML = '<option value="">-- Select Staff --</option>';
+            data.forEach(u => {
+                let label = `${u.full_name}${u.employee_id ? ' (' + u.employee_id + ')' : ''}`;
+                if (u.branch_name) label += ` — ${u.branch_name}`;
+                if (u.dept_code)   label += ` (${u.dept_code})`;
+                s.innerHTML += `<option value="${u.id}">${label}</option>`;
+            });
 
-                    // Reinitialize Tom Select after options loaded
-                    tomStaff = new TomSelect('#assigned_to_sel', {
-                        placeholder: 'Search by name...',
-                        allowEmptyOption: true,
-                        maxOptions: 200,
-                    });
-                });
-        }
+            tomStaff = new TomSelect('#assigned_to_sel', {
+                placeholder: 'Search by name...',
+                allowEmptyOption: true,
+                maxOptions: 200,
+            });
+        });
+}
 
         function loadDeptFields() {
             const sel = document.getElementById('dept_id');

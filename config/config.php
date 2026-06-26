@@ -1,15 +1,18 @@
 <?php
 // config/config.php — App-wide constants
 require_once __DIR__ . '/notify.php';
+require_once __DIR__ . '/../secrets.php';
 date_default_timezone_set('Asia/Kathmandu');
-define('APP_NAME',    'MISPro');
+define('APP_NAME',    'TaskHub');
 define('ORG_NAME',    'ASK Global Advisory Pvt. Ltd.');
 define('ORG_TAGLINE', 'At ASK business problems end, solutions begin');
-define('ORG_EMAIL',   'askglobaladvisory@gmail.com');
+define('ORG_EMAIL',   'askglobaladvisorydemo@gmail.com');
 define('APP_URL',     'http://localhost/mis/');
 define('APP_VERSION', '1.0.0');
 
-
+// ── Login security ──────────────────────────────────────────
+define('LOGIN_MAX_ATTEMPTS', 5);
+define('LOGIN_LOCKOUT_MINUTES', 15);
 // Auto-include fiscal year helper — available everywhere after config.php loads
 // No need to require it individually in any page.
 require_once __DIR__ . '/helper.php';
@@ -36,16 +39,13 @@ define('DEPT_DETAIL_TABLES', [
     'BANK'   => 'task_banking',
     'FIN'    => 'task_finance',
     'CORP'   => 'task_corporate',
+    'IT'     => 'task_it',
 ]);
 
 // ── Email / SMTP ──────────────────────────────────────────────
-define('MAIL_FROM',      'askglobaladvisory@gmail.com');
-define('MAIL_FROM_NAME', 'ASK Global Advisory MIS');
-define('SMTP_HOST',      'smtp.gmail.com');
-define('SMTP_PORT',      587);
-define('SMTP_USER',      'smtpdjango134@gmail.com');
-define('SMTP_PASS',      'znqc rnrj rmod yqrv');  // 16-char app password
-define('SMTP_SECURE',    'tls');
+define('MAIL_FROM',      'askglobaladvisorydemo@gmail.com');
+define('MAIL_FROM_NAME', 'ASK Global Advisory TaskHub');
+
 // Cross-department assignment permissions
 // 'from_dept_code' => ['allowed_to_assign_dept_codes']
 // config.php

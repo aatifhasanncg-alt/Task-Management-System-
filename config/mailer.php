@@ -186,7 +186,7 @@ function emailWorkPlanStatus(
 
     // Colour scheme per status
     if ($status === 'approved') {
-        $subject      = "[TaskHub] Work Plan Approved — Week {$week}";
+        $subject      = "[TaskHub] Work Plan Approved - Week {$week}";
         $accentColor  = '#1D9E75';
         $statusBg     = '#E1F5EE';
         $statusTxt    = '#0F6E56';
@@ -194,7 +194,7 @@ function emailWorkPlanStatus(
         $actionLabel  = 'View Approved Plan';
         $remarksLabel = 'Approval Note';
     } else {
-        $subject      = "[TaskHub] Work Plan Rejected — Week {$week}";
+        $subject      = "[TaskHub] Work Plan Rejected - Week {$week}";
         $accentColor  = '#E24B4A';
         $statusBg     = '#FCEBEB';
         $statusTxt    = '#A32D2D';

@@ -4,7 +4,7 @@ require_once '../../config/config.php';
 require_once '../../config/session.php';
 
 if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied. Only Core Admin executives can edit staff.');
+    setFlash('error', 'Access denied. Only Administrator can edit staff.');
     header('Location: index.php');
     exit;
 }
@@ -39,7 +39,7 @@ $allAdmins = $db->query("
     SELECT u.id, u.full_name, u.employee_id, b.branch_name FROM users u
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN branches b ON b.id = u.branch_id
-    WHERE r.role_name IN('admin','executive') AND u.is_active=1
+    WHERE r.role_name IN('admin','executive','manager') AND u.is_active=1
     ORDER BY u.full_name
 ")->fetchAll();
 
@@ -123,51 +123,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Role change — update role_id directly + call role manager
+        // Role change — delegate entirely to role_manager (handles employee_id, history, token clearing)
         if ($oldRoleId !== $roleId) {
-
-            // 1. Capture old employee_id before changing anything
-            $oldEmpCode = $staff['employee_id'] ?? null;
-
-            // 2. Fetch new role name to build new employee code
-            $newRoleStmt = $db->prepare("SELECT role_name FROM roles WHERE id = ?");
-            $newRoleStmt->execute([$roleId]);
-            $newRoleData = $newRoleStmt->fetch();
-            $rolePrefix = strtoupper(substr($newRoleData['role_name'] ?? 'STF', 0, 3));
-            $newEmpCode = $rolePrefix . '-' . str_pad($staffId, 4, '0', STR_PAD_LEFT);
-
-            // 3. Update role_id AND employee_id together in users table
-            $db->prepare("
-            UPDATE users SET role_id = ?, employee_id = ? WHERE id = ?
-        ")->execute([$roleId, $newEmpCode, $staffId]);
-
-            // 4. Log to user_role_history (all columns including old/new employee_id)
-            $db->prepare("
-            INSERT INTO user_role_history 
-                (user_id, old_role_id, new_role_id,
-                old_employee_id, new_employee_id,
-                old_branch_id, new_branch_id,
-                changed_by, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ")->execute([
-                        $staffId,
-                        $oldRoleId,
-                        $roleId,
-                        $oldEmpCode,
-                        $newEmpCode,
-                        $staff['branch_id'],
-                        $branchId,
-                        $_SESSION['user_id'],
-                        'Updated via staff edit form'
-                    ]);
-
-            // 5. Call role_manager for permission resets (if it does additional work)
             require_once '../../config/role_manager.php';
-            changeUserRole(
+            $roleChangeResult = changeUserRole(
                 $staffId,
                 $roleId,
                 $branchId,
                 'Updated via staff edit form'
             );
+
+            if (!$roleChangeResult['success']) {
+                setFlash('error', 'Role change failed: ' . $roleChangeResult['error']);
+                header("Location: edit.php?id={$staffId}");
+                exit;
+            }
         }
 
         setFlash('success', 'Staff member updated successfully.');

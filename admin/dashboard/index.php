@@ -18,14 +18,12 @@ $stmt = $db->prepare("
     WHERE u.id = ?
 ");
 $stmt->execute([$userSession['id']]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
+$dashUser = $stmt->fetch(PDO::FETCH_ASSOC);   // renamed — topbar.php can't touch this
 
 $pageTitle = 'Admin Dashboard';
-$adminBranchId = (int) ($user['branch_id'] ?? 0);
-$adminDeptId = (int) ($user['department_id'] ?? 0);
+$adminBranchId = (int) ($dashUser['branch_id'] ?? 0);
+$adminDeptId = (int) ($dashUser['department_id'] ?? 0);
 $adminUserId = (int) $userSession['id'];
-$isBranchManager = (($user['dept_code'] ?? '') === 'CORE');
-
 // ── Fetch all statuses ────────────────────────────────────────────────────────
 $allStatuses = $db->query("
     SELECT id, status_name, color, bg_color, icon
@@ -35,25 +33,11 @@ $allStatuses = $db->query("
 ")->fetchAll();
 
 // ── 1. Status counts ──────────────────────────────────────────────────────────
-if ($isBranchManager) {
-    // BM: all tasks in their branch (branch-wide scope is primary)
-    $byStatusStmt = $db->prepare("
-        SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
-        FROM task_status ts
-        LEFT JOIN tasks t
-            ON  t.status_id = ts.id
-            AND t.is_active = 1
-            AND t.branch_id = ?
-        WHERE ts.status_name != 'Corporate Team'
-        GROUP BY ts.id, ts.status_name
-    ");
-    $byStatusStmt->execute([$adminBranchId]);
-} else {
-    // Dept admin: tasks in their branch + dept (+ transfers + created/assigned)
+// Dept admin: tasks in their branch + dept (+ transfers + created/assigned)
 // ── Primary dept status counts (for dept admins only) ─────────────────────
-    $primaryDeptStatus = [];
-    if (!$isBranchManager && $adminDeptId) {
-        $primStQ = $db->prepare("
+$primaryDeptStatus = [];
+if ($adminDeptId) {
+    $primStQ = $db->prepare("
         SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
         FROM task_status ts
         LEFT JOIN tasks t
@@ -64,10 +48,10 @@ if ($isBranchManager) {
         WHERE ts.status_name != 'Corporate Team'
         GROUP BY ts.id, ts.status_name
     ");
-        $primStQ->execute([$adminBranchId, $adminDeptId]);
-        $primaryDeptStatus = array_column($primStQ->fetchAll(), 'cnt', 'status_name');
-    }
-    $byStatusStmt = $db->prepare("
+    $primStQ->execute([$adminBranchId, $adminDeptId]);
+    $primaryDeptStatus = array_column($primStQ->fetchAll(), 'cnt', 'status_name');
+}
+$byStatusStmt = $db->prepare("
     SELECT ts.status_name, COUNT(DISTINCT t.id) AS cnt
     FROM task_status ts
     LEFT JOIN tasks t
@@ -93,8 +77,8 @@ if ($isBranchManager) {
     WHERE ts.status_name != 'Corporate Team'
     GROUP BY ts.id, ts.status_name
 ");
-    $byStatusStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId, $adminDeptId, $adminUserId, $adminUserId, $adminDeptId, $adminDeptId]);
-}
+$byStatusStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId, $adminDeptId, $adminUserId, $adminUserId, $adminDeptId, $adminDeptId]);
+
 $byStatus = array_column($byStatusStmt->fetchAll(), 'cnt', 'status_name');
 $total = array_sum($byStatus);
 
@@ -138,93 +122,40 @@ foreach ($adminUdaDepts as $udaDept) {
 }
 
 // ── 2. Staff count ────────────────────────────────────────────────────────────
-if ($isBranchManager) {
-    // Need dept join for the filter
-    $scStmt = $db->prepare("
-        SELECT COUNT(DISTINCT u.id) FROM users u
-        JOIN roles r ON r.id = u.role_id
-        LEFT JOIN departments d ON d.id = u.department_id
-        WHERE r.role_name = 'staff' AND u.is_active = 1
-          AND u.branch_id = ?
-          AND (d.dept_code IS NULL OR d.dept_code NOT IN ('CON','CORE'))
-    ");
-    $scStmt->execute([$adminBranchId]);
-} else {
-    $scStmt = $db->prepare("
-        SELECT COUNT(DISTINCT u.id)
-        FROM users u
-        JOIN roles r ON r.id = u.role_id
-        WHERE r.role_name = 'staff'
-          AND u.is_active = 1
-          AND u.branch_id = ?
-          AND (
-              u.department_id = ?
-              OR EXISTS (
-                  SELECT 1 FROM user_department_assignments uda
-                  WHERE uda.user_id       = u.id
-                    AND uda.department_id = ?
-              )
-          )
-    ");
-    $scStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId]);
 
-}
+$scStmt = $db->prepare("
+    SELECT COUNT(DISTINCT u.id)
+    FROM users u
+    JOIN roles r ON r.id = u.role_id
+    WHERE r.role_name = 'staff'
+        AND u.is_active = 1
+        AND u.branch_id = ?
+        AND (
+            u.department_id = ?
+            OR EXISTS (
+                SELECT 1 FROM user_department_assignments uda
+                WHERE uda.user_id       = u.id
+                AND uda.department_id = ?
+            )
+        )
+");
+$scStmt->execute([$adminBranchId, $adminDeptId, $adminDeptId]);
+
 $staffCount = (int) $scStmt->fetchColumn();
 
 // ── 3. Transfer activity (only relevant for dept admins) ──────────────────────
 $transferIn = $transferOut = 0;
-if (!$isBranchManager) {
-    try {
-        $tIn = $db->prepare("
-            SELECT COUNT(DISTINCT tw.task_id)
-            FROM task_workflow tw
-            JOIN tasks t ON t.id = tw.task_id AND t.is_active=1 AND t.branch_id=?
-            WHERE tw.action='transferred_dept' AND tw.to_dept_id=?
-        ");
-        $tIn->execute([$adminBranchId, $adminDeptId]);
-        $transferIn = (int) $tIn->fetchColumn();
 
-        $tOut = $db->prepare("
-            SELECT COUNT(DISTINCT tw.task_id)
-            FROM task_workflow tw
-            JOIN tasks t ON t.id = tw.task_id AND t.is_active=1 AND t.branch_id=?
-            WHERE tw.action='transferred_dept' AND tw.from_dept_id=?
-        ");
-        $tOut->execute([$adminBranchId, $adminDeptId]);
-        $transferOut = (int) $tOut->fetchColumn();
-    } catch (Exception $e) {
-    }
-}
 // ── Active dept for Staff Work Distribution ───────────────────────────────────
 $allUdaDeptIds = array_column($adminUdaDepts, 'department_id');
 
 // Both BM and dept admin can filter dist by dept tab
 // Both BM and dept admin can filter dist by dept tab
 $distDeptFilter = (int) ($_GET['dist_dept'] ?? 0);
-if (!$isBranchManager && $distDeptFilter === 0) {
+if ($distDeptFilter === 0) {
     $distDeptFilter = $adminDeptId;
 }
 
-// For BM: also load their UDA depts so tabs show departments they are assigned to
-$bmUdaDepts = [];
-if ($isBranchManager) {
-    $bmUdaQ = $db->prepare("
-        SELECT uda.department_id, d.dept_name, d.color, d.dept_code
-        FROM user_department_assignments uda
-        JOIN departments d ON d.id = uda.department_id
-        WHERE uda.user_id = ? AND d.dept_code NOT IN ('CON','CORE') AND d.is_active = 1
-    ");
-    $bmUdaQ->execute([$adminUserId]);
-    $bmUdaDepts = $bmUdaQ->fetchAll(PDO::FETCH_ASSOC);
-}
-
-$validDistDeptIds = $isBranchManager
-    ? array_merge([0], array_column($bmUdaDepts, 'department_id'))
-    : array_merge([$adminDeptId], $allUdaDeptIds);
-
-if ($distDeptFilter !== 0 && !in_array($distDeptFilter, $validDistDeptIds)) {
-    $distDeptFilter = $isBranchManager ? 0 : $adminDeptId;
-}
 // ── 4. Staff performance distribution ────────────────────────────────────────
 $statusCols = '';
 foreach ($allStatuses as $st) {
@@ -233,15 +164,10 @@ foreach ($allStatuses as $st) {
     $statusCols .= "SUM(CASE WHEN ut.status_name = {$quoted} THEN 1 ELSE 0 END) AS `{$safe}`,\n        ";
 }
 
-// For BM: no dept filter. For dept admin: scope to selected dept + branch.
 // We use placeholder literals directly since this goes inside a subquery.
-if ($isBranchManager) {
-    $unionDeptFilter = $distDeptFilter > 0
-        ? "t.branch_id = {$adminBranchId} AND t.department_id = {$distDeptFilter}"
-        : "t.branch_id = {$adminBranchId} AND t.department_id NOT IN (SELECT id FROM departments WHERE dept_code IN ('CON','CORE'))";
-} else {
-    $unionDeptFilter = "t.branch_id = {$adminBranchId} AND t.department_id = {$distDeptFilter}";
-}
+
+$unionDeptFilter = "t.branch_id = {$adminBranchId} AND t.department_id = {$distDeptFilter}";
+
 $unionSql = "
     SELECT t.id AS task_id, t.assigned_to AS user_id, ts.status_name, 0 AS via_transfer
     FROM tasks t
@@ -259,55 +185,8 @@ $unionSql = "
       AND tw.to_user_id IS NOT NULL
 ";
 
-if ($isBranchManager) {
-    // BM: all staff in their branch, any dept — include staff linked via UDA too
-    $deptDistStmt = $db->prepare("
-        SELECT
-            u.full_name,
-            u.employee_id,
-            u.id AS user_id,
-            d.dept_name,
-            COUNT(DISTINCT ut.task_id)  AS task_count,
-            COALESCE(SUM(ut.via_transfer), 0)     AS transferred_in_count,
-            COALESCE(SUM(1 - ut.via_transfer), 0) AS original_count,
-            {$statusCols}
-            CASE (ROW_NUMBER() OVER (ORDER BY COUNT(DISTINCT ut.task_id) DESC) % 8)
-                WHEN 0 THEN '#f59e0b' WHEN 1 THEN '#3b82f6' WHEN 2 THEN '#10b981'
-                WHEN 3 THEN '#8b5cf6' WHEN 4 THEN '#ef4444' WHEN 5 THEN '#ec4899'
-                WHEN 6 THEN '#06b6d4' WHEN 7 THEN '#f97316'
-            END AS color
-        FROM users u
-        LEFT JOIN roles r        ON r.id  = u.role_id
-        LEFT JOIN departments d  ON d.id  = u.department_id
-        LEFT JOIN ({$unionSql}) AS ut ON ut.user_id = u.id
-        WHERE r.role_name = 'staff'
-          AND u.is_active  = 1
-          AND u.branch_id  = ?
-          AND (
-              d.dept_code IS NULL
-              OR d.dept_code NOT IN ('CON','CORE')
-              OR EXISTS (
-                  SELECT 1 FROM user_department_assignments uda_chk
-                  JOIN departments d2 ON d2.id = uda_chk.department_id
-                  WHERE uda_chk.user_id = u.id
-                    AND d2.dept_code NOT IN ('CON','CORE')
-              )
-          )
-          AND (
-              ? = 0
-              OR u.department_id = ?
-              OR EXISTS (
-                  SELECT 1 FROM user_department_assignments uda2
-                  WHERE uda2.user_id = u.id AND uda2.department_id = ?
-              )
-          )
-        GROUP BY u.id, u.full_name, u.employee_id, d.dept_name
-        ORDER BY task_count DESC
-    ");
-    $deptDistStmt->execute([$adminBranchId, $distDeptFilter, $distDeptFilter, $distDeptFilter]);
-} else {
-    // Dept admin: all staff in selected dept (primary OR UDA), show even with 0 tasks
-    $deptDistStmt = $db->prepare("
+// Dept admin: all staff in selected dept (primary OR UDA), show even with 0 tasks
+$deptDistStmt = $db->prepare("
         SELECT
             u.full_name,
             u.employee_id,
@@ -340,55 +219,28 @@ if ($isBranchManager) {
         GROUP BY u.id, u.full_name, u.employee_id, d.dept_name
         ORDER BY task_count DESC
     ");
-    $deptDistStmt->execute([$adminBranchId, $distDeptFilter, $distDeptFilter]);
-}
+$deptDistStmt->execute([$adminBranchId, $distDeptFilter, $distDeptFilter]);
+
 $deptDist = $deptDistStmt->fetchAll();
 
 // Label for the active dist dept
 $distDeptLabel = '';
 $distDeptColor = '#c9a84c';
-if (!$isBranchManager) {
-    foreach (array_merge(
-        [['department_id' => $adminDeptId, 'dept_name' => $user['dept_name'], 'color' => $user['dept_color'] ?? '#c9a84c']],
-        $adminUdaDepts
-    ) as $dd) {
-        if ((int) $dd['department_id'] === $distDeptFilter) {
-            $distDeptLabel = $dd['dept_name'];
-            $distDeptColor = $dd['color'] ?: '#c9a84c';
-            break;
-        }
-    }
-}
 
 // ── 5. Recent tasks ───────────────────────────────────────────────────────────
-if ($isBranchManager) {
-    $recentStmt = $db->prepare("
-        SELECT t.*, ts.status_name AS status,
-               d.dept_name, d.color, c.company_name,
-               u.full_name AS assigned_to_name
-        FROM tasks t
-        LEFT JOIN departments d  ON d.id  = t.department_id
-        LEFT JOIN companies   c  ON c.id  = t.company_id
-        LEFT JOIN users       u  ON u.id  = t.assigned_to
-        LEFT JOIN task_status ts ON ts.id = t.status_id
-        WHERE t.is_active = 1 AND t.branch_id = ?
-        ORDER BY t.created_at DESC
-        LIMIT 8
-    ");
-    $recentStmt->execute([$adminBranchId]);
-} else {
-    // Collect all dept IDs this admin can see (primary + UDA)
-    $allAdminDeptIds = array_unique(array_merge(
-        [$adminDeptId],
-        array_column($adminUdaDepts, 'department_id')
-    ));
-    $recentDeptFilter = (int) ($_GET['recent_dept'] ?? $adminDeptId);
-    // Fallback: if selected dept not in allowed list, use primary
-    if (!in_array($recentDeptFilter, $allAdminDeptIds)) {
-        $recentDeptFilter = $adminDeptId;
-    }
 
-    $recentStmt = $db->prepare("
+// Collect all dept IDs this admin can see (primary + UDA)
+$allAdminDeptIds = array_unique(array_merge(
+    [$adminDeptId],
+    array_column($adminUdaDepts, 'department_id')
+));
+$recentDeptFilter = (int) ($_GET['recent_dept'] ?? $adminDeptId);
+// Fallback: if selected dept not in allowed list, use primary
+if (!in_array($recentDeptFilter, $allAdminDeptIds)) {
+    $recentDeptFilter = $adminDeptId;
+}
+
+$recentStmt = $db->prepare("
         SELECT t.*, ts.status_name AS status,
                d.dept_name, d.color, c.company_name,
                u.full_name AS assigned_to_name
@@ -403,8 +255,8 @@ if ($isBranchManager) {
         ORDER BY t.created_at DESC
         LIMIT 8
     ");
-    $recentStmt->execute([$adminBranchId, $recentDeptFilter]);
-}
+$recentStmt->execute([$adminBranchId, $recentDeptFilter]);
+
 $recentTasks = $recentStmt->fetchAll();
 
 // Build dept label map for recent tasks tabs (dept admin only)
@@ -421,6 +273,17 @@ if (!empty($allAdminAccessDeptIds)) {
 
 include '../../includes/header.php';
 ?>
+<style>
+    .page-hero {
+        position: relative;
+        z-index: 10;
+        overflow: visible;
+    }
+
+    .dropdown-menu.show {
+        z-index: 1055 !important;
+    }
+</style>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
@@ -432,32 +295,82 @@ include '../../includes/header.php';
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
                     <div>
                         <div class="sidebar-user-role">
-                            <?php if ($isBranchManager): ?>
-                                <i class="fas fa-code-branch me-1"></i>Branch Manager
-                            <?php else: ?>
-                                <i
-                                    class="fas fa-user-shield me-1"></i><?= htmlspecialchars($user['role_name'] ?? 'Admin') ?>
-                            <?php endif; ?>
+                            <i
+                                class="fas fa-user-shield me-1"></i><?= htmlspecialchars($user['role_name'] ?? 'Admin') ?>
                         </div>
-                        <h4>Hello, <?= htmlspecialchars($user['full_name'] ?? $userSession['username']) ?></h4>
+
+                        <h4>Hello, <?= htmlspecialchars($dashUser['full_name'] ?? $userSession['username']) ?></h4>
                         <p style="margin:0;">
-                            <?= htmlspecialchars($user['branch_name'] ?? '') ?>
-                            <?php if ($isBranchManager): ?>
-                                &mdash; <span style="color:#c9a84c;">Branch Manager · All Departments</span>
-                            <?php elseif (!empty($user['dept_name'])): ?>
-                                &mdash; <?= htmlspecialchars($user['dept_name']) ?>
-                            <?php endif; ?>
+                            <?= htmlspecialchars($dashUser['branch_name'] ?? '') ?>
+                            &mdash; <?= htmlspecialchars($dashUser['dept_name'] ?? '') ?>
                         </p>
                     </div>
-                    <a href="<?= APP_URL ?>/admin/tasks/assign.php"
-                        class="btn-gold btn d-flex align-items-center gap-2">
-                        <i class="fas fa-plus"></i> Assign Task
-                    </a>
+
+                    <div class="d-flex align-items-center gap-2"> <!-- tighter wrapper, same as manager dashboard -->
+                        <a href="<?= APP_URL ?>/admin/tasks/assign.php"
+                            class="btn-gold btn d-flex align-items-center gap-2">
+                            <i class="fas fa-plus"></i> Assign Task
+                        </a>
+
+                        <?php if (isCoreAdmin()): ?>
+                            <div class="dropdown">
+                                <button class="btn btn-outline-light btn-sm dropdown-toggle d-flex align-items-center gap-2"
+                                    type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                    <i class="fas fa-cog"></i>
+                                    <span>Settings</span>
+                                </button>
+
+                                <ul class="dropdown-menu dropdown-menu-end shadow p-2" style="min-width:220px;">
+                                    <li class="px-3 py-2 text-muted small fw-semibold">
+                                        <i class="fas fa-sliders-h me-1"></i> System Configuration
+                                    </li>
+                                    <li>
+                                        <hr class="dropdown-divider">
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/admin/settings/task_status.php">
+                                            <i class="fas fa-tasks text-primary"></i>
+                                            <span>Task Status</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/admin/settings/corporate_grades.php">
+                                            <i class="fas fa-chart-line text-success"></i>
+                                            <span>Corporate Grades</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/admin/settings/fiscal_year.php">
+                                            <i class="fas fa-calendar-alt text-warning"></i>
+                                            <span>Fiscal Year</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/admin/settings/industry.php">
+                                            <i class="fas fa-building text-secondary"></i>
+                                            <span>Industry</span>
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item d-flex align-items-center gap-2"
+                                            href="<?= APP_URL ?>/admin/settings/type.php">
+                                            <i class="fas fa-tags text-info"></i>
+                                            <span>Company Type</span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
 
             <!-- Transfer activity banner (dept admin only) -->
-            <?php if (!$isBranchManager && ($transferIn > 0 || $transferOut > 0)): ?>
+            <?php if ($transferIn > 0 || $transferOut > 0): ?>
                 <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;
                     padding:.65rem 1rem;margin-bottom:1rem;
                     display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
@@ -513,13 +426,15 @@ include '../../includes/header.php';
                         <div class="stat-card-icon" style="background:#fdf2f8;color:#ec4899;">
                             <i class="fas fa-users"></i>
                         </div>
-                        <div class="stat-card-value" style="color:#ec4899;"><?= number_format($staffCount) ?></div>
-                        <div class="stat-card-label"><?= $isBranchManager ? 'Branch Staff' : 'My Staff' ?></div>
+                        <div class="stat-card-value" style="color:#ec4899;">
+                            <?= number_format($staffCount) ?>
+                        </div>
+                        <div class="stat-card-label">My Staff</div>
                     </div>
                 </div>
             </div>
             <!-- Primary Dept KPI (dept admins only) -->
-            <?php if (!$isBranchManager && !empty($primaryDeptStatus)):
+            <?php if (!empty($primaryDeptStatus)):
                 $primaryTotal = array_sum($primaryDeptStatus);
                 $deptColor = $user['dept_color'] ?? '#c9a84c'; // fallback gold
                 ?>
@@ -629,12 +544,10 @@ include '../../includes/header.php';
                     <h5><i class="fas fa-chart-bar text-warning me-2"></i>Staff Work Distribution</h5>
                     <span style="font-size:.75rem;color:#9ca3af;">
                         <?= htmlspecialchars($user['branch_name'] ?? '') ?>
-                        <?php if ($isBranchManager): ?>
-                            · <span style="color:#c9a84c;">All Departments</span>
-                        <?php else: ?>
-                            · <span
-                                style="color:<?= htmlspecialchars($distDeptColor) ?>;"><?= htmlspecialchars($distDeptLabel ?: ($user['dept_name'] ?? '')) ?></span>
-                        <?php endif; ?>
+
+                        · <span
+                            style="color:<?= htmlspecialchars($distDeptColor) ?>;"><?= htmlspecialchars($distDeptLabel ?: ($user['dept_name'] ?? '')) ?></span>
+
                         <span
                             style="margin-left:.4rem;background:#eff6ff;color:#3b82f6;padding:.1rem .45rem;border-radius:99px;font-size:.68rem;">
                             incl. transferred tasks
@@ -645,24 +558,13 @@ include '../../includes/header.php';
                 <?php
                 // Build tabs: for BM show their UDA depts + "All"; for dept admin show their accessible depts
                 $distTabs = [];
-                if ($isBranchManager && count($bmUdaDepts) > 0) {
-                    $distTabs = $bmUdaDepts;
-                } elseif (!$isBranchManager && count($recentDeptTabs) > 1) {
+                if (count($recentDeptTabs) > 1) {
                     $distTabs = $recentDeptTabs;
                 }
                 ?>
                 <?php if (!empty($distTabs)): ?>
                     <div style="display:flex;gap:0;border-bottom:2px solid #f3f4f6;overflow-x:auto;">
-                        <?php if ($isBranchManager): ?>
-                            <!-- "All Departments" tab for BM -->
-                            <?php $allActive = ($distDeptFilter === 0); ?>
-                            <a href="?<?= http_build_query(array_merge($_GET, ['dist_dept' => 0])) ?>#dist-section" style="padding:.6rem 1.2rem;font-size:.8rem;font-weight:600;text-decoration:none;
-                white-space:nowrap;border-bottom:2px solid <?= $allActive ? '#c9a84c' : 'transparent' ?>;
-                margin-bottom:-2px;color:<?= $allActive ? '#c9a84c' : '#9ca3af' ?>;
-                background:<?= $allActive ? '#c9a84c0d' : 'transparent' ?>;transition:.15s;">
-                                <i class="fas fa-layer-group me-1" style="font-size:.7rem;"></i>All Depts
-                            </a>
-                        <?php endif; ?>
+
                         <?php foreach ($distTabs as $dtab):
                             $isActive = ($distDeptFilter == $dtab['id']);
                             $tabColor = $dtab['color'] ?: '#c9a84c';
@@ -676,7 +578,7 @@ include '../../includes/header.php';
                 transition:.15s;">
                                 <i class="fas fa-users me-1" style="font-size:.7rem;"></i>
                                 <?= htmlspecialchars($dtab['dept_name']) ?>
-                                <?php if (!$isBranchManager && $dtab['id'] == $adminDeptId): ?>
+                                <?php if ($dtab['id'] == $adminDeptId): ?>
                                     <span style="font-size:.6rem;color:<?= $tabColor ?>;margin-left:.2rem;">★</span>
                                 <?php endif; ?>
                                 <?php if ($isActive): ?>
@@ -736,13 +638,15 @@ include '../../includes/header.php';
                                         </div>
                                         <div style="font-size:.7rem;color:#9ca3af;margin-bottom:.5rem;">
                                             <?= htmlspecialchars($s['employee_id'] ?? '') ?>
-                                            <?php if ($isBranchManager && !empty($s['dept_name'])): ?>
-                                                <span style="background:#f3f4f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;color:#6b7280;">
+                                            <?php if (!empty($s['dept_name'])): ?>
+                                                <span
+                                                    style="background:#f3f4f6;padding:.05rem .35rem;border-radius:3px;margin-left:.3rem;font-size:.65rem;color:#6b7280;">
                                                     <?= htmlspecialchars($s['dept_name']) ?>
                                                 </span>
                                             <?php endif; ?>
                                             <?php foreach (($distUdaMap[$s['user_id'] ?? 0] ?? []) as $ux): ?>
-                                                <span style="font-size:.63rem;
+                                                <span
+                                                    style="font-size:.63rem;
                                                              background:<?= htmlspecialchars($ux['color'] ?? '#ccc') ?>22;
                                                              color:<?= htmlspecialchars($ux['color'] ?? '#666') ?>;
                                                              padding:.05rem .35rem;border-radius:3px;
@@ -848,7 +752,7 @@ include '../../includes/header.php';
                     <a href="<?= APP_URL ?>/admin/tasks/index.php" class="btn btn-sm btn-outline-secondary">View All</a>
                 </div>
 
-                <?php if (!$isBranchManager && count($recentDeptTabs) > 1): ?>
+                <?php if (count($recentDeptTabs) > 1): ?>
                     <!-- Dept tabs for recent tasks -->
                     <div style="display:flex;gap:0;border-bottom:2px solid #f3f4f6;overflow-x:auto;">
                         <?php foreach ($recentDeptTabs as $rtab):

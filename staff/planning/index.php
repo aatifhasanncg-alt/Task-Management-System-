@@ -14,7 +14,7 @@ $branchId = (int) $user['branch_id'];
 // Month
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
@@ -68,16 +68,9 @@ $plannedHours = (float) $db->query("
       AND wp.plan_month='{$monthStart}'
 ")->fetchColumn();
 
-// Time Efficiency: planned ÷ actual × 100
-// planned=2h, actual=1h → 200% (finished faster = more efficient)
-// planned=2h, actual=2h → 100%
-// planned=2h, actual=4h →  50% (took longer than planned)
-// In index.php, change efficiency line to:
-$rawEfficiency = ($plannedHours > 0 && $totalHours > 0)
-    ? round(($plannedHours / $totalHours) * 100)  // $totalHours = visit only
-    : 0;
-$efficiency    = min($rawEfficiency, 200); // cap display at 200%
-$overDelivered = $rawEfficiency > 100;     // finished faster than planned
+$rawEfficiency = $plannedHours > 0 ? round(($totalHours / $plannedHours) * 100) : 0;
+$efficiency = min($rawEfficiency, 100);
+$overDelivered = $rawEfficiency > 100;
 // Office log KPIs
 $officeTotalLogs = (int)$db->query("
     SELECT COUNT(*) FROM office_work_logs
@@ -270,35 +263,29 @@ include '../../includes/header.php';
                         <?= $officeWip ?> WIP · <?= $officeHolding ?> holding
                     </div>
                 </div>
-                <?php $effColor = $rawEfficiency >= 100 ? '#10b981' : ($rawEfficiency >= 60 ? '#f59e0b' : '#ef4444'); ?>
+                <?php $effColor = $rawEfficiency >= 80 ? '#10b981' : ($rawEfficiency >= 50 ? '#f59e0b' : '#ef4444'); ?>
                 <div class="kpi-tile" style="--kpi-color:<?= $effColor ?>;">
                     <div class="kpi-icon"><i class="fas fa-tachometer-alt" style="color:<?= $effColor ?>;"></i></div>
                     <div class="kpi-val" style="color:<?= $effColor ?>;">
                         <?= $efficiency ?>%
                         <?php if ($overDelivered): ?>
-                            <span style="font-size:.6rem;background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:4px;vertical-align:middle;">
-                                ↑ Fast
-                            </span>
+                            <span style="font-size:.6rem;background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:4px;vertical-align:middle;">+<?= $rawEfficiency - 100 ?>%</span>
                         <?php endif; ?>
                     </div>
-                    <div class="kpi-label">Time Efficiency</div>
+                    <div class="kpi-label">Visit Efficiency</div>
                     <div class="kpi-delta" style="color:#9ca3af;font-size:.7rem;">
-                        <?= number_format($plannedHours, 1) ?>h planned · <?= number_format($totalHours, 1) ?>h used
-                    </div>
-                    <div style="font-size:.63rem;margin-top:3px;color:<?= $effColor ?>;font-weight:600;">
-                        <?= $overDelivered ? '✅ Ahead of plan' : ($rawEfficiency > 0 ? '⚠ Behind plan' : '—') ?>
+                        <?= number_format($plannedHours, 1) ?>h planned
                     </div>
                 </div>
             </div>
 
+            <!-- PROGRESS -->
             <!-- PROGRESS + CHARTS -->
             <?php
-            $maxH = max($plannedHours, $combinedTotalHours, 1);
-            $pw   = round(($plannedHours       / $maxH) * 100);
-            $aw   = round(($combinedTotalHours  / $maxH) * 100);
-            $vw   = round(($totalHours          / $maxH) * 100);
-            $ow   = round(($officeTotalHours    / $maxH) * 100);
-            $ec   = $rawEfficiency >= 100 ? '#10b981' : ($rawEfficiency >= 60 ? '#f59e0b' : '#ef4444');
+            $maxH = max($plannedHours, $totalHours, 1);
+            $pw   = round(($plannedHours / $maxH) * 100);
+            $vw   = round(($totalHours   / $maxH) * 100);
+            $ec   = $rawEfficiency >= 80 ? '#10b981' : ($rawEfficiency >= 50 ? '#f59e0b' : '#ef4444');
             ?>
             <div class="row g-4 mb-4">
 
@@ -311,10 +298,8 @@ include '../../includes/header.php';
                         </div>
                         <div class="card-mis-body">
                             <?php foreach ([
-                                ['Planned',      $plannedHours,      $pw,  '#3b82f6'],
-                                ['Visit Actual', $totalHours,        $vw,  '#10b981'],
-                                ['Office Actual',$officeTotalHours,  $ow,  '#8b5cf6'],
-                                ['Combined',     $combinedTotalHours,$aw,  $ec],
+                                ['Planned',      $plannedHours, $pw, '#3b82f6'],
+                                ['Visit Actual', $totalHours,   $vw, $ec],
                             ] as [$label, $val, $width, $color]): ?>
                             <div style="margin-bottom:10px;">
                                 <div style="display:flex;justify-content:space-between;font-size:.74rem;color:#9ca3af;margin-bottom:3px;">

@@ -99,7 +99,7 @@ function parseXlsxNative(string $filePath): array|false
 }
 
 if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied. Only Core Admin executives can add staff.');
+    setFlash('error', 'Access denied. Only Administrator can add staff.');
     header('Location: index.php');
     exit;
 }
@@ -135,7 +135,7 @@ $allAdmins = $db->query("
     SELECT u.id, u.full_name, b.branch_name FROM users u
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN branches b ON b.id = u.branch_id
-    WHERE r.role_name IN('admin','executive') AND u.is_active = 1
+    WHERE r.role_name IN('admin','executive','manager') AND u.is_active = 1
     ORDER BY u.full_name
 ")->fetchAll();
 
@@ -166,10 +166,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Invalid email format.';
     if (!$roleId)
         $errors[] = 'Role is required.';
-    if (!$branchId)
-        $errors[] = 'Branch is required.';
-    if (!$deptId)
-        $errors[] = 'Department is required.';
     if (!$password)
         $errors[] = 'Password is required.';
     if (strlen($password) < 6)
@@ -191,81 +187,118 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
+        $enable2fa = isset($_POST['enable_2fa']) && $_POST['enable_2fa'] === '1';
+        $storedSecret = $enable2fa ? $secret : null; // don't even keep the secret if 2FA is off
+
         $hashedPwd = password_hash($password, PASSWORD_DEFAULT);
 
         $db->prepare("
-            INSERT INTO users
-            (full_name, username, email, phone,
-            password, role_id, branch_id, department_id,
-            managed_by, joining_date, address,
-            emergency_contact,
-            ga_secret, ga_enabled, is_active, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NOW())
-        ")->execute([
+        INSERT INTO users
+        (full_name, username, email, phone,
+        password, role_id, branch_id, department_id,
+        managed_by, joining_date, address,
+        emergency_contact,
+        ga_secret, ga_enabled, is_active, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NOW())
+    ")->execute([
                     $fullName,
                     $username,
                     $email,
                     $phone ?: null,
                     $hashedPwd,
                     $roleId,
-                    $branchId,
-                    $deptId,
+                    $branchId ?: null,
+                    $deptId ?: null,
                     $managedBy,
                     $joiningDate ?: null,
                     $address ?: null,
                     $emergencyContact ?: null,
-                    $secret,
+                    $storedSecret,
                 ]);
 
-        $newId = $db->lastInsertId();
+        $newId = (int) $db->lastInsertId();
+
+        // Flag: must change password on first login
+        $db->prepare("UPDATE users SET must_change_password = 1 WHERE id = ?")
+           ->execute([$newId]);
+
         // Save additional departments (UDA)
         $extraDepts = $_POST['extra_departments'] ?? [];
         foreach ($extraDepts as $extraDeptId) {
             $extraDeptId = (int) $extraDeptId;
             if ($extraDeptId && $extraDeptId !== $deptId) {
+                $deptManagers = $_POST['extra_dept_managers'] ?? [];
+                $deptManagedBy = (int) ($deptManagers[$extraDeptId] ?? 0) ?: null;
                 $db->prepare("
-                    INSERT IGNORE INTO user_department_assignments (user_id, department_id)
-                    VALUES (?, ?)
-                ")->execute([$newId, $extraDeptId]);
+                INSERT IGNORE INTO user_department_assignments (user_id, department_id, managed_by)
+                VALUES (?, ?, ?)
+            ")->execute([$newId, $extraDeptId, $deptManagedBy]);
             }
         }
-        // Send welcome email with credentials + secret
+
+        // ── Send welcome email — credentials only, 2FA block only if actually enabled ──
         try {
             require_once '../../config/mailer.php';
-            $emailHtml = emailWrapper("
-                <h2 style='color:#0a0f1e;'>Welcome to MISPro</h2>
-                <p>Dear <strong>{$fullName}</strong>,</p>
-                <p>Your account has been created. Here are your login credentials:</p>
-                <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;width:160px;'>Username</td>
-                        <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$username}</td>
-                    </tr>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;'>Password</td>
-                        <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$password}</td>
-                    </tr>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;'>2FA Secret</td>
-                        <td style='padding:8px;font-family:monospace;font-size:1rem;font-weight:700;'>{$secret}</td>
-                    </tr>
-                </table>
+
+            $safeFullName = htmlspecialchars($fullName, ENT_QUOTES);
+            $safeUsername = htmlspecialchars($username, ENT_QUOTES);
+            // Password is shown once, in a system email the admin controls — escape to prevent
+            // any stray HTML-special chars from breaking the markup, NOT to "secure" the password itself.
+            $safePassword = htmlspecialchars($password, ENT_QUOTES);
+
+            $twofaRowsHtml = '';
+            $twofaNoteHtml = '';
+            if ($enable2fa) {
+                $safeSecret = htmlspecialchars($secret, ENT_QUOTES);
+                $twofaRowsHtml = "
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;'>2FA Secret</td>
+                    <td style='padding:8px;font-family:monospace;font-size:1rem;font-weight:700;'>{$safeSecret}</td>
+                </tr>";
+                $twofaNoteHtml = "
                 <p style='font-size:.85rem;color:#6b7280;'>
-                    Please install <strong>Google Authenticator</strong> on your phone and add this account using the secret key above before your first login.
-                </p>
-                <a href='" . APP_URL . "/auth/login.php'
-                   style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
-                    Login to MISPro
-                </a>
-            ");
-            sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
+                    Please install <strong>Google Authenticator</strong> on your phone and add this account
+                    using the secret key above before your first login.
+                </p>";
+            }
+
+            $emailHtml = emailWrapper("
+            <h2 style='color:#0a0f1e;'>Welcome to TaskHub</h2>
+            <p>Dear <strong>{$safeFullName}</strong>,</p>
+            <p>Your account has been created. Here are your login credentials:</p>
+            <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;width:160px;'>Username</td>
+                    <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$safeUsername}</td>
+                </tr>
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;'>Password</td>
+                    <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$safePassword}</td>
+                </tr>
+                {$twofaRowsHtml}
+            </table>
+            {$twofaNoteHtml}
+            <p style='font-size:.8rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;
+                       border-radius:8px;padding:.6rem .8rem;'>
+                <i class='fas fa-lock'></i> For your security, you will be required to change this
+                password on your first login.
+            </p>
+            <a href='" . APP_URL . "/auth/login.php'
+               style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
+                Login to TaskHub
+            </a>
+        ");
+            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
+            // Email failure is non-fatal — log it instead of silently swallowing
+            error_log('Welcome email failed for user ' . $newId . ': ' . $e->getMessage());
         }
 
+        // SECURITY: never put the raw password in logActivity / audit trail
         logActivity("Staff added: {$fullName}", 'users');
         setFlash('success', "Staff member \"{$fullName}\" added. Credentials sent to {$email}.");
         header("Location: view.php?id={$newId}");
-        exit; // ← redirect to view so QR is visible
+        exit;
     }
 }
 
@@ -379,11 +412,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
         ");
         $branchRow->execute(['%' . strtolower($branchName) . '%']);
         $branchId = $branchRow->fetchColumn() ?: null;
-        if (!$branchId) {
-            $skipped++;
-            $skipReasons[] = "Row {$lineNum}: branch \"{$branchName}\" not found.";
-            continue;
-        }
+        $branchId = $branchId ?: null;
 
         // Resolve department
         $deptRow = $db->prepare("
@@ -392,15 +421,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
         ");
         $deptRow->execute(['%' . strtolower($deptName) . '%']);
         $deptId = $deptRow->fetchColumn() ?: null;
-        if (!$deptId) {
-            $skipped++;
-            $skipReasons[] = "Row {$lineNum}: department \"{$deptName}\" not found.";
-            continue;
-        }
+        $deptId = $deptId ?: null;
 
         $finalPass = $password ?: 'Welcome@123';
         $hashed = password_hash($finalPass, PASSWORD_DEFAULT);
-        $newSecret = $ga->createSecret();
+        $newSecret = null;
 
         try {
             $db->prepare("
@@ -423,17 +448,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
                         $emergency ?: null,
                         $newSecret,
                     ]);
-        } catch (Exception $e) {
+           } catch (Exception $e) {
             $skipped++;
             $skipReasons[] = "Row {$lineNum}: DB error — " . $e->getMessage();
             continue;
         }
 
+        $newUserId = (int) $db->lastInsertId();
+        $db->prepare("UPDATE users SET must_change_password = 1 WHERE id = ?")
+            ->execute([$newUserId]);
+
         // Send welcome email
         try {
             require_once '../../config/mailer.php';
             $emailHtml = emailWrapper("
-                <h2>Welcome to MISPro</h2>
+                <h2>Welcome to TaskHub</h2>
                 <p>Dear <strong>{$fullName}</strong>,</p>
                 <p><strong>Username:</strong> {$username}</p>
                 <p><strong>Password:</strong> {$finalPass}</p>
@@ -447,10 +476,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
                    style='display:inline-block;background:#c9a84c;color:#0a0f1e;
                           padding:10px 24px;border-radius:8px;text-decoration:none;
                           font-weight:700;margin-top:12px;'>
-                    Login to MISPro
+                    Login to TaskHub
                 </a>
             ");
-            sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
+            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
             // Email failure is non-fatal — user was still created
         }
@@ -474,6 +503,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
 
 include '../../includes/header.php';
 ?>
+<style>
+    /* Fix TomSelect dropdown clipping inside cards */
+    .ts-dropdown {
+        z-index: 9999 !important;
+    }
+
+    .ts-wrapper {
+        position: relative;
+    }
+
+    /* Match your existing form-select styling */
+    .ts-control {
+        border: 1px solid #dee2e6 !important;
+        border-radius: 0.375rem !important;
+        font-size: .875rem !important;
+        min-height: 38px !important;
+        padding: 0.25rem 0.5rem !important;
+        background-color: #fff !important;
+        box-shadow: none !important;
+    }
+
+    .ts-control:focus-within {
+        border-color: #c9a84c !important;
+        box-shadow: 0 0 0 0.2rem rgba(201, 168, 76, .15) !important;
+    }
+
+    .ts-dropdown .option.selected,
+    .ts-dropdown .option:hover {
+        background-color: #c9a84c !important;
+        color: #0a0f1e !important;
+    }
+
+    .ts-dropdown .option.active {
+        background-color: #f3f4f6 !important;
+        color: #1f2937 !important;
+    }
+
+    /* Smaller styling for the extra-dept manager selects inside cards */
+    #extra-dept-list .ts-control {
+        font-size: .75rem !important;
+        min-height: 30px !important;
+        padding: .2rem .4rem !important;
+    }
+</style>
+<!-- TomSelect -->
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <div class="app-wrapper">
     <?php include '../../includes/sidebar_admin.php'; ?>
     <div class="main-content">
@@ -608,7 +684,13 @@ include '../../includes/header.php';
                                                     onclick="togglePassword('password', this)">
                                                     <i class="fas fa-eye"></i>
                                                 </button>
+                                                <button type="button" class="btn btn-outline-success"
+                                                    onclick="generateStrongPassword()" title="Generate strong password">
+                                                    <i class="fas fa-dice"></i>
+                                                </button>
                                             </div>
+                                            <div id="pwStrengthHint"
+                                                style="font-size:.7rem;color:#9ca3af;margin-top:.3rem;"></div>
                                         </div>
 
                                         <div class="col-md-6">
@@ -632,7 +714,8 @@ include '../../includes/header.php';
                                                             class="ms-2">Google 2FA Setup</span></h5>
                                                     <div class="form-check form-switch mb-0">
                                                         <input class="form-check-input" type="checkbox" id="enable2fa"
-                                                            checked onchange="toggle2FA(this)">
+                                                            name="enable_2fa" value="1" checked
+                                                            onchange="toggle2FA(this)">
                                                         <label class="form-check-label" for="enable2fa"
                                                             style="font-size:.78rem;color:#6b7280;">Enable 2FA</label>
                                                     </div>
@@ -693,7 +776,7 @@ include '../../includes/header.php';
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Branch <span
                                                     class="required-star">*</span></label>
-                                            <select name="branch_id" class="form-select" required>
+                                            <select name="branch_id" class="form-select">
                                                 <option value="">-- Select Branch --</option>
                                                 <?php foreach ($allBranches as $b): ?>
                                                     <option value="<?= $b['id'] ?>" <?= ($_POST['branch_id'] ?? '') == $b['id'] ? 'selected' : '' ?>>
@@ -706,7 +789,7 @@ include '../../includes/header.php';
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Department <span
                                                     class="required-star">*</span></label>
-                                            <select name="department_id" class="form-select" required>
+                                            <select name="department_id" class="form-select">
                                                 <option value="">-- Select Department --</option>
                                                 <?php foreach ($allDepts as $d): ?>
                                                     <option value="<?= $d['id'] ?>" <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
@@ -745,7 +828,7 @@ include '../../includes/header.php';
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label-mis">Managed By</label>
-                                            <select name="managed_by" class="form-select" id="managed_by">
+                                            <select name="managed_by" id="managed_by" class="form-select">
                                                 <option value="">-- Select Manager --</option>
                                                 <?php foreach ($allAdmins as $a): ?>
                                                     <option value="<?= $a['id'] ?>" <?= ($_POST['managed_by'] ?? '') == $a['id'] ? 'selected' : '' ?>>
@@ -772,7 +855,7 @@ include '../../includes/header.php';
                             <div style="font-size:.82rem;color:#6b7280;line-height:1.7;">
                                 <div class="mb-2">
                                     <i class="fas fa-info-circle text-warning me-2"></i>
-                                    <strong>Only Core Admin executives can add staff.</strong>
+                                    <strong>Only Administrator can add staff.</strong>
                                 </div>
                                 <div class="mb-2">Employee ID is auto-generated if left blank.</div>
                                 <div class="mb-2">A welcome email with login credentials will be sent automatically.
@@ -903,7 +986,8 @@ include '../../includes/header.php';
                                 </div>
                                 <div style="font-size:.72rem;color:#6b7280;margin-top:.5rem;">
                                     * Required. Password defaults to <strong>Welcome@123</strong> if blank.
-                                    Role: <code>staff</code>, <code>admin</code>, or <code>executive</code>.
+                                    Role: <code>staff</code>, <code>admin</code>, <code>manager</code>, or
+                                    <code>executive</code>.
                                     2FA secret is auto-generated per user and emailed automatically.
                                 </div>
                             </div>
@@ -920,7 +1004,7 @@ include '../../includes/header.php';
                                 <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
                                     Use our pre-formatted Excel template with sample rows and column hints.
                                 </p>
-                                <a href="<?= APP_URL ?>/executive/staff/download_template.php"
+                                <a href="<?= APP_URL ?>/admin/staff/download_template.php"
                                     class="btn btn-gold btn-sm w-100">
                                     <i class="fas fa-file-csv me-1"></i>Download Template (.csv)
                                 </a>
@@ -931,7 +1015,7 @@ include '../../includes/header.php';
                             <div style="font-size:.82rem;font-weight:700;color:#1f2937;margin-bottom:.75rem;">
                                 <i class="fas fa-list-check text-warning me-1"></i>Valid Roles
                             </div>
-                            <?php foreach (['staff', 'admin', 'executive'] as $rn): ?>
+                            <?php foreach (['staff', 'admin', 'manager', 'executive'] as $rn): ?>
                                 <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;
                              margin:.1rem .1rem 0 0;display:inline-block;font-size:.78rem;">
                                     <?= $rn ?>
@@ -964,176 +1048,307 @@ include '../../includes/header.php';
             </div><!-- /tab-bulk -->
 
 
-            <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+            <script>
+                // ── Tab switching ─────────────────────────────────────────────────────────────
+                function switchTab(tab) {
+                    document.getElementById('tab-single').style.display = tab === 'single' ? 'block' : 'none';
+                    document.getElementById('tab-bulk').style.display = tab === 'bulk' ? 'block' : 'none';
+                    const gold = '#c9a84c', gray = '#9ca3af';
+                    const active = tab === 'single' ? 'tab-single-btn' : 'tab-bulk-btn';
+                    const inactive = tab === 'single' ? 'tab-bulk-btn' : 'tab-single-btn';
+                    document.getElementById(active).style.color = gold;
+                    document.getElementById(active).style.borderBottomColor = gold;
+                    document.getElementById(inactive).style.color = gray;
+                    document.getElementById(inactive).style.borderBottomColor = 'transparent';
+                }
 
-<script>
-    // ── Tab switching ─────────────────────────────────────────────────────────
-    function switchTab(tab) {
-        document.getElementById('tab-single').style.display = tab === 'single' ? 'block' : 'none';
-        document.getElementById('tab-bulk').style.display   = tab === 'bulk'   ? 'block' : 'none';
-        const gold = '#c9a84c', gray = '#9ca3af';
-        const active   = tab === 'single' ? 'tab-single-btn' : 'tab-bulk-btn';
-        const inactive = tab === 'single' ? 'tab-bulk-btn'   : 'tab-single-btn';
-        document.getElementById(active).style.color             = gold;
-        document.getElementById(active).style.borderBottomColor = gold;
-        document.getElementById(inactive).style.color             = gray;
-        document.getElementById(inactive).style.borderBottomColor = 'transparent';
-    }
+                // ── 2FA toggle ────────────────────────────────────────────────────────────────
+                function toggle2FA(checkbox) {
+                    document.getElementById('twofa-body').style.display = checkbox.checked ? 'block' : 'none';
+                }
 
-    // ── 2FA toggle ────────────────────────────────────────────────────────────
-    function toggle2FA(checkbox) {
-        document.getElementById('twofa-body').style.display = checkbox.checked ? 'block' : 'none';
-    }
+                // ── Password toggle ───────────────────────────────────────────────────────────
+                function togglePassword(fieldId, btn) {
+                    const field = document.getElementById(fieldId);
+                    const icon = btn.querySelector('i');
+                    if (field.type === 'password') {
+                        field.type = 'text';
+                        icon.classList.replace('fa-eye', 'fa-eye-slash');
+                    } else {
+                        field.type = 'password';
+                        icon.classList.replace('fa-eye-slash', 'fa-eye');
+                    }
+                }
+                function generateStrongPassword(length = 14) {
+                    const lower = 'abcdefghijklmnopqrstuvwxyz';
+                    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                    const digits = '0123456789';
+                    const symbols = '!@#$%^&*()-_=+?';
+                    const all = lower + upper + digits + symbols;
 
-    // ── Password toggle ───────────────────────────────────────────────────────
-    function togglePassword(fieldId, btn) {
-        const field = document.getElementById(fieldId);
-        const icon  = btn.querySelector('i');
-        if (field.type === 'password') {
-            field.type = 'text';
-            icon.classList.replace('fa-eye', 'fa-eye-slash');
-        } else {
-            field.type = 'password';
-            icon.classList.replace('fa-eye-slash', 'fa-eye');
-        }
-    }
+                    // Use crypto.getRandomValues for cryptographically strong randomness,
+                    // not Math.random() which is predictable.
+                    function randInt(max) {
+                        const arr = new Uint32Array(1);
+                        crypto.getRandomValues(arr);
+                        return arr[0] % max;
+                    }
 
-    // ── Copy 2FA secret ───────────────────────────────────────────────────────
-    function copyGaSecret() {
-        const text = document.getElementById('gaSecretDisplay').value;
-        navigator.clipboard.writeText(text).then(() => {
-            const icon = document.getElementById('copyGaIcon');
-            icon.className = 'fas fa-check';
-            icon.style.color = '#10b981';
-            setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
-        });
-    }
+                    // Guarantee at least one of each category, then fill the rest randomly
+                    let chars = [
+                        lower[randInt(lower.length)],
+                        upper[randInt(upper.length)],
+                        digits[randInt(digits.length)],
+                        symbols[randInt(symbols.length)],
+                    ];
+                    for (let i = chars.length; i < length; i++) {
+                        chars.push(all[randInt(all.length)]);
+                    }
 
-    // ── QR update on email blur ───────────────────────────────────────────────
-    document.querySelector('[name="email"]')?.addEventListener('blur', function () {
-        const email  = this.value.trim();
-        const secret = document.getElementById('gaSecretDisplay').value;
-        if (!email) return;
-        const otpUrl = 'otpauth://totp/ASK MIS:' + encodeURIComponent(email) +
-                       '?secret=' + secret + '&issuer=ASK MIS';
-        document.getElementById('qrPreview').src =
-            'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' +
-            encodeURIComponent(otpUrl);
-    });
+                    // Shuffle (Fisher–Yates) so the guaranteed chars aren't always in the same position
+                    for (let i = chars.length - 1; i > 0; i--) {
+                        const j = randInt(i + 1);
+                        [chars[i], chars[j]] = [chars[j], chars[i]];
+                    }
 
-    // ── File drop / select helpers ────────────────────────────────────────────
-    function formatBytes(bytes) {
-        if (bytes < 1024)    return bytes + ' B';
-        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-        return (bytes / 1048576).toFixed(2) + ' MB';
-    }
-    function showFile(file) {
-        document.getElementById('file-name').textContent  = file.name;
-        document.getElementById('file-size').textContent  = formatBytes(file.size);
-        document.getElementById('file-preview').style.display = 'flex';
-        document.getElementById('drop-text').textContent  = 'File selected — ready to upload';
-        document.getElementById('drop-icon').innerHTML    =
-            '<i class="fas fa-check-circle" style="font-size:2.2rem;color:#16a34a;"></i>';
-        document.getElementById('upload-btn').disabled   = false;
-    }
-    function onFileSelect(input) { if (input.files[0]) showFile(input.files[0]); }
-    function handleDrop(e) {
-        e.preventDefault();
-        const dz = document.getElementById('drop-zone');
-        dz.style.borderColor = '#d1d5db'; dz.style.background = '#fafafa';
-        const file = e.dataTransfer.files[0];
-        if (!file) return;
-        const ext = file.name.split('.').pop().toLowerCase();
-        if (!['xlsx','xls'].includes(ext)) { alert('Please upload an .xlsx or .xls file.'); return; }
-        const dt = new DataTransfer(); dt.items.add(file);
-        document.getElementById('bulk_file').files = dt.files;
-        showFile(file);
-    }
-    function clearFile() {
-        document.getElementById('bulk_file').value = '';
-        document.getElementById('file-preview').style.display = 'none';
-        document.getElementById('drop-text').textContent = 'Click or drag & drop your Excel file here';
-        document.getElementById('drop-icon').innerHTML =
-            '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
-        document.getElementById('upload-btn').disabled = true;
-    }
-    document.getElementById('bulk-form')?.addEventListener('submit', function () {
-        document.getElementById('upload-btn').disabled = true;
-        document.getElementById('upload-spinner').style.display = 'flex';
-    });
+                    const password = chars.join('');
 
-    // ── Extra Departments ─────────────────────────────────────────────────────
-    const extraDeptMap        = {};   // { id: name }
-    const extraDeptTomSelects = {};   // TomSelect instances (not used here but kept for consistency)
+                    const pwField = document.getElementById('password');
+                    const confirmField = document.getElementById('confirm_password');
+                    pwField.value = password;
+                    confirmField.value = password;
 
-    document.addEventListener('DOMContentLoaded', function () {
+                    // Show it briefly so the admin can see/copy what was generated
+                    pwField.type = 'text';
+                    confirmField.type = 'text';
+                    setTimeout(() => {
+                        pwField.type = 'password';
+                        confirmField.type = 'password';
+                    }, 4000);
 
-        // Main Managed By
-        new TomSelect('#managed_by', {
-            placeholder:      'Search manager…',
-            allowEmptyOption: true,
-            dropdownParent:   'body',
-            maxOptions:       200,
-        });
+                    document.getElementById('pwStrengthHint').innerHTML =
+                        '<i class="fas fa-check-circle" style="color:#16a34a;"></i> Strong password generated (' + length + ' chars) — visible for 4s';
+                }
+                // ── Copy 2FA secret ───────────────────────────────────────────────────────────
+                function copyGaSecret() {
+                    const text = document.getElementById('gaSecretDisplay').value;
+                    navigator.clipboard.writeText(text).then(() => {
+                        const icon = document.getElementById('copyGaIcon');
+                        icon.className = 'fas fa-check';
+                        icon.style.color = '#10b981';
+                        setTimeout(() => { icon.className = 'fas fa-copy'; icon.style.color = ''; }, 2000);
+                    });
+                }
 
-        // Additional Departments picker
-        new TomSelect('#extra-dept-select', {
-            placeholder:      'Search department…',
-            allowEmptyOption: true,
-            dropdownParent:   'body',
-            maxOptions:       200,
-            onChange(val) {
-                if (!val) return;
-                const sel  = document.getElementById('extra-dept-select');
-                const name = sel.options[sel.selectedIndex]?.text;
-                if (extraDeptMap[val]) { sel.tomselect?.setValue('', true); return; }
-                extraDeptMap[val] = name;
-                renderExtraDepts();
-                sel.tomselect?.setValue('', true);
-            },
-        });
-    });
+                // ── QR update on email blur ───────────────────────────────────────────────────
+                document.querySelector('[name="email"]')?.addEventListener('blur', function () {
+                    const email = this.value.trim();
+                    const secret = document.getElementById('gaSecretDisplay').value;
+                    if (!email) return;
+                    const otpUrl = 'otpauth://totp/ASK MIS:' + encodeURIComponent(email) +
+                        '?secret=' + secret + '&issuer=ASK MIS';
+                    document.getElementById('qrPreview').src =
+                        'https://chart.googleapis.com/chart?chs=160x160&chld=M|0&cht=qr&chl=' +
+                        encodeURIComponent(otpUrl);
+                });
 
-    function addExtraDept() {
-        const ts   = document.getElementById('extra-dept-select').tomselect;
-        const sel  = document.getElementById('extra-dept-select');
-        const id   = ts ? ts.getValue() : sel.value;
-        const name = sel.options[sel.selectedIndex]?.text;
-        if (!id || extraDeptMap[id]) { ts?.setValue('', true); return; }
-        extraDeptMap[id] = name;
-        renderExtraDepts();
-        ts?.setValue('', true);
-    }
+                // ── File drop / select helpers ────────────────────────────────────────────────
+                function formatBytes(bytes) {
+                    if (bytes < 1024) return bytes + ' B';
+                    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+                    return (bytes / 1048576).toFixed(2) + ' MB';
+                }
 
-    function removeExtraDept(id) {
-        delete extraDeptMap[id];
-        renderExtraDepts();
-    }
+                function showFile(file) {
+                    document.getElementById('file-name').textContent = file.name;
+                    document.getElementById('file-size').textContent = formatBytes(file.size);
+                    document.getElementById('file-preview').style.display = 'flex';
+                    document.getElementById('drop-text').textContent = 'File selected — ready to upload';
+                    document.getElementById('drop-icon').innerHTML =
+                        '<i class="fas fa-check-circle" style="font-size:2.2rem;color:#16a34a;"></i>';
+                    document.getElementById('upload-btn').disabled = false;
+                }
 
-    function renderExtraDepts() {
-        const list   = document.getElementById('extra-dept-list');
-        const inputs = document.getElementById('extra-dept-inputs');
-        list.innerHTML   = '';
-        inputs.innerHTML = '';
+                function onFileSelect(input) { if (input.files[0]) showFile(input.files[0]); }
 
-        for (const [id, name] of Object.entries(extraDeptMap)) {
-            list.insertAdjacentHTML('beforeend', `
-                <span style="background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;
-                             border-radius:99px;padding:.25rem .7rem;font-size:.75rem;
-                             font-weight:600;display:inline-flex;align-items:center;gap:.4rem;">
-                    ${name}
-                    <button type="button" onclick="removeExtraDept('${id}')"
-                            style="background:none;border:none;color:#3b82f6;
-                                   cursor:pointer;padding:0;font-size:.8rem;line-height:1;">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </span>
+                function handleDrop(e) {
+                    e.preventDefault();
+                    const dz = document.getElementById('drop-zone');
+                    dz.style.borderColor = '#d1d5db';
+                    dz.style.background = '#fafafa';
+                    const file = e.dataTransfer.files[0];
+                    if (!file) return;
+                    const ext = file.name.split('.').pop().toLowerCase();
+                    if (!['xlsx', 'xls'].includes(ext)) { alert('Please upload an .xlsx or .xls file.'); return; }
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    document.getElementById('bulk_file').files = dt.files;
+                    showFile(file);
+                }
+
+                function clearFile() {
+                    document.getElementById('bulk_file').value = '';
+                    document.getElementById('file-preview').style.display = 'none';
+                    document.getElementById('drop-text').textContent =
+                        'Click or drag & drop your Excel file here';
+                    document.getElementById('drop-icon').innerHTML =
+                        '<i class="fas fa-cloud-upload-alt" style="font-size:2.2rem;color:#c9a84c;"></i>';
+                    document.getElementById('upload-btn').disabled = true;
+                }
+
+                document.getElementById('bulk-form')?.addEventListener('submit', function () {
+                    document.getElementById('upload-btn').disabled = true;
+                    document.getElementById('upload-spinner').style.display = 'flex';
+                });
+
+                // ── Admin data for extra-dept manager dropdowns ───────────────────────────────
+                const adminOptions = <?= json_encode(array_map(fn($a) => [
+                    'id' => $a['id'],
+                    'name' => $a['full_name'],
+                    'branch' => $a['branch_name'] ?? '',
+                ], $allAdmins)) ?>;
+
+                function adminOptionsHtml(selectedId = '') {
+                    let html = '<option value="">— No Manager —</option>';
+                    adminOptions.forEach(a => {
+                        const sel = String(a.id) === String(selectedId) ? 'selected' : '';
+                        html += `<option value="${a.id}" ${sel}>${a.name}${a.branch ? ' (' + a.branch + ')' : ''}</option>`;
+                    });
+                    return html;
+                }
+
+                // TomSelect instances for extra-dept manager selects
+                const extraDeptTomSelects = {};   // { deptId: TomSelect instance }
+                const extraDeptMap = {};          // { deptId: { name, managed_by } }
+
+                // TomSelect shared config for manager dropdowns
+                function makeTomSelectConfig(deptId) {
+                    return {
+                        placeholder: 'Search manager…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← fixes clipping in extra-dept cards too
+                        onChange(val) { setDeptManager(deptId, val); },
+                    };
+                }
+
+                function addExtraDept() {
+                    const ts = document.getElementById('extra-dept-select').tomselect;
+                    const id = ts ? ts.getValue() : document.getElementById('extra-dept-select').value;
+                    const sel = document.getElementById('extra-dept-select');
+                    const name = sel.options[sel.selectedIndex]?.text;
+                    if (!id || extraDeptMap[id]) {
+                        ts?.setValue('', true);
+                        return;
+                    }
+                    extraDeptMap[id] = { name, managed_by: '' };
+                    renderExtraDepts();
+                    ts?.setValue('', true);
+                }
+
+                function removeExtraDept(id) {
+                    // Destroy TomSelect instance before removing DOM
+                    if (extraDeptTomSelects[id]) {
+                        extraDeptTomSelects[id].destroy();
+                        delete extraDeptTomSelects[id];
+                    }
+                    delete extraDeptMap[id];
+                    renderExtraDepts();
+                }
+
+                function setDeptManager(deptId, val) {
+                    if (extraDeptMap[deptId]) {
+                        extraDeptMap[deptId].managed_by = val;
+                        const hiddenInput = document.querySelector(
+                            `input[name="extra_dept_managers[${deptId}]"]`
+                        );
+                        if (hiddenInput) hiddenInput.value = val;
+                    }
+                }
+
+                function renderExtraDepts() {
+                    const list = document.getElementById('extra-dept-list');
+                    const inputs = document.getElementById('extra-dept-inputs');
+
+                    // Destroy all existing TomSelect instances before wiping DOM
+                    for (const [id, ts] of Object.entries(extraDeptTomSelects)) {
+                        ts.destroy();
+                        delete extraDeptTomSelects[id];
+                    }
+
+                    list.innerHTML = '';
+                    inputs.innerHTML = '';
+
+                    for (const [id, data] of Object.entries(extraDeptMap)) {
+                        list.insertAdjacentHTML('beforeend', `
+                <div style="background:#f8faff;border:1px solid #bfdbfe;border-radius:10px;
+                            padding:.55rem .75rem;display:flex;flex-direction:column;gap:.4rem;
+                            min-width:240px;max-width:280px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+                        <span style="color:#3b82f6;font-size:.78rem;font-weight:700;
+                                     display:flex;align-items:center;gap:.35rem;">
+                            <i class="fas fa-layer-group" style="font-size:.65rem;"></i>
+                            ${data.name}
+                        </span>
+                        <button type="button" onclick="removeExtraDept('${id}')"
+                                style="background:none;border:none;color:#9ca3af;
+                                       cursor:pointer;padding:0;font-size:.78rem;line-height:1;"
+                                title="Remove">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div>
+                        <div style="font-size:.65rem;color:#9ca3af;font-weight:600;
+                                    margin-bottom:.2rem;letter-spacing:.03em;">
+                            <i class="fas fa-user-tie" style="margin-right:.25rem;"></i>MANAGER
+                        </div>
+                        <select id="ts-dept-${id}"
+                                style="width:100%;">
+                            ${adminOptionsHtml(data.managed_by)}
+                        </select>
+                    </div>
+                </div>
             `);
-            inputs.insertAdjacentHTML('beforeend',
-                `<input type="hidden" name="extra_departments[]" value="${id}">`
-            );
-        }
-    }
-</script>
+
+                        inputs.insertAdjacentHTML('beforeend', `
+                <input type="hidden" name="extra_departments[]"          value="${id}">
+                <input type="hidden" name="extra_dept_managers[${id}]"   value="${data.managed_by}">
+            `);
+
+                        // Boot TomSelect on the newly added select
+                        extraDeptTomSelects[id] = new TomSelect(`#ts-dept-${id}`, makeTomSelectConfig(id));
+                    }
+                }
+
+                // ── Init TomSelect on the main "Managed By" select ───────────────────────────
+                document.addEventListener('DOMContentLoaded', function () {
+                    // Main Managed By
+                    new TomSelect('#managed_by', {
+                        placeholder: 'Search manager…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← renders outside card, no clipping
+                    });
+
+                    // Additional Departments picker
+                    new TomSelect('#extra-dept-select', {
+                        placeholder: 'Search department…',
+                        allowEmptyOption: true,
+                        maxOptions: 200,
+                        dropdownParent: 'body',   // ← same fix
+                        onChange(val) {
+                            if (!val) return;
+                            const sel = document.getElementById('extra-dept-select');
+                            const name = sel.options[sel.selectedIndex]?.text;
+                            if (!val || extraDeptMap[val]) {
+                                sel.tomselect?.setValue('', true);
+                                return;
+                            }
+                            extraDeptMap[val] = { name, managed_by: '' };
+                            renderExtraDepts();
+                            sel.tomselect?.setValue('', true);
+                        },
+                    });
+                });
+            </script>
             <?php include '../../includes/footer.php'; ?>

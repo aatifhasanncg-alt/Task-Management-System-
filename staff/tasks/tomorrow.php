@@ -41,7 +41,7 @@ include '../../includes/header.php';
             <div class="page-hero">
                 <div class="page-hero-badge"><i class="fas fa-forward"></i> Tomorrow</div>
                 <h4>Tomorrow's Tasks</h4>
-                <p><?= date('l, F j, Y', strtotime('+1 day')) ?> Â· <?= count($taskList) ?>
+                <p><?= date('l, F j, Y', strtotime('+1 day')) ?> ¡¤ <?= count($taskList) ?>
                     task<?= count($taskList) !== 1 ? 's' : '' ?> due</p>
             </div>
 
@@ -71,7 +71,7 @@ include '../../includes/header.php';
                                             display:inline-flex;align-items:center;gap:.3rem;">
                                             <i class="fas <?= htmlspecialchars($t['status_icon'] ?? 'fa-circle-dot') ?>"
                                                 style="font-size:.65rem;"></i>
-                                            <?= htmlspecialchars($t['status'] ?? 'â€”') ?>
+                                            <?= htmlspecialchars($t['status'] ?? '¡ª') ?>
                                         </span>
                                     </div>
                                     <h5 style="font-size:.95rem;font-weight:600;margin:.25rem 0;">

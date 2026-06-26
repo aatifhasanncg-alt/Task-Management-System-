@@ -106,7 +106,7 @@ $transferStaff = $db->query("
     LEFT JOIN departments d ON d.id = u.department_id
     LEFT JOIN roles r       ON r.id = u.role_id
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE r.role_name = 'admin'
+    WHERE r.role_name IN ('admin', 'manager')
       AND u.is_active = 1
       AND (
           d.dept_code != 'CORE'
@@ -126,7 +126,7 @@ $deptStaff = $db->prepare("
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE r.role_name IN('staff','admin')
+    WHERE r.role_name IN('staff','admin','manager')
       AND u.is_active = 1
       AND (
           u.department_id = ?
@@ -274,7 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_task'])) {
                 $assigneeStmt->execute([$assignTo]);
                 $assigneeRole = $assigneeStmt->fetchColumn();
             
-                $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
+                $taskUrl = in_array($assigneeRole, ['admin', 'executive', 'manager'])
                     ? APP_URL . '/admin/tasks/view.php?id=' . $id
                     : APP_URL . '/staff/tasks/view.php?id=' . $id;
             
@@ -381,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_dept'])) {
             $assigneeStmt->execute([$newAssignTo]);
             $assigneeRole = $assigneeStmt->fetchColumn();
 
-            $taskUrl = in_array($assigneeRole, ['admin', 'executive'])
+            $taskUrl = in_array($assigneeRole, ['admin', 'executive', 'manager'])
                 ? APP_URL . '/admin/tasks/view.php?id=' . $newTaskId
                 : APP_URL . '/staff/tasks/view.php?id=' . $newTaskId;
 

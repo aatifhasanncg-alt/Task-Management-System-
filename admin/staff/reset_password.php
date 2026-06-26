@@ -3,10 +3,13 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 
-$db          = getDB();
+$db = getDB();
 $currentUser = currentUser();
-$staffId     = (int)($_GET['id'] ?? 0);
-if (!$staffId) { header('Location: index.php'); exit; }
+$staffId = (int) ($_GET['id'] ?? 0);
+if (!$staffId) {
+    header('Location: index.php');
+    exit;
+}
 
 // Fetch staff
 $staffStmt = $db->prepare("
@@ -18,261 +21,203 @@ $staffStmt->execute([$staffId]);
 $staffUser = $staffStmt->fetch();
 if (!$staffUser) {
     setFlash('error', 'Staff not found.');
-    header('Location: index.php'); exit;
+    header('Location: index.php');
+    exit;
 }
 
 $pageTitle = 'Reset Password';
-$errors    = [];
-$success   = false;
+$errors = [];
+$sent = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
-    $newPassword = $_POST['new_password']     ?? '';
-    $confirmPwd  = $_POST['confirm_password'] ?? '';
-    $sendEmail   = isset($_POST['send_email']);
+    // Generate a secure random token
+    $token = bin2hex(random_bytes(32));          // 64-char hex string
+    $expiresAt = date('Y-m-d H:i:s', strtotime('+15 minutes'));
 
-    if (!$newPassword)               $errors[] = 'New password is required.';
-    if (strlen($newPassword) < 6)    $errors[] = 'Password must be at least 6 characters.';
-    if ($newPassword !== $confirmPwd) $errors[] = 'Passwords do not match.';
+    // Invalidate any existing tokens for this user
+    $db->prepare("
+        UPDATE password_reset_tokens
+        SET used = 1
+        WHERE user_id = ? AND used = 0
+    ")->execute([$staffId]);
 
-    if (!$errors) {
-        $hashed = password_hash($newPassword, PASSWORD_DEFAULT);
+    // Store new token
+    $db->prepare("
+        INSERT INTO password_reset_tokens (user_id, token, expires_at, created_by, ip_address)
+        VALUES (?, ?, ?, ?, ?)
+    ")->execute([
+                $staffId,
+                hash('sha256', $token),   // store the hash, send the raw token
+                $expiresAt,
+                $currentUser['id'],
+                $_SERVER['REMOTE_ADDR'] ?? ''
+            ]);
+    // Flag user must change password before accessing system
+    $db->prepare("UPDATE users SET must_change_password = 1 WHERE id = ?")
+        ->execute([$staffId]);
 
-        $db->prepare("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?")
-           ->execute([$hashed, $staffId]);
+    // Build reset link
+    $resetLink = APP_URL . '/auth/force_password_change.php?token=' . urlencode($token);
 
-        // Log password change
-        $db->prepare("
-            INSERT INTO password_change_logs (changed_by, changed_for, ip_address)
-            VALUES (?,?,?)
-        ")->execute([
-            $currentUser['id'],
-            $staffId,
-            $_SERVER['REMOTE_ADDR'] ?? ''
-        ]);
+    // Log the action
+    $db->prepare("
+        INSERT INTO password_change_logs (changed_by, changed_for, ip_address)
+        VALUES (?,?,?)
+    ")->execute([
+                $currentUser['id'],
+                $staffId,
+                $_SERVER['REMOTE_ADDR'] ?? ''
+            ]);
 
-        // Send email if checked
-        if ($sendEmail) {
-            try {
-                require_once '../../config/mailer.php';
-                $html = emailWrapper("
-                    <h2 style='color:#0a0f1e;'>Password Reset</h2>
-                    <p>Dear <strong>{$staffUser['full_name']}</strong>,</p>
-                    <p>Your MISPro password has been reset by an administrator.</p>
-                    <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
-                        <tr>
-                            <td style='padding:8px;background:#f9fafb;font-weight:600;width:140px;'>Username</td>
-                            <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$staffUser['username']}</td>
-                        </tr>
-                        <tr>
-                            <td style='padding:8px;background:#f9fafb;font-weight:600;'>New Password</td>
-                            <td style='padding:8px;font-family:monospace;font-size:1rem;font-weight:700;'>{$newPassword}</td>
-                        </tr>
-                    </table>
-                    <p style='color:#ef4444;font-size:.85rem;'>Please log in and change your password immediately.</p>
-                    <a href='" . APP_URL . "/auth/login.php'
-                       style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
-                        Login Now
-                    </a>
-                ");
-                sendMail($staffUser['email'], $staffUser['full_name'],
-                         '[MISPro] Your Password Has Been Reset', $html);
-            } catch (Exception $e) {}
-        }
+    // Send email
+    try {
+        require_once '../../config/mailer.php';
+        $html = emailWrapper("
+            <h2 style='color:#0a0f1e;'>Password Reset Request</h2>
+            <p>Dear <strong>{$staffUser['full_name']}</strong>,</p>
+            <p>An administrator has requested a password reset for your TaskHub account.
+               Click the button below to set a new password.</p>
+            <div style='background:#f9fafb;border-radius:10px;padding:16px;margin:20px 0;text-align:center;'>
+                <p style='margin:0 0 4px;font-size:.8rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;'>Username</p>
+                <p style='margin:0;font-weight:700;font-size:1rem;color:#0a0f1e;'>{$staffUser['username']}</p>
+            </div>
+            <div style='text-align:center;margin:24px 0;'>
+                <a href='{$resetLink}'
+                   style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:13px 32px;
+                          border-radius:8px;text-decoration:none;font-weight:700;font-size:1rem;'>
+                    Set New Password
+                </a>
+            </div>
+            <p style='color:#6b7280;font-size:.82rem;'>
+                This link will expire in <strong>15 minutes</strong>. If you did not request this,
+                contact your administrator immediately.
+            </p>
+            <p style='color:#6b7280;font-size:.78rem;word-break:break-all;'>
+                Or copy this link: {$resetLink}
+            </p>
+        ");
+        sendMail(
+            $staffUser['email'],
+            $staffUser['full_name'],
+            '[TaskHub] Reset Your Password',
+            $html
+        );
+        $sent = true;
+    } catch (Exception $e) {
+        $errors[] = 'Email could not be sent: ' . $e->getMessage();
+    }
 
-        logActivity("Password reset for user #{$staffId}", 'users');
-        setFlash('success', "Password reset successfully for {$staffUser['full_name']}.");
-        header("Location: view.php?id={$staffId}"); exit;
+    if ($sent) {
+        logActivity("Password reset link sent for user #{$staffId}", 'users');
+        setFlash('success', "Password reset link sent to {$staffUser['email']}. Link expires in 15 minutes.");
+        header("Location: view.php?id={$staffId}");
+        exit;
     }
 }
 
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
-<?php include '../../includes/sidebar_admin.php'; ?>
-<div class="main-content">
-<?php include '../../includes/topbar.php'; ?>
-<div style="padding:1.5rem 0;">
+    <?php include '../../includes/sidebar_admin.php'; ?>
+    <div class="main-content">
+        <?php include '../../includes/topbar.php'; ?>
+        <div style="padding:1.5rem 0;">
 
-<?= flashHtml() ?>
+            <?= flashHtml() ?>
 
-<div class="d-flex align-items-center justify-content-between mb-3">
-    <a href="view.php?id=<?= $staffId ?>" class="btn btn-outline-secondary btn-sm">
-        <i class="fas fa-arrow-left me-1"></i>Back
-    </a>
-    <h5 style="margin:0;">Reset Password</h5>
-</div>
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <a href="view.php?id=<?= $staffId ?>" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>Back
+                </a>
+                <h5 style="margin:0;">Reset Password</h5>
+            </div>
 
-<div class="row g-4 justify-content-center">
-    <div class="col-lg-6">
+            <div class="row g-4 justify-content-center">
+                <div class="col-lg-6">
 
-        <!-- Staff Info -->
-        <div class="card-mis mb-4" style="border-left:3px solid #f59e0b;">
-            <div class="card-mis-body">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="avatar-circle" style="width:48px;height:48px;font-size:.95rem;flex-shrink:0;">
-                        <?= strtoupper(substr($staffUser['full_name'], 0, 2)) ?>
-                    </div>
-                    <div>
-                        <div style="font-weight:600;"><?= htmlspecialchars($staffUser['full_name']) ?></div>
-                        <div style="font-size:.78rem;color:#9ca3af;">
-                            <?= htmlspecialchars($staffUser['username']) ?>
-                            · <?= htmlspecialchars($staffUser['email']) ?>
+                    <!-- Staff Info -->
+                    <div class="card-mis mb-4" style="border-left:3px solid #f59e0b;">
+                        <div class="card-mis-body">
+                            <div class="d-flex align-items-center gap-3">
+                                <div class="avatar-circle"
+                                    style="width:48px;height:48px;font-size:.95rem;flex-shrink:0;">
+                                    <?= strtoupper(substr($staffUser['full_name'], 0, 2)) ?>
+                                </div>
+                                <div>
+                                    <div style="font-weight:600;"><?= htmlspecialchars($staffUser['full_name']) ?></div>
+                                    <div style="font-size:.78rem;color:#9ca3af;">
+                                        <?= htmlspecialchars($staffUser['username']) ?>
+                                        · <?= htmlspecialchars($staffUser['email']) ?>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
+
+                    <?php if (!empty($errors)): ?>
+                        <div class="alert alert-danger rounded-3 mb-4">
+                            <strong>Please fix:</strong>
+                            <ul class="mb-0 mt-1">
+                                <?php foreach ($errors as $e): ?>
+                                    <li><?= htmlspecialchars($e) ?></li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </div>
+                    <?php endif; ?>
+
+                    <div class="card-mis">
+                        <div class="card-mis-header">
+                            <h5><i class="fas fa-envelope text-warning me-2"></i>Send Password Reset Link</h5>
+                        </div>
+                        <div class="card-mis-body">
+
+                            <!-- Info banner -->
+                            <div style="background:#1e3a5f;border:1px solid #2d5a8e;border-radius:10px;
+                            padding:14px 16px;margin-bottom:1.25rem;display:flex;gap:12px;align-items:flex-start;">
+                                <i class="fas fa-shield-alt" style="color:#60a5fa;margin-top:2px;flex-shrink:0;"></i>
+                                <div style="font-size:.82rem;color:#93c5fd;line-height:1.5;">
+                                    A <strong style="color:#bfdbfe;">secure one-time link</strong> will be emailed to
+                                    <strong
+                                        style="color:#bfdbfe;"><?= htmlspecialchars($staffUser['email']) ?></strong>.
+                                    The link expires in <strong style="color:#bfdbfe;">15 minutes</strong> and can only be
+                                    used once.
+                                    The user sets their own password — no plaintext passwords are sent.
+                                </div>
+                            </div>
+
+                            <form method="POST">
+                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+
+                                <div
+                                    style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:1.25rem;">
+                                    <table style="width:100%;font-size:.85rem;border-collapse:collapse;">
+                                        <tr>
+                                            <td style="padding:5px 0;color:#6b7280;width:110px;">Recipient</td>
+                                            <td style="padding:5px 0;font-weight:600;">
+                                                <?= htmlspecialchars($staffUser['full_name']) ?></td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding:5px 0;color:#6b7280;">Email</td>
+                                            <td style="padding:5px 0;"><?= htmlspecialchars($staffUser['email']) ?></td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding:5px 0;color:#6b7280;">Expires</td>
+                                            <td style="padding:5px 0;">15 minutes from now</td>
+                                        </tr>
+                                    </table>
+                                </div>
+
+                                <button type="submit" class="btn btn-warning w-100" style="font-weight:600;">
+                                    <i class="fas fa-paper-plane me-2"></i>Send Reset Link
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
                 </div>
             </div>
+
         </div>
-
-        <?php if (!empty($errors)): ?>
-        <div class="alert alert-danger rounded-3 mb-4">
-            <strong>Please fix:</strong>
-            <ul class="mb-0 mt-1">
-                <?php foreach ($errors as $e): ?>
-                    <li><?= htmlspecialchars($e) ?></li>
-                <?php endforeach; ?>
-            </ul>
-        </div>
-        <?php endif; ?>
-
-        <div class="card-mis">
-            <div class="card-mis-header">
-                <h5><i class="fas fa-key text-warning me-2"></i>Set New Password</h5>
-            </div>
-            <div class="card-mis-body">
-                <form method="POST">
-                    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                    <div class="row g-3">
-
-                        <div class="col-12">
-                            <label class="form-label-mis">New Password <span class="required-star">*</span></label>
-                            <div class="input-group">
-                                <input type="password" name="new_password" id="newPwd"
-                                       class="form-control" required minlength="6"
-                                       placeholder="Minimum 6 characters">
-                                <button type="button" class="btn btn-outline-secondary"
-                                        onclick="togglePwd('newPwd', this)">
-                                    <i class="fas fa-eye"></i>
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class="col-12">
-                            <label class="form-label-mis">Confirm Password <span class="required-star">*</span></label>
-                            <div class="input-group">
-                                <input type="password" name="confirm_password" id="confirmPwd"
-                                       class="form-control" required
-                                       placeholder="Re-enter password">
-                                <button type="button" class="btn btn-outline-secondary"
-                                        onclick="togglePwd('confirmPwd', this)">
-                                    <i class="fas fa-eye"></i>
-                                </button>
-                            </div>
-                            <div id="pwdMatchMsg" style="font-size:.75rem;margin-top:.3rem;"></div>
-                        </div>
-
-                        <!-- Password strength -->
-                        <div class="col-12">
-                            <div style="font-size:.75rem;color:#9ca3af;margin-bottom:.3rem;">Password Strength</div>
-                            <div id="strengthBar" style="height:4px;border-radius:99px;background:#f3f4f6;overflow:hidden;">
-                                <div id="strengthFill" style="height:100%;width:0;border-radius:99px;transition:width .3s,background .3s;"></div>
-                            </div>
-                            <div id="strengthText" style="font-size:.72rem;margin-top:.2rem;"></div>
-                        </div>
-
-                        <!-- Quick generate -->
-                        <div class="col-12">
-                            <button type="button" class="btn btn-outline-secondary btn-sm"
-                                    onclick="generatePassword()">
-                                <i class="fas fa-dice me-1"></i>Generate Strong Password
-                            </button>
-                        </div>
-
-                        <!-- Send email -->
-                        <div class="col-12">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox"
-                                       name="send_email" id="sendEmail" checked>
-                                <label class="form-check-label" for="sendEmail" style="font-size:.85rem;">
-                                    Send new password to <strong><?= htmlspecialchars($staffUser['email']) ?></strong>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="col-12">
-                            <button type="submit" class="btn btn-warning w-100">
-                                <i class="fas fa-key me-1"></i>Reset Password
-                            </button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-    </div>
-</div>
-
-</div>
-<?php include '../../includes/footer.php'; ?>
-
-<script>
-function togglePwd(id, btn) {
-    const f = document.getElementById(id);
-    const i = btn.querySelector('i');
-    if (f.type === 'password') { f.type = 'text'; i.classList.replace('fa-eye','fa-eye-slash'); }
-    else { f.type = 'password'; i.classList.replace('fa-eye-slash','fa-eye'); }
-}
-
-function generatePassword() {
-    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$!';
-    let pwd = '';
-    for (let i = 0; i < 12; i++) pwd += chars.charAt(Math.floor(Math.random() * chars.length));
-    document.getElementById('newPwd').type    = 'text';
-    document.getElementById('confirmPwd').type = 'text';
-    document.getElementById('newPwd').value    = pwd;
-    document.getElementById('confirmPwd').value = pwd;
-    checkStrength(pwd);
-    checkMatch();
-}
-
-function checkStrength(pwd) {
-    let score = 0;
-    if (pwd.length >= 8)  score++;
-    if (pwd.length >= 12) score++;
-    if (/[A-Z]/.test(pwd)) score++;
-    if (/[0-9]/.test(pwd)) score++;
-    if (/[^A-Za-z0-9]/.test(pwd)) score++;
-    const levels = [
-        {w:'20%',  bg:'#ef4444', txt:'Very Weak'},
-        {w:'40%',  bg:'#f97316', txt:'Weak'},
-        {w:'60%',  bg:'#f59e0b', txt:'Fair'},
-        {w:'80%',  bg:'#84cc16', txt:'Strong'},
-        {w:'100%', bg:'#10b981', txt:'Very Strong'},
-    ];
-    const l = levels[Math.min(score, 4)];
-    document.getElementById('strengthFill').style.width      = l.w;
-    document.getElementById('strengthFill').style.background = l.bg;
-    document.getElementById('strengthText').textContent      = l.txt;
-    document.getElementById('strengthText').style.color      = l.bg;
-}
-
-function checkMatch() {
-    const p1  = document.getElementById('newPwd').value;
-    const p2  = document.getElementById('confirmPwd').value;
-    const msg = document.getElementById('pwdMatchMsg');
-    if (!p2) { msg.textContent = ''; return; }
-    if (p1 === p2) {
-        msg.textContent = '✓ Passwords match';
-        msg.style.color = '#10b981';
-    } else {
-        msg.textContent = '✗ Passwords do not match';
-        msg.style.color = '#ef4444';
-    }
-}
-
-document.getElementById('newPwd').addEventListener('input', function() {
-    checkStrength(this.value); checkMatch();
-});
-document.getElementById('confirmPwd').addEventListener('input', checkMatch);
-</script>
+        <?php include '../../includes/footer.php'; ?>

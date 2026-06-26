@@ -16,7 +16,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireAdmin();
 
 $db = getDB();
 $user = currentUser();
@@ -52,7 +52,7 @@ if ($__isConsPrimary) {
 
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthEnd = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');
@@ -923,7 +923,6 @@ include '../../includes/header.php';
                         $pvaRows = [
                             ['Planned hrs', $plannedHrs, $plannedHrs, 'var(--blue)'],
                             ['Field actual', $actualHrs, $plannedHrs, $teamEffCol],
-                            ['Office hrs', $offHours, $plannedHrs, 'var(--teal)'],
                         ];
                         foreach ($pvaRows as [$lbl, $val, $base, $col]):
                             $w = $base > 0 ? min(round($val / $base * 100), 100) : 0;

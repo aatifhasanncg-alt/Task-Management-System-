@@ -2,12 +2,12 @@
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
-requireAnyRole();
+requireAdmin();
 
 $db        = getDB();
 $user      = currentUser();
 $pageTitle = 'Bank Summary';
-$userRole  = $user['role_name'] ?? 'admin';
+$userRole  = $user['role'] ?? 'admin';
 
 // ── Get the logged-in user's branch ──────────────────────────────────────────
 $userBranchStmt = $db->prepare("

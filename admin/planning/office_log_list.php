@@ -41,7 +41,7 @@ if ($__isConsPrimary) {
 // ── Filters ────────────────────────────────────────────────────────────────
 $now = new DateTime();
 $month = preg_match('/^\d{4}-\d{2}$/', $_GET['month'] ?? '') ? $_GET['month'] : $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthLabel = $monthDate->format('F Y');
 
 $staffFilter = (int) ($_GET['staff_id'] ?? 0);

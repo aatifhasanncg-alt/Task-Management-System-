@@ -40,7 +40,7 @@ elseif ($__udaCons)                   $deptId = (int) $__udaCons['id'];
 /* ── Month / filters ─────────────────────────────────────────── */
 $now        = new DateTime();
 $month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthEnd   = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');
@@ -527,11 +527,10 @@ foreach ($offKpiCards as [$icon,$col,$bg,$lbl,$val]): ?>
         </div>
     </div>
     <div class="card-mis-body">
-        <?php $maxH = max($plannedHrs, $teamActual, $officeHours, 1); ?>
+        <?php $maxH = max($plannedHrs, $teamActual, 1); ?>
         <?php foreach ([
             ['Planned Field', $plannedHrs,  $maxH, '#3b82f6'],
             ['Actual Field',  $teamActual,  $maxH, $hourEffColor],
-            ['Office Hours',  $officeHours, $maxH, '#10b981'],
         ] as [$lbl,$val,$base,$col]):
             $w = $base > 0 ? min(100, round($val / $base * 100)) : 0; ?>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">

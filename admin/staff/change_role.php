@@ -3,6 +3,7 @@
 require_once '../../config/db.php';
 require_once '../../config/session.php';
 require_once '../../config/role_manager.php';
+requireAdmin();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();

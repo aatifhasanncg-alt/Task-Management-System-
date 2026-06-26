@@ -18,7 +18,7 @@ $dup = $db->prepare("SELECT id FROM industries WHERE industry_name = ? AND id !=
 $dup->execute([$name, $id]);
 if ($dup->fetch()) {
     setFlash('error', "Industry \"{$name}\" already exists.");
-    header('Location: industries.php'); exit;
+    header('Location: industry.php'); exit;
 }
 
 $db->prepare("UPDATE industries SET industry_name = ?, is_active = ? WHERE id = ?")
@@ -26,5 +26,5 @@ $db->prepare("UPDATE industries SET industry_name = ?, is_active = ? WHERE id = 
 
 logActivity("Updated industry ID {$id} → {$name}", 'industries');
 setFlash('success', "Industry \"{$name}\" updated.");
-header('Location: industries.php');
+header('Location: industry.php');
 exit;

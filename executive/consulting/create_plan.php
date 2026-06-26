@@ -8,7 +8,7 @@ require_once '../../config/session.php';
 require_once '../../config/helpers.php';
 require_once '../../config/notify.php';
 
-requireAnyRole();
+requireExecutive();
 
 $db   = getDB();
 $user = currentUser();
@@ -22,19 +22,24 @@ $today = $now->format('Y-m-d');
 $month = $_GET['month'] ?? $now->format('Y-m');
 
 // ── Build week blocks for selected month (same as admin) ──────
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthLabel = $monthDate->format('F Y');
 
 $weeks = [];
-$first = (clone $monthDate)->modify('first day of this month');
 $last  = (clone $monthDate)->modify('last day of this month');
-$cur   = clone $first;
-$wn    = 1;
-while ($cur <= $last && $wn <= 5) {
-    $ws  = clone $cur;
-    $dow = (int)$cur->format('w');       // 0=Sun, 6=Sat
-    $daysToSat = (6 - $dow + 7) % 7 ?: 6;
-    $we  = (clone $cur)->modify("+{$daysToSat} days");
+
+// Rewind to the Sunday that starts the week containing the 1st
+$first = clone $monthDate;
+$dowFirst = (int)$first->format('w'); // 0=Sun
+if ($dowFirst !== 0) {
+    $first->modify('-' . $dowFirst . ' days');
+}
+
+$cur = clone $first;
+$wn  = 1;
+while ($cur <= $last && $wn <= 6) {
+    $ws = clone $cur;
+    $we = (clone $cur)->modify('+6 days'); // Sun → Sat
     if ($we > $last) $we = clone $last;
     $weeks[] = [
         'week_number'     => $wn,
@@ -45,7 +50,6 @@ while ($cur <= $last && $wn <= 5) {
     $cur = (clone $we)->modify('+1 day');
     $wn++;
 }
-
 // ── Staff list ────────────────────────────────────────────────
 $staffList = $db->query("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
@@ -118,8 +122,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ── Validation ────────────────────────────────────────────
     if (!$targetUid)
         $errors[] = 'Please select a staff member.';
-    if (!$weekNumber || $weekNumber < 1 || $weekNumber > 5)
-        $errors[] = 'Week number must be between 1 and 5.';
+    if (!$weekNumber || $weekNumber < 1 || $weekNumber > 6)
+        $errors[] = 'Week number must be between 1 and 6.';
     if (!$weekStart)
         $errors[] = 'Week start date is required.';
     if (!$weekEnd)

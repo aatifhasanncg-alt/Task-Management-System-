@@ -2,7 +2,7 @@
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
-requireAnyRole();
+requireManager();
 
 $db        = getDB();
 $user      = currentUser();
@@ -64,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bank']) && $userR
     header('Location: summary.php'); exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_summary']) && $userRole === 'admin') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_summary']) && $userRole === 'manager') {
     verifyCsrf();
     $summaryId  = (int)($_POST['summary_id']  ?? 0);
     $totalFiles = (int)($_POST['total_files'] ?? 0);
@@ -150,7 +150,7 @@ include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
 <?php
-include '../../includes/sidebar_admin.php';
+include '../../includes/sidebar_manager.php';
 ?>
 <div class="main-content">
 <?php include '../../includes/topbar.php'; ?>

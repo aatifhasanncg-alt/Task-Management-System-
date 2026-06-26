@@ -7,7 +7,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireExecutive();
 
 $db       = getDB();
 $user     = currentUser();
@@ -28,7 +28,7 @@ $selectedBranch = ($isExecutive || $isAdmin)
     ? ((int)($_GET['branch'] ?? 0) ?: 0)
     : $branchId;
 
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthEnd   = $monthDate->format('Y-m-t');
 $monthLabel = $monthDate->format('F Y');

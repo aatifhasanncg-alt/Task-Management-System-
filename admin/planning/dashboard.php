@@ -10,7 +10,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireAdmin();
 
 $db   = getDB();
 $user = currentUser();
@@ -52,7 +52,7 @@ if ($__isConsPrimary) {
 // ── Month selection ────────────────────────────────────────────────────────
 $now        = new DateTime();
 $month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthLabel = $monthDate->format('F Y');
 $monthStart = $monthDate->format('Y-m-01');
 
@@ -298,10 +298,19 @@ if ($isAdmin) {
             SUM(wl.visit_status = 'visited')             AS v_visited,
             SUM(wl.visit_status = 'missed')              AS v_missed,
             COUNT(DISTINCT wl.client_id)                 AS visit_clients,
-            -- Office logs
+           -- Office logs
             COUNT(DISTINCT owl.id)                       AS office_entries,
             COALESCE(SUM(TIMESTAMPDIFF(MINUTE,owl.time_in,owl.time_out)/60),0) AS office_hours,
-            COUNT(DISTINCT owl.client_id)                AS office_clients
+            COUNT(DISTINCT owl.client_id)                AS office_clients,
+            -- Planned visit hours (visit-only — office is never planned)
+            COALESCE((
+                SELECT SUM(wpe.planned_hours)
+                FROM work_plan_entries wpe
+                JOIN work_plans wp ON wp.id = wpe.plan_id
+                WHERE wpe.assigned_to  = u.id
+                  AND wp.plan_month    = ?
+                  AND wp.department_id = ?
+            ), 0)                                        AS planned_hours
         FROM users u
         -- join visit logs for this month
         LEFT JOIN work_logs wl
@@ -347,6 +356,7 @@ if ($isAdmin) {
         ORDER BY visit_hours DESC, office_hours DESC
     ");
     $stTeam->execute([
+        $monthStart, $deptId,     // planned visit hours subquery (SELECT clause — binds first)
         $month, $deptId,          // visit_logs filter
         $deptId, $month,          // office_logs filter
         $uid,                     // exclude self
@@ -483,7 +493,7 @@ include '../../includes/header.php';
                         <div class="kpi-tile" style="--kpi-color:<?= $effColor ?>;">
                             <div class="kpi-icon"><i class="fas fa-tachometer-alt" style="color:<?= $effColor ?>;"></i></div>
                             <div class="kpi-val" style="color:<?= $effColor ?>;"><?= $efficiency ?>%</div>
-                            <div class="kpi-label">Efficiency</div>
+                            <div class="kpi-label">Visit Efficiency</div>
                             <div class="kpi-delta" style="color:#9ca3af;font-size:.7rem;"><?= number_format($plannedHours,1) ?>h planned</div>
                             <?php if ($efficiencyRaw > 100): ?>
                                 <div style="font-size:.65rem;color:#f59e0b;margin-top:3px;font-weight:600;">
@@ -981,17 +991,22 @@ include '../../includes/header.php';
                                             <th class="text-center">Visited</th>
                                             <th class="text-center">Missed</th>
                                             <th class="text-center">Visit Clients</th>
+                                            <th class="text-center">Planned Hrs</th>
                                             <th class="text-center">Visit Hours</th>
                                             <th class="text-center">Office Entries</th>
                                             <th class="text-center">Office Hours</th>
                                             <th class="text-center">Office Clients</th>
-                                            <th>Visit Rate</th>
+                                            <th>Visit Efficiency</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                     <?php foreach ($teamRows as $tr):
-                                        $vr  = $tr['visit_logs'] > 0 ? round($tr['v_visited'] / $tr['visit_logs'] * 100) : 0;
-                                        $vrC = $vr >= 80 ? '#10b981' : ($vr >= 50 ? '#f59e0b' : '#ef4444');
+                                        $tPlanned = (float) $tr['planned_hours'];
+                                        $tActual  = (float) $tr['visit_hours'];
+                                        $vrRaw    = $tPlanned > 0 ? round($tActual / $tPlanned * 100) : null;
+                                        $vr       = $vrRaw !== null ? min($vrRaw, 100) : null;
+                                        $vrC      = $vr === null ? '#9ca3af'
+                                                  : ($vr >= 80 ? '#10b981' : ($vr >= 50 ? '#f59e0b' : '#ef4444'));
                                     ?>
                                         <tr>
                                             <td>
@@ -1004,20 +1019,22 @@ include '../../includes/header.php';
                                                 <?= $tr['v_missed'] ?: '—' ?>
                                             </td>
                                             <td class="text-center"><?= $tr['visit_clients'] ?></td>
-                                            <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format((float)$tr['visit_hours'],1) ?>h</td>
+                                            <td class="text-center" style="color:#3b82f6;font-weight:600;"><?= number_format($tPlanned,1) ?>h</td>
+                                            <td class="text-center" style="color:#c9a84c;font-weight:700;"><?= number_format($tActual,1) ?>h</td>
                                             <td class="text-center"><?= $tr['office_entries'] ?></td>
                                             <td class="text-center" style="color:#3b82f6;font-weight:700;"><?= number_format((float)$tr['office_hours'],1) ?>h</td>
                                             <td class="text-center"><?= $tr['office_clients'] ?></td>
                                             <td>
-                                                <?php if ($tr['visit_logs'] > 0): ?>
+                                                <?php if ($vr !== null): ?>
                                                     <div class="perf-bar">
                                                         <div class="perf-bar-track">
                                                             <div class="perf-bar-fill" style="width:<?= $vr ?>%;background:<?= $vrC ?>;"></div>
                                                         </div>
                                                         <span style="font-size:.78rem;font-weight:700;color:<?= $vrC ?>;min-width:35px;"><?= $vr ?>%</span>
                                                     </div>
+                                                    <?php if ($vrRaw > 100): ?><div style="font-size:.63rem;color:#f59e0b;margin-top:2px;">⚠ <?= $vrRaw ?>%</div><?php endif; ?>
                                                 <?php else: ?>
-                                                    <span style="font-size:.78rem;color:#9ca3af;">No logs</span>
+                                                    <span style="font-size:.78rem;color:#9ca3af;">No plan</span>
                                                 <?php endif; ?>
                                             </td>
                                         </tr>

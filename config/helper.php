@@ -150,3 +150,42 @@ function fiscalYearSelect(
     $html .= '</select>';
     return $html;
 }
+/**
+ * Generate the next employee_id for a given role, with row-locking to
+ * prevent two concurrent calls from computing the same sequence number.
+ *
+ * IMPORTANT: must be called inside a transaction that also performs the
+ * UPDATE/INSERT using this value, and that transaction must commit
+ * immediately after — otherwise the lock holds longer than needed.
+ */
+function generateEmployeeId(PDO $db, int $roleId): string
+{
+    $roleStmt = $db->prepare("SELECT role_name FROM roles WHERE id = ?");
+    $roleStmt->execute([$roleId]);
+    $roleName = $roleStmt->fetchColumn() ?: '';
+
+    $prefixMap = [
+        'executive' => 'EXE',
+        'manager'   => 'MGR',
+        'admin'     => 'ADM',
+        'staff'     => 'STF',
+    ];
+    $prefix = $prefixMap[$roleName] ?? 'EMP';
+
+    // FOR UPDATE locks the matching rows until the enclosing transaction
+    // commits/rolls back — any concurrent call for the same prefix will
+    // block here until this one finishes, preventing duplicate sequence numbers.
+    $seqStmt = $db->prepare("
+        SELECT COALESCE(
+            MAX(CAST(SUBSTRING_INDEX(employee_id, '-', -1) AS UNSIGNED)),
+            0
+        ) + 1 AS next_seq
+        FROM users
+        WHERE employee_id LIKE CONCAT(?, '-%')
+        FOR UPDATE
+    ");
+    $seqStmt->execute([$prefix]);
+    $nextSeq = (int) $seqStmt->fetchColumn();
+
+    return $prefix . '-' . str_pad((string) $nextSeq, 3, '0', STR_PAD_LEFT);
+}

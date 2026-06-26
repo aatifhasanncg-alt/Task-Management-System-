@@ -1,0 +1,27 @@
+# ── Block direct web access to sensitive folders ──────────────────────
+# These folders should only ever be loaded internally via require/include,
+# never requested directly through a browser URL.
+
+RewriteEngine On
+
+RewriteRule ^config/ - [F,L]
+RewriteRule ^vendor/ - [F,L]
+RewriteRule ^src/ - [F,L]
+
+# Block any .env file anywhere in the project
+<FilesMatch "^\.env">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Block any file literally named secrets.php, even if one ends up inside the web root by mistake
+<FilesMatch "secrets\.php$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Block common backup/editor leftover files that sometimes get left on servers
+<FilesMatch "\.(bak|sql|log|swp|old|orig)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>

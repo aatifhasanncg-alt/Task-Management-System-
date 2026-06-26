@@ -188,7 +188,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                $supId = (int)($e['supervisor_id'] ?? 0) ?: null;
+                $supId = (int) ($e['supervisor_id'] ?? 0) ?: null;
                 $ins->execute([
                     $planId,
                     $cid,
@@ -413,18 +413,19 @@ include '../../includes/header.php';
                                     <i class="fas fa-save"></i> Update Plan
                                 </button>
                                 <?php if ($plan['status'] === 'rejected'): ?>
-                                <div style="margin-top:8px;padding:8px 10px;background:#fef9ec;border-radius:6px;
+                                    <div style="margin-top:8px;padding:8px 10px;background:#fef9ec;border-radius:6px;
                                     font-size:.75rem;color:#92400e;border:1px solid #fde68a;">
-                                    <i class="fas fa-info-circle me-1"></i>
-                                    This plan was <strong>rejected</strong>. Saving will reset it to
-                                    <strong>Draft</strong> so you can re-submit for approval.
-                                </div>
+                                        <i class="fas fa-info-circle me-1"></i>
+                                        This plan was <strong>rejected</strong>. Saving will reset it to
+                                        <strong>Draft</strong> so you can re-submit for approval.
+                                    </div>
                                 <?php elseif ($plan['status'] === 'approved'): ?>
-                                <div style="margin-top:8px;padding:8px 10px;background:#f0fdf4;border-radius:6px;
+                                    <div style="margin-top:8px;padding:8px 10px;background:#f0fdf4;border-radius:6px;
                                     font-size:.75rem;color:#166534;border:1px solid #bbf7d0;">
-                                    <i class="fas fa-check-circle me-1"></i>
-                                    This plan is <strong>approved</strong>. Edits will be saved without changing the approval status.
-                                </div>
+                                        <i class="fas fa-check-circle me-1"></i>
+                                        This plan is <strong>approved</strong>. Edits will be saved without changing the
+                                        approval status.
+                                    </div>
                                 <?php endif; ?>
                                 <a href="plan_list.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
                                     style="justify-content:center;">
@@ -550,7 +551,7 @@ include '../../includes/header.php';
                 <option value="">— None —</option>
                 <?php foreach ($supervisors as $sv):
                     $supLabel = trim(($sv['employee_id'] ? '[' . $sv['employee_id'] . '] ' : '') . $sv['full_name']);
-                ?>
+                    ?>
                 <option value="<?= $sv['id'] ?>"
                     data-default="<?= $defaultSupervisor == $sv['id'] ? '1' : '0' ?>">
                     <?= htmlspecialchars($supLabel) ?>
@@ -565,7 +566,13 @@ include '../../includes/header.php';
     </div>`;
 
         container.appendChild(div);
-
+        // Scroll to the newly added entry
+        setTimeout(() => {
+            div.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }, 50);
         // TomSelect on client dropdown
         const sel = div.querySelector('.entry-client');
         const ts = new TomSelect(sel, {

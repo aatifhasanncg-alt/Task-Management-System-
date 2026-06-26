@@ -9,14 +9,14 @@ declare(strict_types=1);
  * - Clears their remember tokens (forces re-login with new role)
  */
 function changeUserRole(
-    int    $userId,
-    int    $newRoleId,
-    int    $newBranchId = 0,
-    string $reason      = ''
+    int $userId,
+    int $newRoleId,
+    int $newBranchId = 0,
+    string $reason = ''
 ): array {
 
-    $db          = getDB();
-    $changedBy   = currentUser()['id'];
+    $db = getDB();
+    $changedBy = currentUser()['id'];
 
     // ── Get current user data ─────────────────────────────────
     $stmt = $db->prepare("
@@ -32,7 +32,7 @@ function changeUserRole(
         return ['success' => false, 'error' => 'User not found.'];
     }
 
-    if ($user['role_id'] === $newRoleId) {
+    if ((int) $user['role_id'] === $newRoleId) {
         return ['success' => false, 'error' => 'User already has this role.'];
     }
 
@@ -54,28 +54,27 @@ function changeUserRole(
                 (user_id, employee_id, role_id, reason)
             VALUES (?, ?, ?, 'role_change')
         ")->execute([
-            $userId,
-            $user['employee_id'],
-            $user['role_id'],
-        ]);
+                    $userId,
+                    $user['employee_id'],
+                    $user['role_id'],
+                ]);
 
-        // ── Step 2: Update role (trigger auto-generates new ID)
+        // ── Step 2: Generate new employee ID, then update role + ID together
+        $newEmployeeId = generateEmployeeId($db, $newRoleId);
+
         $db->prepare("
             UPDATE users 
-            SET role_id   = ?,
-                branch_id = ?,
-                updated_at = NOW()
+            SET role_id     = ?,
+                branch_id   = ?,
+                employee_id = ?,
+                updated_at  = NOW()
             WHERE id = ?
         ")->execute([
-            $newRoleId,
-            $newBranchId ?: $user['branch_id'],
-            $userId,
-        ]);
-
-        // ── Step 3: Get the newly assigned employee ID ────────
-        $newIdStmt = $db->prepare("SELECT employee_id FROM users WHERE id = ?");
-        $newIdStmt->execute([$userId]);
-        $newEmployeeId = $newIdStmt->fetchColumn();
+                    $newRoleId,
+                    $newBranchId ?: $user['branch_id'],
+                    $newEmployeeId,
+                    $userId,
+                ]);
 
         // ── Step 4: Log to history ────────────────────────────
         $db->prepare("
@@ -86,16 +85,16 @@ function changeUserRole(
                  changed_by, reason)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ")->execute([
-            $userId,
-            $user['role_id'],
-            $newRoleId,
-            $user['employee_id'],
-            $newEmployeeId,
-            $user['branch_id'],
-            $newBranchId ?: $user['branch_id'],
-            $changedBy,
-            $reason,
-        ]);
+                    $userId,
+                    $user['role_id'],
+                    $newRoleId,
+                    $user['employee_id'],
+                    $newEmployeeId,
+                    $user['branch_id'],
+                    $newBranchId ?: $user['branch_id'],
+                    $changedBy,
+                    $reason,
+                ]);
 
         // ── Step 5: Clear all login tokens (force re-login) ───
         $db->prepare("
@@ -113,11 +112,11 @@ function changeUserRole(
         $db->commit();
 
         return [
-            'success'        => true,
-            'old_role'       => $user['role_name'],
-            'new_role'       => $newRole['role_name'],
-            'old_employee_id'=> $user['employee_id'],
-            'new_employee_id'=> $newEmployeeId,
+            'success' => true,
+            'old_role' => $user['role_name'],
+            'new_role' => $newRole['role_name'],
+            'old_employee_id' => $user['employee_id'],
+            'new_employee_id' => $newEmployeeId,
         ];
 
     } catch (Exception $e) {
@@ -129,7 +128,8 @@ function changeUserRole(
 /**
  * Get full role history for a user
  */
-function getUserRoleHistory(int $userId): array {
+function getUserRoleHistory(int $userId): array
+{
     $db = getDB();
     $stmt = $db->prepare("
         SELECT 
@@ -155,7 +155,8 @@ function getUserRoleHistory(int $userId): array {
 /**
  * Get all old employee IDs for a user
  */
-function getRetiredEmployeeIds(int $userId): array {
+function getRetiredEmployeeIds(int $userId): array
+{
     $db = getDB();
     $stmt = $db->prepare("
         SELECT rei.*, r.role_name

@@ -6,6 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
+require_once '../../config/plan_notify.php';
 requireAnyRole();
 
 $db   = getDB();
@@ -18,27 +19,27 @@ $branchId = (int)$user['branch_id'];
 // Month
 $now       = new DateTime();
 $month     = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
-// Build week options for month
 $weeks = [];
 $first = clone $monthDate;
-$first->modify('first day of this month');
 $last  = clone $monthDate;
 $last->modify('last day of this month');
+
+// Rewind to the Sunday that starts the week containing the 1st
+$dowFirst = (int)$first->format('w');
+if ($dowFirst !== 0) {
+    $first->modify('-' . $dowFirst . ' days');
+}
 
 $cur = clone $first;
 $wn  = 1;
 while ($cur <= $last && $wn <= 5) {
     $ws = clone $cur;
-    // week end = next Saturday or end of month
     $we = clone $cur;
-    $dow = (int)$cur->format('w'); // 0=Sun
-    $daysToSat = (6 - $dow + 7) % 7;
-    if ($daysToSat === 0) $daysToSat = 6;
-    $we->modify("+{$daysToSat} days");
+    $we->modify('+6 days'); // Sun + 6 = Sat
     if ($we > $last) $we = clone $last;
     $weeks[] = [
         'week_number'     => $wn,
@@ -173,20 +174,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
             }
 
-            // Notify supervisor if exists
-            if (!empty($user['managed_by'])) {
-                notify(
-                    $user['managed_by'],
-                    'New Work Plan Submitted',
-                    $user['full_name'] . ' submitted a work plan for Week ' . $weekNum . ', ' . $monthLabel,
-                    'task',
-                    APP_URL . '/admin/planning/plan_view.php?id=' . $planId,
-                    true,
-                    []
-                );
-            }
+            // ── Auto-submit (staff plans for self always go straight to submitted) ──
+            $db->prepare("UPDATE work_plans SET status='submitted', updated_at=NOW() WHERE id=?")
+               ->execute([$planId]);
 
             $db->commit();
+            logActivity('Created plan #' . $planId . ' Week ' . $weekNum, 'consulting');
+
+            notifyPlanApprovers(
+                $db, $planId, $uid, $uid,
+                $user['full_name'] ?? ('User #' . $uid),
+                $weekNum, $monthLabel, $month, 'created_for_self'
+            );
+
             setFlash('success', 'Work plan created successfully!');
             header('Location: plan_list.php?month=' . $month);
             exit;

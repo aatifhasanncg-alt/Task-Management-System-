@@ -63,9 +63,24 @@ if (!$id) {
 }
 
 // ── Current user profile ──────────────────────────────────────────────────────
+// ── Current user profile ──────────────────────────────────────────────────────
 $staffProfileStmt = $db->prepare("SELECT u.*, d.dept_code FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ?");
 $staffProfileStmt->execute([$user['id']]);
 $staffProfile = $staffProfileStmt->fetch();
+
+// ── UDA (secondary department) memberships for this user ─────────────────────
+$udaDeptCodes = [];
+try {
+    $udaStmt = $db->prepare("
+        SELECT d.dept_code
+        FROM user_department_assignments uda
+        JOIN departments d ON d.id = uda.department_id
+        WHERE uda.user_id = ?
+    ");
+    $udaStmt->execute([$user['id']]);
+    $udaDeptCodes = $udaStmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+}
 
 // ── Fiscal years ──────────────────────────────────────────────────────────────
 $fys = [];
@@ -123,15 +138,25 @@ if (!$task) {
     exit;
 }
 
-// Staff can only view their own assigned tasks
-if (!isAdmin() && !isExecutive() && $task['assigned_to'] != $user['id']) {
+// Staff can view a task if it's personally assigned to them, OR if the
+// task's department is their primary department, OR if they have a UDA
+// (secondary) assignment to that department.
+$isMyTask = $task['assigned_to'] == $user['id'];
+$isPrimaryDeptMatch = (($staffProfile['dept_code'] ?? '') === $task['dept_code']);
+$isUdaDeptMatch = in_array($task['dept_code'], $udaDeptCodes, true);
+$canViewDept = $isMyTask || $isPrimaryDeptMatch || $isUdaDeptMatch;
+
+if (!isAdmin() && !isExecutive() && !$canViewDept) {
     setFlash('error', 'Access denied.');
     header('Location: index.php');
     exit;
 }
 
-$isMyTask = $task['assigned_to'] == $user['id'];
 $isDone = $task['status'] === 'Done';
+
+// IT-specific edit right: primary-IT staff or UDA-IT staff can edit ANY
+// IT ticket (mark resolved + note), not just ones assigned to them.
+$isItEditor = ($task['dept_code'] === 'IT') && ($isPrimaryDeptMatch || $isUdaDeptMatch);
 
 // ── dept detail ───────────────────────────────────────────────────────────────
 $detailTableMap = [
@@ -140,6 +165,7 @@ $detailTableMap = [
     'BANK' => 'task_banking',
     'CORP' => 'task_corporate',
     'FIN' => 'task_finance',
+    'IT' => 'task_it',
 ];
 $detailTable = $detailTableMap[$task['dept_code']] ?? null;
 $detail = null;
@@ -172,7 +198,19 @@ if ($detailTable) {
                 $dSt->execute([$id]);
                 $detail = $dSt->fetch();
                 break;
-
+            case 'IT':
+                $dSt = $db->prepare("
+                    SELECT ti.*,
+                        raiser.full_name   AS raiser_name,
+                        assignee.full_name AS assignee_name
+                    FROM task_it ti
+                    LEFT JOIN users raiser   ON raiser.id   = ti.token_raiser_id
+                    LEFT JOIN users assignee ON assignee.id = ti.assigned_it_staff
+                    WHERE ti.task_id = ?
+                ");
+                $dSt->execute([$id]);
+                $detail = $dSt->fetch(PDO::FETCH_ASSOC);
+                break;
             case 'TAX':
                 $dSt = $db->prepare("
                     SELECT tt.*,
@@ -409,17 +447,50 @@ $taskAssignedToName = $task['assigned_to_name'] ?? '—';
 // ═════════════════════════════════════════════════════════════════════════════
 // POST HANDLERS
 // ═════════════════════════════════════════════════════════════════════════════
+// ── POST: save_it (IT dept / UDA-IT staff — mark resolved + note only) ───────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it']) && $task['dept_code'] === 'IT' && ($isItEditor || $isMyTask)) {
+    verifyCsrf();
+    $it = $_POST['it'] ?? [];
+    $resolution = trim($it['resolution'] ?? '');
+    $isResolved = isset($it['is_resolved']) ? 1 : 0;
 
+    // Staff can only set resolution + resolved flag — no reassignment here.
+    $db->prepare("
+        UPDATE task_it
+        SET resolution = ?,
+            resolution_date = CASE WHEN ? = 1 AND is_resolved = 0 THEN NOW() ELSE resolution_date END,
+            is_resolved = ?
+        WHERE task_id = ?
+    ")->execute([$resolution ?: null, $isResolved, $isResolved, $id]);
+
+    if ($isResolved) {
+        $doneId = (int) $db->query("SELECT id FROM task_status WHERE status_name='Done' LIMIT 1")->fetchColumn();
+        if ($doneId) {
+            $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$doneId, $id]);
+        }
+    }
+
+    try {
+        $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status,remarks)VALUES(?,?,?,?,?,?)")
+            ->execute([$id, 'status_changed', $user['id'], $task['status'], $isResolved ? 'Done' : $task['status'], $resolution]);
+    } catch (Exception $e) {
+    }
+
+    logActivity("IT issue updated by staff: {$task['task_number']}", 'it_support');
+    setFlash('success', 'IT issue updated.');
+    header("Location: view.php?id={$id}");
+    exit;
+}
 // ── POST: save_tax ────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $task['dept_code'] === 'TAX') {
     verifyCsrf();
-    $t2         = $_POST['tax'] ?? [];
-    $firm       = trim($t2['firm_name'] ?? '') ?: ($task['company_name'] ?? '');
-    $biz        = trim($t2['business_type'] ?? '') ?: $companyTypeVal;
-    $pan        = trim($t2['pan_number'] ?? '') ?: ($companyPanRow['pan_number'] ?? '');
+    $t2 = $_POST['tax'] ?? [];
+    $firm = trim($t2['firm_name'] ?? '') ?: ($task['company_name'] ?? '');
+    $biz = trim($t2['business_type'] ?? '') ?: $companyTypeVal;
+    $pan = trim($t2['pan_number'] ?? '') ?: ($companyPanRow['pan_number'] ?? '');
     $officeAddr = trim($t2['assigned_office_address'] ?? '');
-    $taxFy      = trim($t2['fiscal_year'] ?? '');
-    $taxFyId    = getFiscalYearId($db, $taxFy);
+    $taxFy = trim($t2['fiscal_year'] ?? '');
+    $taxFyId = getFiscalYearId($db, $taxFy);
 
     // ── Build $p matching EXACT table columns (no follow_up_date, no status_id) ──
     // Columns: company_id, firm_name, assigned_office_id, assigned_office_address,
@@ -430,24 +501,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $task[
     $p = [
         $task['company_id'],                                                                    // 1  company_id
         $firm,                                                                                  // 2  firm_name
-        ($t2['assigned_office_id']      ?? '') !== '' ? (int)$t2['assigned_office_id']      : null, // 3  assigned_office_id
+        ($t2['assigned_office_id'] ?? '') !== '' ? (int) $t2['assigned_office_id'] : null, // 3  assigned_office_id
         $officeAddr ?: null,                                                                    // 4  assigned_office_address
-        ($t2['tax_type_id']             ?? '') !== '' ? (int)$t2['tax_type_id']             : null, // 5  tax_type_id
+        ($t2['tax_type_id'] ?? '') !== '' ? (int) $t2['tax_type_id'] : null, // 5  tax_type_id
         $taxFy ?: null,                                                                         // 6  fiscal_year
         $taxFyId,                                                                               // 7  fiscal_year_id
-        trim($t2['submission_number']   ?? '') ?: null,                                         // 8  submission_number
-        trim($t2['udin_no']             ?? '') ?: null,                                         // 9  udin_no
+        trim($t2['submission_number'] ?? '') ?: null,                                         // 8  submission_number
+        trim($t2['udin_no'] ?? '') ?: null,                                         // 9  udin_no
         $biz ?: null,                                                                           // 10 business_type
         $pan ?: null,                                                                           // 11 pan_number
-        ($t2['assigned_to']             ?? '') !== '' ? (int)$t2['assigned_to']             : null, // 12 assigned_to
-        ($t2['file_received_by']        ?? '') !== '' ? (int)$t2['file_received_by']        : null, // 13 file_received_by
-        ($t2['updated_by']              ?? '') !== '' ? (int)$t2['updated_by']              : null, // 14 updated_by
-        ($t2['verify_by']               ?? '') !== '' ? (int)$t2['verify_by']               : null, // 15 verify_by
-        ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int)$t2['tax_clearance_status_id'] : null, // 16 tax_clearance_status_id
-        ($t2['total_amount']            ?? '') !== '' ? (float)$t2['total_amount']          : 0,    // 17 total_amount
+        ($t2['assigned_to'] ?? '') !== '' ? (int) $t2['assigned_to'] : null, // 12 assigned_to
+        ($t2['file_received_by'] ?? '') !== '' ? (int) $t2['file_received_by'] : null, // 13 file_received_by
+        ($t2['updated_by'] ?? '') !== '' ? (int) $t2['updated_by'] : null, // 14 updated_by
+        ($t2['verify_by'] ?? '') !== '' ? (int) $t2['verify_by'] : null, // 15 verify_by
+        ($t2['tax_clearance_status_id'] ?? '') !== '' ? (int) $t2['tax_clearance_status_id'] : null, // 16 tax_clearance_status_id
+        ($t2['total_amount'] ?? '') !== '' ? (float) $t2['total_amount'] : 0,    // 17 total_amount
         $t2['completed_date'] ?: null,                                                          // 18 completed_date
         trim($t2['remarks'] ?? '') ?: null,                                                     // 19 remarks
-        trim($t2['notes']   ?? '') ?: null,                                                     // 20 notes
+        trim($t2['notes'] ?? '') ?: null,                                                     // 20 notes
     ];
     // $p has exactly 20 values — matches 20 columns above
 
@@ -1232,8 +1303,7 @@ include '../../includes/header.php';
                                         <div class="col-md-4">
                                             <label class="form-label-mis">Follow-up Date</label>
                                             <input type="date" name="tax[follow_up_date]"
-                                                class="form-control form-control-sm"
-                                                value="">
+                                                class="form-control form-control-sm" value="">
                                         </div>
                                         <div class="col-md-4">
                                             <label class="form-label-mis">Follow-up Note <span
@@ -1260,7 +1330,57 @@ include '../../includes/header.php';
                                 </form>
                             </div>
                         </div>
-
+                        <!-- ════ IT SUPPORT DETAILS ════ -->
+                    <?php elseif ($task['dept_code'] === 'IT' && $detail): ?>
+                        <div class="card-mis mb-4">
+                            <div class="card-mis-header">
+                                <h5><i class="fas fa-headset text-warning me-2"></i>IT Support Details</h5>
+                            </div>
+                            <div class="card-mis-body">
+                                <div class="row g-3">
+                                    <?php foreach ([
+                                        'Token Number' => $detail['token_number'] ?? '—',
+                                        'Category' => $detail['issue_category'] ?? '—',
+                                        'Severity' => $detail['severity'] ?? '—',
+                                        'Raised By' => $detail['raiser_name'] ?? '—',
+                                        'Assigned To' => $detail['assignee_name'] ?? 'Unassigned',
+                                        'Reported Date' => ($detail['reported_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['reported_date'])) : '—',
+                                        'Resolved' => ($detail['is_resolved'] ?? 0) ? '✅ Yes' : 'No',
+                                        'Resolution Date' => ($detail['resolution_date'] ?? '') ? date('d M Y, H:i', strtotime($detail['resolution_date'])) : '—',
+                                    ] as $label => $val): ?>
+                                        <div class="col-md-4">
+                                            <div
+                                                style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;">
+                                                <?= $label ?>
+                                            </div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;">
+                                                <?= htmlspecialchars((string) $val) ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php if (!empty($detail['detailed_description'])): ?>
+                                        <div class="col-12">
+                                            <div
+                                                style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
+                                                Description</div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;">
+                                                <?= nl2br(htmlspecialchars($detail['detailed_description'])) ?>
+                                            </div>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($detail['resolution'])): ?>
+                                        <div class="col-12">
+                                            <div
+                                                style="font-size:.72rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
+                                                Resolution</div>
+                                            <div style="font-size:.88rem;margin-top:.2rem;">
+                                                <?= nl2br(htmlspecialchars($detail['resolution'])) ?>
+                                            </div>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
                         <!-- ════ RETAIL DETAILS ════ -->
                     <?php elseif ($task['dept_code'] === 'RETAIL' && $detail): ?>
                         <div class="card-mis mb-4">
@@ -1675,7 +1795,7 @@ include '../../includes/header.php';
                 <!-- ══════════════ RIGHT COLUMN ══════════════ -->
                 <div class="col-lg-4">
 
-                    <?php if ($isMyTask): ?>
+                    <?php if ($isMyTask || $isItEditor): ?>
 
                         <!-- ── Status / work update — only when NOT done ── -->
                         <?php if (!$isDone): ?>
@@ -1710,7 +1830,35 @@ include '../../includes/header.php';
                                         </form>
                                     </div>
                                 </div>
-
+                                <!-- Mark as Resolved (IT) -->
+                            <?php elseif ($task['dept_code'] === 'IT' && $detail): ?>
+                                <div class="card-mis mb-3" style="border-left:3px solid #f59e0b;">
+                                    <div class="card-mis-header">
+                                        <h5><i class="fas fa-headset text-warning me-2"></i>Update Issue</h5>
+                                    </div>
+                                    <div class="card-mis-body">
+                                        <form method="POST">
+                                            <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
+                                            <input type="hidden" name="save_it" value="1">
+                                            <div class="mb-3">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="it[is_resolved]" value="1"
+                                                        id="itResolved" <?= ($detail['is_resolved'] ?? 0) ? 'checked' : '' ?>>
+                                                    <label class="form-check-label" for="itResolved" style="font-size:.85rem;">
+                                                        Mark as Resolved (sets task to Done)
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label-mis">Note</label>
+                                                <textarea name="it[resolution]" class="form-control form-control-sm" rows="2"
+                                                    placeholder="Describe how the issue was resolved..."><?= htmlspecialchars($detail['resolution'] ?? '') ?></textarea>
+                                            </div>
+                                            <button type="submit" class="btn btn-gold w-100 btn-sm"><i
+                                                    class="fas fa-save me-1"></i>Save</button>
+                                        </form>
+                                    </div>
+                                </div>
                                 <!-- Update Status (TAX and others) -->
                             <?php else: ?>
                                 <div class="card-mis mb-3" style="border-left:3px solid #f59e0b;">

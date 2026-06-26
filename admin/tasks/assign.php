@@ -30,12 +30,10 @@ foreach ($fys as $fy) {
 if (!$currentFy && !empty($fys))
     $currentFy = $fys[0]['fy_code'];
 
-// ── Dropdowns ─────────────────────────────────────────────────────────────────
-// ── Detect branch manager ──────────────────────────────────────────────────
 $adminDeptCodeStmt = $db->prepare("SELECT d.dept_code FROM departments d WHERE d.id = ?");
 $adminDeptCodeStmt->execute([$adminUser['department_id']]);
 $adminDeptCodeCheck = $adminDeptCodeStmt->fetchColumn() ?: '';
-$isBranchManager = ($adminDeptCodeCheck === 'CORE');
+
 $crossDepts = CROSS_DEPT_ASSIGN[$adminUser['id']] ?? [];
 
 // Check UDA early — needed for USE_AJAX_STAFF JS constant
@@ -57,21 +55,6 @@ if (isExecutive()) {
         FROM companies WHERE is_active=1 AND branch_id = {$adminUser['branch_id']}
         ORDER BY company_name
     ")->fetchAll();
-} elseif ($isBranchManager) {
-    // Branch Manager: can pick ANY dept, but branch is locked to theirs
-    $depts = $db->query("
-        SELECT * FROM departments 
-        WHERE is_active=1 AND dept_code NOT IN ('CON','CORE')
-        ORDER BY dept_name
-    ")->fetchAll();
-    $branches = $db->query("SELECT * FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
-    $companiesStmt = $db->prepare("
-        SELECT id, company_name, pan_number, company_code FROM companies
-        WHERE is_active=1 AND branch_id = ?
-        ORDER BY company_name
-    ");
-    $companiesStmt->execute([$adminUser['branch_id']]);
-    $companies = $companiesStmt->fetchAll();
 } elseif ($hasCrossDeptAccess) {
     // Own dept + permitted depts
     $allowedCodes = array_merge([$adminDeptCodeCheck], $crossDepts);
@@ -151,79 +134,64 @@ if (isExecutive()) {
 // Regular admin: always server-side (dept+branch fixed).
 $staffList = [];
 
-if (!isExecutive() && !$isBranchManager) {
+if (!isExecutive()) {
     if ($hasCrossDeptAccess) {
         // AJAX will handle it — just pre-load own dept staff for initial render
         $st = $db->prepare("
-    SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
-    FROM users u
-    LEFT JOIN branches    b   ON b.id = u.branch_id
-    LEFT JOIN departments d   ON d.id = u.department_id
-    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    JOIN roles            r   ON r.id = u.role_id
-    WHERE r.role_name IN ('staff','admin')
-      AND u.is_active  = 1
-      AND u.branch_id  = ?
-      AND (
-          u.department_id = ?
-          OR uda.department_id = ?
-      )
-    ORDER BY u.full_name
-");
-        $st->execute([$adminUser['branch_id'], $adminUser['department_id'], $adminUser['department_id']]);
+            SELECT DISTINCT u.id, u.full_name, u.employee_id, b.branch_name, d.dept_name
+            FROM users u
+            LEFT JOIN branches    b   ON b.id = u.branch_id
+            LEFT JOIN departments d   ON d.id = u.department_id
+            LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+            JOIN roles            r   ON r.id = u.role_id
+            WHERE r.role_name IN ('staff','admin','manager')
+              AND u.is_active  = 1
+              AND (
+                  u.department_id = ?
+                  OR uda.department_id = ?
+              )
+            ORDER BY u.full_name
+        ");
+        $st->execute([$adminUser['department_id'], $adminUser['department_id']]);
         $staffList = $st->fetchAll();
     } else {
         $initialDeptId = (int) (($_POST['department_id'] ?? 0) ?: $adminUser['department_id']);
 
         $st = $db->prepare("
-        SELECT
-            u.id,
-            u.full_name,
-            u.employee_id,
-            b.branch_name,
-            d.dept_name         AS primary_dept_name,
-            d.dept_code         AS primary_dept_code,
-            NULL                AS secondary_dept_name,
-            'primary'           AS match_type
-        FROM users u
-        LEFT JOIN branches    b ON b.id = u.branch_id
-        LEFT JOIN departments d ON d.id = u.department_id
-        JOIN roles            r ON r.id = u.role_id
-        WHERE r.role_name IN ('staff','admin')
-          AND u.is_active     = 1
-          AND u.branch_id     = ?
-          AND u.department_id = ?
-
-        UNION
-
-        SELECT
-            u.id,
-            u.full_name,
-            u.employee_id,
-            b.branch_name,
-            uda_d.dept_name     AS primary_dept_name,
-            d.dept_code         AS primary_dept_code,
-            d.dept_name         AS secondary_dept_name,
-            'secondary'         AS match_type
-        FROM users u
-        LEFT JOIN branches    b     ON b.id = u.branch_id
-        LEFT JOIN departments d     ON d.id = u.department_id
-        JOIN user_department_assignments uda  ON uda.user_id = u.id
-        JOIN departments uda_d ON uda_d.id = uda.department_id
-        JOIN roles        r    ON r.id = u.role_id
-        WHERE r.role_name IN ('staff','admin')
-          AND u.is_active       = 1
-          AND u.branch_id       = ?
-          AND uda.department_id = ?
-          AND u.department_id  != ?
-
-        ORDER BY full_name
-    ");
+            SELECT
+                u.id, u.full_name, u.employee_id, b.branch_name,
+                d.dept_name AS primary_dept_name, d.dept_code AS primary_dept_code,
+                NULL AS secondary_dept_name, 'primary' AS match_type
+            FROM users u
+            LEFT JOIN branches    b ON b.id = u.branch_id
+            LEFT JOIN departments d ON d.id = u.department_id
+            JOIN roles            r ON r.id = u.role_id
+            WHERE r.role_name IN ('staff','admin','manager')
+              AND u.is_active     = 1
+              AND u.department_id = ?
+            
+            UNION
+            
+            SELECT
+                u.id, u.full_name, u.employee_id, b.branch_name,
+                uda_d.dept_name AS primary_dept_name, d.dept_code AS primary_dept_code,
+                d.dept_name AS secondary_dept_name, 'secondary' AS match_type
+            FROM users u
+            LEFT JOIN branches    b     ON b.id = u.branch_id
+            LEFT JOIN departments d     ON d.id = u.department_id
+            JOIN user_department_assignments uda  ON uda.user_id = u.id
+            JOIN departments uda_d ON uda_d.id = uda.department_id
+            JOIN roles        r    ON r.id = u.role_id
+            WHERE r.role_name IN ('staff','admin','manager')
+              AND u.is_active       = 1
+              AND uda.department_id = ?
+              AND u.department_id  != ?
+            
+            ORDER BY full_name
+            ");
         $st->execute([
-            $adminUser['branch_id'],
-            $initialDeptId,
-            $adminUser['branch_id'],
-            $initialDeptId,
+            $initialDeptId,   // own dept
+            $initialDeptId,   // UDA dept
             $initialDeptId,
         ]);
         $staffList = $st->fetchAll();
@@ -253,9 +221,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isExecutive()) {
         $deptId = (int) ($_POST['department_id'] ?? 0);
         $branchId = (int) ($_POST['branch_id'] ?? 0);
-    } elseif ($isBranchManager) {
-        $deptId = (int) ($_POST['department_id'] ?? 0); // selectable
-        $branchId = (int) $adminUser['branch_id'];          // always locked
     } elseif ($hasCrossDeptAccess) {
         $deptId = (int) ($_POST['department_id'] ?? $adminUser['department_id']);
         $branchId = (int) $adminUser['branch_id'];
@@ -286,7 +251,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($fy && !in_array($fy, $validFys))
         $errors[] = 'Selected fiscal year is invalid.';
 
-    if (!isExecutive() && !$isBranchManager) {
+    if (!isExecutive()) {
         if ($hasCrossDeptAccess) {
             $allowedCodes = array_merge([$adminDeptCodeCheck], $crossDepts);
             if (!in_array($deptCode, $allowedCodes))
@@ -317,18 +282,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // CORE admin: assigned user must be in same branch (any dept)
-    if ($isBranchManager && $assignTo && $assignTo !== (int) $adminUser['id']) {
-        $staffCheck = $db->prepare("
-                SELECT u.id FROM users u
-                JOIN roles r ON r.id = u.role_id
-                WHERE u.id = ? AND u.branch_id = ? AND u.is_active = 1
-                AND r.role_name IN ('staff','admin')
-            ");
-        $staffCheck->execute([$assignTo, $adminUser['branch_id']]);
-        if (!$staffCheck->fetch())
-            $errors[] = 'Selected staff does not belong to your branch.';
-    }
 
     $validStatuses = array_column(
         $db->query("SELECT status_name FROM task_status")->fetchAll(),
@@ -424,7 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $assigneeStmt->execute([$assignTo]);
             $assigneeRole = $assigneeStmt->fetchColumn();
 
-            $isAdminSide = in_array($assigneeRole, ['admin', 'executive']);
+            $isAdminSide = in_array($assigneeRole, ['admin', 'executive', 'manager']);
 
             $taskUrl = $isAdminSide
                 ? APP_URL . '/admin/tasks/view.php?id=' . $taskId
@@ -516,7 +469,7 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">Department <span
                                                 class="required-star">*</span></label>
                                         <!-- // In the department select HTML, change the selected check: -->
-                                        <?php if (isExecutive() || $isBranchManager || $hasCrossDeptAccess): ?>
+                                        <?php if (isExecutive() || $hasCrossDeptAccess): ?>
                                             <select name="department_id" class="form-select" required>
                                                 <option value="">-- Select --</option>
                                                 <?php foreach ($depts as $d): ?>
@@ -531,7 +484,7 @@ include '../../includes/header.php';
                                         <?php else: ?>
 
                                             <?php if (!$hasUda && count($depts) === 1): ?>
-                                                {{-- Truly single dept, no UDA at all — lock it --}}
+                                                <!--{{-- Truly single dept, no UDA at all — lock it --}}-->
                                                 <input type="hidden" name="department_id" value="<?= $depts[0]['id'] ?>">
                                                 <input type="text" class="form-control"
                                                     value="<?= htmlspecialchars($depts[0]['dept_name'] ?? '') ?>" readonly
@@ -552,7 +505,7 @@ include '../../includes/header.php';
                                                 <?php if ($hasUda): ?>
                                                     <small style="font-size:.65rem;color:#8b5cf6;">
                                                         <i class="fas fa-info-circle me-1"></i>
-                                                        Your dept ★ + Other-assigned departments 
+                                                        Your dept ★ + Other-assigned departments
                                                     </small>
                                                 <?php endif; ?>
                                             <?php endif; ?>
@@ -669,8 +622,8 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">
                                             Assign To
                                             <?php
-                                            $regularAdminMultiDept = (!isExecutive() && !$isBranchManager && !$hasCrossDeptAccess && (count($depts) > 1 || $hasUda));
-                                            if ($isBranchManager || $hasCrossDeptAccess || $regularAdminMultiDept): ?>
+                                            $regularAdminMultiDept = (!isExecutive() && !$hasCrossDeptAccess && (count($depts) > 1 || $hasUda));
+                                            if ($hasCrossDeptAccess || $regularAdminMultiDept): ?>
                                                 <span style="font-size:.65rem;color:#8b5cf6;margin-left:.3rem;">
                                                     <i class="fas fa-filter me-1"></i>filtered by selected department
                                                 </span>
@@ -713,7 +666,7 @@ include '../../includes/header.php';
                                             <i class="fas fa-spinner fa-spin me-1"></i>Loading staff…
                                         </div>
                                         <div id="staff-hint" style="font-size:.68rem;color:#9ca3af;margin-top:.25rem;">
-                                            <?php if ($isBranchManager || $hasCrossDeptAccess): ?>
+                                            <?php if ($hasCrossDeptAccess): ?>
                                                 <i class="fas fa-info-circle me-1"></i>
                                                 <?= $hasCrossDeptAccess ? 'Showing staff of selected department' : 'Select a department above to see filtered staff' ?>
                                             <?php endif; ?>
@@ -854,10 +807,9 @@ include '../../includes/header.php';
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-    const IS_BRANCH_MANAGER = <?= $isBranchManager ? 'true' : 'false' ?>;
     const IS_EXECUTIVE = <?= isExecutive() ? 'true' : 'false' ?>;
-    const REGULAR_ADMIN_MULTI_DEPT = <?= (!isExecutive() && !$isBranchManager && !$hasCrossDeptAccess && count($depts) > 1) ? 'true' : 'false' ?>;
-    const USE_AJAX_STAFF = <?= ($isBranchManager || isExecutive() || $hasCrossDeptAccess || count($depts) > 1 || $hasUda) ? 'true' : 'false' ?>;
+    const REGULAR_ADMIN_MULTI_DEPT = <?= (!isExecutive() && !$hasCrossDeptAccess && count($depts) > 1) ? 'true' : 'false' ?>;
+    const USE_AJAX_STAFF = <?= (isExecutive() || $hasCrossDeptAccess || count($depts) > 1 || $hasUda) ? 'true' : 'false' ?>;
     const ADMIN_BRANCH_ID = <?= (int) $adminUser['branch_id'] ?>;
     const ADMIN_USER_ID = <?= (int) $adminUser['id'] ?>;
     const ADMIN_USER_NAME = <?= json_encode($adminUser['full_name']) ?>;
@@ -972,7 +924,7 @@ include '../../includes/header.php';
         const hint = document.getElementById('staff-hint');
         if (hint) hint.style.display = 'none';
 
-        fetch(`${AJAX_URL}?branch_id=${ADMIN_BRANCH_ID}&dept_id=${encodeURIComponent(deptId)}&caller_id=${ADMIN_USER_ID}`)
+        fetch(`${AJAX_URL}?dept_id=${encodeURIComponent(deptId)}&caller_id=${ADMIN_USER_ID}`)
             .then(r => r.json())
             .then(data => {
                 document.getElementById('staff-loading').style.display = 'none';

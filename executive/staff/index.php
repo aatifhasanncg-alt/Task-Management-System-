@@ -11,6 +11,7 @@ $search = trim($_GET['search'] ?? '');
 $filterB = (int) ($_GET['branch_id'] ?? 0);
 $filterD = (int) ($_GET['dept_id'] ?? 0);
 $filterR = trim($_GET['role'] ?? '');
+$filterEmp = trim($_GET['emp_filter'] ?? '');
 $page = max(1, (int) ($_GET['page'] ?? 1));
 $perPage = 25;
 $offset = ($page - 1) * $perPage;
@@ -38,7 +39,10 @@ if ($filterR) {
     $where[] = 'r.role_name = ?';
     $params[] = $filterR;
 } // ← JOIN roles
-
+if ($filterEmp) {
+    $where[] = 'u.id = ?';
+    $params[] = (int) $filterEmp;
+}
 $ws = implode(' AND ', $where);
 
 // Count
@@ -144,7 +148,14 @@ if (!empty($staffIds)) {
 
 $allBranches = $db->query("SELECT id, branch_name FROM branches WHERE is_active=1 ORDER BY branch_name")->fetchAll();
 $allDepts = $db->query("SELECT id, dept_name FROM departments WHERE is_active=1 AND dept_name!='CORE ADMIN' ORDER BY dept_name")->fetchAll();
-
+// ── Employee dropdown (TomSelect) — executive sees everyone ──────────────────
+$empDropdownStmt = $db->query("
+    SELECT id, full_name, employee_id
+    FROM users
+    WHERE is_active = 1
+    ORDER BY full_name
+");
+$empDropdownList = $empDropdownStmt->fetchAll(PDO::FETCH_ASSOC);
 include '../../includes/header.php';
 ?>
 <div class="app-wrapper">
@@ -174,10 +185,17 @@ include '../../includes/header.php';
             <!-- Filters -->
             <div class="filter-bar mb-4">
                 <form method="GET" class="row g-2 align-items-end">
-                    <div class="col-md-3">
-                        <label class="form-label-mis">Search</label>
-                        <input type="text" name="search" class="form-control form-control-sm"
-                            placeholder="Name, email, employee ID..." value="<?= htmlspecialchars($search) ?>">
+                    <div class="col-md-2">
+                        <label class="form-label-mis">Find by Name / Employee ID</label>
+                        <select name="emp_filter" id="empFilterSelect" class="form-select form-select-sm">
+                            <option value="">— Search staff —</option>
+                            <?php foreach ($empDropdownList as $emp): ?>
+                                <option value="<?= $emp['id'] ?>" <?= $filterEmp == $emp['id'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($emp['full_name']) ?>
+                                    <?= $emp['employee_id'] ? ' (' . htmlspecialchars($emp['employee_id']) . ')' : '' ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label-mis">Branch</label>
@@ -206,6 +224,7 @@ include '../../includes/header.php';
                         <select name="role" class="form-select form-select-sm">
                             <option value="">All Roles</option>
                             <option value="executive" <?= $filterR === 'executive' ? 'selected' : '' ?>>Executive</option>
+                            <option value="manager" <?= $filterR === 'manager' ? 'selected' : '' ?>>Manager</option>
                             <option value="admin" <?= $filterR === 'admin' ? 'selected' : '' ?>>Admin</option>
                             <option value="staff" <?= $filterR === 'staff' ? 'selected' : '' ?>>Staff</option>
                         </select>
@@ -255,6 +274,7 @@ include '../../includes/header.php';
                                 $roleColors = [
                                     'executive' => '#c9a84c',
                                     'admin' => '#3b82f6',
+                                    'manager' => '#8b5cf6',
                                     'staff' => '#10b981',
                                 ];
                                 $rc = $roleColors[$u['role_name']] ?? '#9ca3af';
@@ -422,3 +442,13 @@ include '../../includes/header.php';
 
         </div>
         <?php include '../../includes/footer.php'; ?>
+        <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css"
+            rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+        <script>
+            new TomSelect('#empFilterSelect', {
+                create: false,
+                sortField: { field: "text", direction: "asc" },
+                placeholder: 'Type a name or employee ID...',
+            });
+        </script>

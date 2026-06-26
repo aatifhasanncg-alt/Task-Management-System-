@@ -1,9 +1,9 @@
 <?php
-// admin/reports/department_wise.php
+// manager/reports/department_wise.php
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
-requireExecutiveOrBM(); // ← CHANGED from requireExecutive()
+requireManager(); // ← CHANGED from requireExecutive()
 
 $db = getDB();
 $user = currentUser();
@@ -49,7 +49,7 @@ $deptStmt = $db->prepare("
     SELECT d.id as dept_id, d.dept_name, d.dept_code, d.color, d.icon,
            COUNT(t.id) as total,
            {$statusCases}
-           SUM(CASE WHEN t.due_date < CURDATE() AND ts.status_name != 'Done' THEN 1 ELSE 0 END) as overdue
+           SUM(CASE WHEN t.due_date < CURDATE() AND ts.counts_as_done = 0 THEN 1 ELSE 0 END) as overdue
     FROM departments d
     LEFT JOIN tasks t ON t.department_id = d.id
         AND t.is_active = 1
@@ -101,7 +101,7 @@ include '../../includes/header.php';
 </style>
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include '../../includes/sidebar_manager.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div style="padding:1.5rem 0;">
@@ -216,7 +216,7 @@ include '../../includes/header.php';
                                 $rawIco = trim($sr['icon'] ?: 'fa-circle');
                                 $iClass = str_starts_with($rawIco, 'fa') ? $rawIco : 'fa-' . $rawIco;
                                 $tilePct = $d['total'] > 0 ? round(($val / $d['total']) * 100) : 0;
-                                $tileLink = APP_URL . '/admin/tasks/index.php?' . http_build_query([
+                                $tileLink = APP_URL . '/manager/tasks/index.php?' . http_build_query([
                                     'dept_id' => $d['dept_id'],          // ← integer ID, exact match
                                     'show_all' => '1',                    // ← BM/admin can see cross-dept if needed
                                     'status' => $sr['status_name'],
@@ -244,7 +244,7 @@ include '../../includes/header.php';
                             <?php endforeach; ?>
 
                             <?php $overduePct = $d['total'] > 0 ? round(($d['overdue'] / $d['total']) * 100) : 0; ?>
-                            <a href="<?= APP_URL ?>/admin/tasks/index.php?<?= http_build_query([
+                            <a href="<?= APP_URL ?>/manager/tasks/index.php?<?= http_build_query([
                                   'dept_id' => $d['dept_id'],          // ← integer ID
                                   'show_all' => '1',
                                   'overdue' => 1,

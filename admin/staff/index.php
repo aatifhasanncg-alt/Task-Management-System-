@@ -8,6 +8,7 @@ $pageTitle = 'All Staff';
 $userId = (int) $_SESSION['user_id'];
 
 // ── Detect logged-in user's context ──────────────────────────────────────────
+// ── Detect logged-in user's context ──────────────────────────────────────────
 $selfStmt = $db->prepare("
     SELECT u.branch_id, u.department_id, r.role_name, d.dept_code
     FROM users u
@@ -18,9 +19,23 @@ $selfStmt = $db->prepare("
 $selfStmt->execute([$userId]);
 $self = $selfStmt->fetch();
 
-$isCoreAdminDept = ($self['dept_code'] ?? '') === 'CORE';
 $myBranchId = (int) ($self['branch_id'] ?? 0);
 $myDeptId = (int) ($self['department_id'] ?? 0);
+
+// Also check UDA-assigned departments for ADM/CORE codes — a user's
+// admin-level department may be assigned via UDA rather than their
+// primary department_id.
+$selfUdaCodeStmt = $db->prepare("
+    SELECT d.dept_code
+    FROM user_department_assignments uda
+    JOIN departments d ON d.id = uda.department_id
+    WHERE uda.user_id = ?
+");
+$selfUdaCodeStmt->execute([$userId]);
+$selfUdaCodes = array_column($selfUdaCodeStmt->fetchAll(PDO::FETCH_ASSOC), 'dept_code');
+
+$myAllDeptCodes = array_merge([$self['dept_code'] ?? ''], $selfUdaCodes);
+$isCoreAdminDept = !empty(array_intersect(['CORE', 'ADM'], $myAllDeptCodes));
 
 // ── UDA dept tabs (non-core-admin only) ───────────────────────────────────────
 $activeStaffDeptTab = 0;
@@ -64,6 +79,7 @@ $search = trim($_GET['search'] ?? '');
 $filterB = (int) ($_GET['branch_id'] ?? 0);
 $filterD = (int) ($_GET['dept_id'] ?? 0);
 $filterR = trim($_GET['role'] ?? '');
+$filterEmp = trim($_GET['emp_filter'] ?? ''); // value = "<user_id>" from the TomSelect dropdown
 $page = max(1, (int) ($_GET['page'] ?? 1));
 $perPage = 25;
 $offset = ($page - 1) * $perPage;
@@ -90,7 +106,11 @@ if ($isCoreAdminDept) {
         $params[] = $activeDeptFilter;
     }
 } else {
-    // Non-core-admin: scope by active UDA tab or all accessible depts
+    // Non-core-admin: always restricted to own branch
+    $where[] = 'u.branch_id = ?';
+    $params[] = $myBranchId;
+
+    // Scope by active UDA tab or all accessible depts
     if (count($staffDeptTabs) > 1 && $activeStaffDeptTab) {
         // Single dept tab selected
         $where[] = '(
@@ -138,7 +158,10 @@ if ($filterR && $isCoreAdminDept) {
     $where[] = 'r.role_name = ?';
     $params[] = $filterR;
 }
-
+if ($filterEmp) {
+    $where[] = 'u.id = ?';
+    $params[] = (int) $filterEmp;
+}
 $ws = implode(' AND ', $where);
 
 // ── Count ─────────────────────────────────────────────────────────────────────
@@ -190,7 +213,49 @@ $userStmt = $db->prepare("
 ");
 $userStmt->execute(array_merge($params, [$userId]));
 $staffList = $userStmt->fetchAll();
+// Employee dropdown for TomSelect search — scoped to viewer's branch (+ dept/UDA if not ADM/CORE)
+$empWhere = ['u.is_active = 1', 'u.branch_id = ?'];
+$empParams = [$myBranchId];
 
+if (!$isCoreAdminDept) {
+    // Also require dept match: primary department_id OR UDA-assigned department
+    // AND role_name = 'staff' (to match staff list scoping) — OR it's the viewer themself
+    $udaAllForEmpStmt = $db->prepare("SELECT department_id FROM user_department_assignments WHERE user_id = ?");
+    $udaAllForEmpStmt->execute([$userId]);
+    $myAllAccessDeptIds = array_unique(array_filter(
+        array_merge([$myDeptId], array_column($udaAllForEmpStmt->fetchAll(), 'department_id'))
+    ));
+
+    if (!empty($myAllAccessDeptIds)) {
+        $deptPh = implode(',', array_fill(0, count($myAllAccessDeptIds), '?'));
+        $empWhere[] = '(
+            (
+                (u.department_id IN (' . $deptPh . ') OR EXISTS (
+                    SELECT 1 FROM user_department_assignments uda
+                    WHERE uda.user_id = u.id AND uda.department_id IN (' . $deptPh . ')
+                ))
+                AND r.role_name = \'staff\'
+            )
+            OR u.id = ?
+        )';
+        $empParams = array_merge($empParams, $myAllAccessDeptIds, $myAllAccessDeptIds, [$userId]);
+    } else {
+        // No dept access at all — show only self
+        $empWhere[] = 'u.id = ?';
+        $empParams[] = $userId;
+    }
+}
+
+$empWs = implode(' AND ', $empWhere);
+$empDropdownStmt = $db->prepare("
+    SELECT u.id, u.full_name, u.employee_id
+    FROM users u
+    LEFT JOIN roles r ON r.id = u.role_id
+    WHERE {$empWs}
+    ORDER BY u.full_name
+");
+$empDropdownStmt->execute($empParams);
+$empDropdownList = $empDropdownStmt->fetchAll(PDO::FETCH_ASSOC);
 // ── Core-admin dept tab list ──────────────────────────────────────────────────
 $deptTabList = [];
 if ($isCoreAdminDept) {
@@ -306,7 +371,7 @@ include '../../includes/header.php';
                             <?php endif; ?>
                         </p>
                     </div>
-                    <?php if (isCoreAdmin()): ?>
+                    <?php if ($isCoreAdminDept): ?>
                         <a href="add.php" class="btn btn-gold">
                             <i class="fas fa-plus me-1"></i>Add Staff
                         </a>
@@ -379,9 +444,16 @@ include '../../includes/header.php';
                     <?php endif; ?>
 
                     <div class="col-md-3">
-                        <label class="form-label-mis">Search</label>
-                        <input type="text" name="search" class="form-control form-control-sm"
-                            placeholder="Name, email, employee ID..." value="<?= htmlspecialchars($search) ?>">
+                        <label class="form-label-mis">Find by Name / Employee ID</label>
+                        <select name="emp_filter" id="empFilterSelect" class="form-select form-select-sm">
+                            <option value="">— Search staff —</option>
+                            <?php foreach ($empDropdownList as $emp): ?>
+                                <option value="<?= $emp['id'] ?>" <?= $filterEmp == $emp['id'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($emp['full_name']) ?>
+                                    <?= $emp['employee_id'] ? ' (' . htmlspecialchars($emp['employee_id']) . ')' : '' ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
 
                     <?php if ($isCoreAdminDept): ?>
@@ -584,7 +656,7 @@ include '../../includes/header.php';
                                                 class="btn btn-sm btn-outline-secondary" title="View">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <?php if (isCoreAdmin()): ?>
+                                            <?php if ($isCoreAdminDept): ?>
                                                 <a href="<?= APP_URL ?>/admin/staff/edit.php?id=<?= $u['id'] ?>"
                                                     class="btn btn-sm btn-outline-warning" title="Edit">
                                                     <i class="fas fa-pen"></i>
@@ -623,3 +695,12 @@ include '../../includes/header.php';
         <?php include '../../includes/footer.php'; ?>
     </div>
 </div>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+new TomSelect('#empFilterSelect', {
+    create: false,
+    sortField: { field: "text", direction: "asc" },
+    placeholder: 'Type a name or employee ID...',
+});
+</script>

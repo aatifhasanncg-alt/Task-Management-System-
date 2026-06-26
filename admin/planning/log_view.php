@@ -59,7 +59,26 @@ $visitStatusMeta = [
     'rescheduled' => ['label' => 'Rescheduled', 'color' => '#f59e0b', 'bg' => '#fffbeb', 'icon' => 'fa-redo'],
 ];
 $sm = $visitStatusMeta[$log['visit_status']] ?? ['label' => ucfirst($log['visit_status'] ?? ''), 'color' => '#9ca3af', 'bg' => '#f9fafb', 'icon' => 'fa-circle'];
+$rescheduleInfo = null;
 
+if (
+    $log['visit_status'] === 'rescheduled' &&
+    !empty($log['rescheduled_to_entry_id'])
+) {
+    $rs = $db->prepare("
+        SELECT
+            wpe.plan_date,
+            wpe.planned_time_in,
+            wpe.planned_time_out,
+            wpe.planned_hours,
+            wpe.notes
+        FROM work_plan_entries wpe
+        WHERE wpe.id = ?
+        LIMIT 1
+    ");
+    $rs->execute([$log['rescheduled_to_entry_id']]);
+    $rescheduleInfo = $rs->fetch(PDO::FETCH_ASSOC);
+}
 $pageTitle = 'View Visit Log';
 include '../../includes/header.php';
 ?>
@@ -281,7 +300,71 @@ include '../../includes/header.php';
                             </div>
                         </div>
                     </div>
+                    <?php if ($rescheduleInfo): ?>
+                        <div class="cn-panel mb-3">
+                            <div class="cn-panel-hd">
+                                <span class="cn-panel-title">
+                                    <i class="fas fa-redo me-2" style="color:#f59e0b"></i>
+                                    Rescheduled Details
+                                </span>
+                            </div>
 
+                            <div style="padding:18px 20px;">
+                                <div class="row g-3">
+
+                                    <div class="col-md-4">
+                                        <div
+                                            style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
+                                            New Visit Date
+                                        </div>
+                                        <div style="font-size:.95rem;font-weight:700;color:#1f2937;">
+                                            <?= date('d M Y', strtotime($rescheduleInfo['plan_date'])) ?>
+                                        </div>
+                                    </div>
+
+                                    <div class="col-md-4">
+                                        <div
+                                            style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
+                                            Planned Time
+                                        </div>
+                                        <div style="font-size:.9rem;font-weight:700;color:#1f2937;">
+                                            <?= $rescheduleInfo['planned_time_in']
+                                                ? date('h:i A', strtotime($rescheduleInfo['planned_time_in']))
+                                                : '—' ?>
+                                            →
+                                            <?= $rescheduleInfo['planned_time_out']
+                                                ? date('h:i A', strtotime($rescheduleInfo['planned_time_out']))
+                                                : '—' ?>
+                                        </div>
+                                    </div>
+
+                                    <div class="col-md-4">
+                                        <div
+                                            style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;">
+                                            Planned Hours
+                                        </div>
+                                        <div style="font-size:1rem;font-weight:800;color:#c9a84c;">
+                                            <?= number_format((float) $rescheduleInfo['planned_hours'], 2) ?>h
+                                        </div>
+                                    </div>
+
+                                    <?php if (!empty($rescheduleInfo['notes'])): ?>
+                                        <div class="col-12">
+                                            <div
+                                                style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;margin-bottom:5px;">
+                                                Reschedule Notes
+                                            </div>
+                                            <div
+                                                style="background:#fffbeb;padding:12px;border-radius:8px;border:1px solid #fde68a;">
+                                                <?= nl2br(htmlspecialchars($rescheduleInfo['notes'])) ?>
+                                            </div>
+                                        </div>
+                                    <?php endif; ?>
+
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
                     <!-- Work Description -->
                     <?php if (!empty($log['work_description'])): ?>
                         <div class="cn-panel mb-3">

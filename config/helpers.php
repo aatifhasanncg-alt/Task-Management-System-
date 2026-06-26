@@ -18,7 +18,12 @@ function isConsultingUser(PDO $db, array $user): bool {
     $st->execute([$deptId]);
     return (bool)$st->fetch();
 }
-
+function csrfField(): string {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($_SESSION['csrf_token']) . '">';
+}
 function getConsultingDeptId(PDO $db): int {
     $row = $db->query("
         SELECT id FROM departments

@@ -42,7 +42,7 @@ if ($__isConsPrimary) {
 // $branchId stays unchanged — always use user's actual branch
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
@@ -62,29 +62,26 @@ if ($isAdmin) {
     $mStmt->execute([$uid, $uid]);
     $myStaffIds = array_map('intval', array_column($mStmt->fetchAll(PDO::FETCH_ASSOC), 'id'));
 }
-
 if ($isAdmin) {
     $scopeRows = $db->query("
         SELECT DISTINCT u.id
         FROM users u
         WHERE u.is_active = 1
-          AND (
-              u.id = {$uid}
-              OR u.id IN (
-                  SELECT u2.id FROM users u2
-                  JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
-                  WHERE u2.is_active = 1
-                  UNION
-                  SELECT uda.user_id FROM user_department_assignments uda
-                  JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
-              )
+          AND u.id != {$uid}
+          AND u.id IN (
+              SELECT u2.id FROM users u2
+              JOIN departments d ON d.id = u2.department_id AND d.dept_code = 'CON'
+              WHERE u2.is_active = 1
+              UNION
+              SELECT uda.user_id FROM user_department_assignments uda
+              JOIN departments d ON d.id = uda.department_id AND d.dept_code = 'CON'
           )
     ")->fetchAll(PDO::FETCH_COLUMN);
-    $scopeIds = array_unique(array_merge([$uid], $scopeRows));
+    $scopeIds = array_unique(array_map('intval', $scopeRows));
 } else {
-    $scopeIds = [$uid];
+    $scopeIds = [];
 }
-$inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
+$inList = implode(',', $scopeIds) ?: '0';
 // ── STEP 1: fetch plans FIRST ─────────────────────────────────
 $plans = $db->query("
     SELECT wp.*,
@@ -135,12 +132,6 @@ foreach ($plans as $p) {
     }
 }
 
-// ── Per-category KPI helpers ───────────────────────────────────
-$kpiOwn = [
-    'plans' => count($myOwnPlans),
-    'entries' => array_sum(array_column($myOwnPlans, 'entry_count')),
-    'hours' => (float) array_sum(array_column($myOwnPlans, 'total_planned_hours')),
-];
 $kpiStaff = [
     'plans' => count($myStaffPlans),
     'entries' => array_sum(array_column($myStaffPlans, 'entry_count')),
@@ -243,36 +234,6 @@ include '../../includes/header.php';
             <?php if ($isAdmin): ?>
                 <div class="row g-3 mb-4">
 
-                    <!-- My Own Plans -->
-                    <div class="col-12 col-md-4">
-                        <div style="background:#f0fdf4;border-radius:12px;border:1px solid #10b98122;padding:1rem;">
-                            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
-                                <div style="width:34px;height:34px;border-radius:10px;background:#10b98122;
-                            color:#10b981;display:flex;align-items:center;justify-content:center;">
-                                    <i class="fas fa-user"></i>
-                                </div>
-                                <div style="font-size:.82rem;font-weight:700;color:#065f46;">My Own Plans</div>
-                            </div>
-                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
-                                <div>
-                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;"><?= $kpiOwn['plans'] ?>
-                                    </div>
-                                    <div style="font-size:.68rem;color:#6b7280;">Plans</div>
-                                </div>
-                                <div>
-                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;"><?= $kpiOwn['entries'] ?>
-                                    </div>
-                                    <div style="font-size:.68rem;color:#6b7280;">Entries</div>
-                                </div>
-                                <div>
-                                    <div style="font-size:1.2rem;font-weight:800;color:#10b981;">
-                                        <?= number_format($kpiOwn['hours'], 1) ?>h
-                                    </div>
-                                    <div style="font-size:.68rem;color:#6b7280;">Hours</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
                     <!-- My Staff Plans -->
                     <div class="col-12 col-md-4">

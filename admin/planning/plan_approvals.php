@@ -7,6 +7,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
+require_once '../../config/notify.php';
 requireAdmin();
 
 $db = getDB();
@@ -76,7 +77,7 @@ if (empty($scopeIds)) {
 // ── Month filter ───────────────────────────────────────────────
 $now = new DateTime();
 $month = $_GET['month'] ?? $now->format('Y-m');
-$monthDate = DateTime::createFromFormat('Y-m', $month) ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
@@ -445,20 +446,6 @@ include '../../includes/header.php';
                                             <button type="submit" class="cn-btn cn-btn-danger cn-btn-sm">
                                                 <i class="fas fa-times"></i> Reject
                                             </button>
-                                        </div>
-                                    </form>
-
-                                    <!-- Change status dropdown -->
-                                    <form method="POST" style="margin-top:6px;">
-                                        <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                                        <input type="hidden" name="plan_id" value="<?= $p['id'] ?>">
-                                        <div style="display:flex;gap:6px;align-items:center;">
-                                            <select name="action" class="cn-input"
-                                                style="flex:1;font-size:.76rem;padding:5px 8px;">
-                                                <option value="submitted">Mark Submitted</option>
-                                                <option value="draft">Mark Draft</option>
-                                            </select>
-                                            <button type="submit" class="cn-btn cn-btn-out cn-btn-sm">Set</button>
                                         </div>
                                     </form>
 

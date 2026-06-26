@@ -128,6 +128,22 @@ if (!function_exists('isActiveExec')) {
         class="nav-item <?= isActiveExec('/executive/consulting/log_list') ?>">
             <i class="fas fa-check-circle"></i><span>Log List</span>
         </a>
+        <a href="<?= APP_URL ?>executive/consulting/log_create.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/log_create') ?>">
+            <i class="fas fa-pen"></i><span>Create Log </span>
+        </a>
+         <a href="<?= APP_URL ?>executive/consulting/office_log_create.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/office_log_create') ?>">
+            <i class="fas fa-plus-circle"></i><span>Office Create Log </span>
+        </a>
+        <a href="<?= APP_URL ?>executive/consulting/my_logs.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/my_logs') ?>">
+            <i class="fas fa-check-circle"></i><span>My Logs </span>
+        </a>
+        <a href="<?= APP_URL ?>executive/consulting/this_week.php"
+        class="nav-item <?= isActiveExec('/executive/consulting/this_week') ?>">
+            <i class="fas fa-calendar-week"></i><span>This Week </span>
+        </a>
 
         <a href="<?= APP_URL ?>executive/consulting/client_report.php"
         class="nav-item <?= isActiveExec('/executive/consulting/client_report') ?>">

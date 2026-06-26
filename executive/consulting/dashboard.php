@@ -6,7 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireExecutive();
 
 $db = getDB();
 $user = currentUser();
@@ -136,7 +136,9 @@ $staffPlanned = $db->query("
 $staffPlannedMap = array_column($staffPlanned, 'planned', 'assigned_to');
 $staffPlannedVMap = array_column($staffPlanned, 'planned_visits', 'assigned_to');
 
-/* ── CLIENT SUMMARY ── */
+$clientBranchFilterC  = $selectedBranch !== 'all' ? "AND c.branch_id  = " . (int) $selectedBranch : '';
+$clientBranchFilterWL = $selectedBranch !== 'all' ? "AND wl.branch_id = " . (int) $selectedBranch : '';
+
 $clientSummary = $db->query("
     SELECT c.id, c.company_name, c.company_code,
            COUNT(wl.id) AS total_visits,
@@ -145,8 +147,8 @@ $clientSummary = $db->query("
            SUM(wl.visit_status='missed')  AS missed,
            MAX(wl.log_date) AS last_visit
     FROM companies c
-    LEFT JOIN work_logs wl ON wl.client_id=c.id AND wl.month_year='{$month}' AND wl.branch_id={$branchId}
-    WHERE c.branch_id={$branchId} AND c.is_active=1
+    LEFT JOIN work_logs wl ON wl.client_id=c.id AND wl.month_year='{$month}' {$clientBranchFilterWL}
+    WHERE c.is_active=1 {$clientBranchFilterC}
     GROUP BY c.id ORDER BY total_visits DESC LIMIT 10")->fetchAll();
 
 /* ── OFFICE LOGS TABLE ── */
@@ -164,7 +166,7 @@ $pendingPlans = $db->query("
     SELECT wp.*, u.full_name, u.employee_id, COUNT(wpe.id) entry_count, COALESCE(SUM(wpe.planned_hours),0) planned_hours
     FROM work_plans wp JOIN users u ON u.id=wp.user_id
     LEFT JOIN work_plan_entries wpe ON wpe.plan_id=wp.id
-    WHERE wp.branch_id={$branchId} AND wp.status='submitted'
+    WHERE wp.status='submitted' {$branchFilterSQLWP}
     GROUP BY wp.id ORDER BY wp.created_at ASC LIMIT 8")->fetchAll();
 
 /* ── 6-MONTH TREND ── */
@@ -860,7 +862,6 @@ include '../../includes/header.php';
                         $pvaRows = [
                             ['Planned', $plannedHours, $plannedHours, 'var(--blue)'],
                             ['Field actual', $totalHours, $plannedHours, $effColor],
-                            ['Office hrs', $officeHours, $plannedHours, 'var(--green)'],
                         ];
                         foreach ($pvaRows as [$lbl, $val, $base, $color]):
                             $w = $base > 0 ? min(round($val / $base * 100), 100) : 0;

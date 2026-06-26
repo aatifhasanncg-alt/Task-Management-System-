@@ -27,17 +27,6 @@ $isCoreAdmin = ($myDeptCode === 'CORE');
 $effectiveBranch = $branchId ?: (int)$user['branch_id'];
 $effectiveDept   = $deptId   ?: (int)$user['department_id'];
 
-// ── Build UNION query: primary match + UDA (secondary) match ──────────────────
-// For executive: branch filter is optional (only if passed).
-// For everyone else: branch is always locked to their own.
-
-if (isExecutive()) {
-    $branchCondition        = $branchId ? "u.branch_id = {$effectiveBranch} AND" : '';
-    $branchConditionSecond  = $branchId ? "u.branch_id = {$effectiveBranch} AND" : '';
-} else {
-    $branchCondition        = "u.branch_id = {$effectiveBranch} AND";
-    $branchConditionSecond  = "u.branch_id = {$effectiveBranch} AND";
-}
 
 // Primary: staff whose department_id matches the requested dept
 // Secondary: staff whose UDA has the dept but primary dept is different
@@ -64,8 +53,7 @@ $st = $db->prepare("
     LEFT JOIN branches    b ON b.id = u.branch_id
     LEFT JOIN departments d ON d.id = u.department_id
     JOIN  roles           r ON r.id = u.role_id
-    WHERE {$branchCondition}
-      r.role_name IN ('staff','admin')
+    WHERE r.role_name IN ('staff','admin')
       AND u.is_active = 1
       AND (u.department_id = ? {$nullDeptClause})
 
@@ -87,8 +75,7 @@ $st = $db->prepare("
     JOIN  user_department_assignments uda  ON uda.user_id = u.id
     JOIN  departments uda_d ON uda_d.id = uda.department_id
     JOIN  roles       r     ON r.id = u.role_id
-    WHERE {$branchConditionSecond}
-      r.role_name IN ('staff','admin')
+    WHERE r.role_name IN ('staff','admin')
       AND u.is_active       = 1
       AND uda.department_id = ?
       AND u.department_id  != ?
@@ -127,6 +114,7 @@ if ($selfData) {
         'full_name'           => $selfData['full_name'],
         'employee_id'         => $selfData['employee_id'] ?? '',
         'dept_name'           => $selfData['dept_name'] ?? '',
+        'dept_code'           => $myDeptCode,                 // ← add this
         'branch_name'         => $selfData['branch_name'] ?? '',
         'role_name'           => $selfData['role_name'] ?? '',
         'secondary_dept_name' => null,
@@ -134,15 +122,15 @@ if ($selfData) {
         'is_self'             => true,
     ];
 }
-
 foreach ($rows as $row) {
-    if ((int)$row['id'] === (int)$user['id']) continue; // already added as self
+    if ((int)$row['id'] === (int)$user['id']) continue;
 
     $result[] = [
         'id'                  => $row['id'],
         'full_name'           => $row['full_name'],
         'employee_id'         => $row['employee_id'] ?? '',
         'dept_name'           => $row['dept_name'] ?? '',
+        'dept_code'           => $row['primary_dept_code'] ?? '',   // ← add this
         'branch_name'         => $row['branch_name'] ?? '',
         'secondary_dept_name' => $row['secondary_dept_name'] ?: null,
         'match_type'          => $row['match_type'],

@@ -27,7 +27,26 @@ CREATE TABLE fiscal_years (
     end_date DATE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- Password reset tokens table
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id     INT UNSIGNED     NOT NULL,
+    token       CHAR(64)         NOT NULL UNIQUE,   -- SHA-256 hash of the raw token
+    expires_at  DATETIME         NOT NULL,
+    used        TINYINT(1)       NOT NULL DEFAULT 0,
+    used_at     DATETIME                  DEFAULT NULL,
+    created_by  INT UNSIGNED     NOT NULL,          -- admin who triggered the reset
+    ip_address  VARCHAR(45)               DEFAULT NULL,
+    created_at  DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    INDEX idx_token   (token),
+    INDEX idx_user_id (user_id),
+    INDEX idx_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE users
+  ADD COLUMN failed_attempts INT NOT NULL DEFAULT 0,
+  ADD COLUMN locked_until DATETIME NULL DEFAULT NULL;
 -- Users
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -407,7 +426,45 @@ CREATE TABLE task_finance (
     FOREIGN KEY (tax_clearance_status_id) REFERENCES task_status(id),
     FOREIGN KEY (payment_status_id) REFERENCES task_status(id)
 );
+CREATE TABLE task_it (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    task_id INT NOT NULL UNIQUE,
 
+    token_number VARCHAR(50) UNIQUE NOT NULL,
+
+    token_raiser_id INT NOT NULL,
+    department_id INT NOT NULL,
+    branch_id INT NOT NULL,
+
+    issue_category ENUM(
+        'Task System','Computer or Laptop Issue','Printer Issue',
+        'Other Software Issue','Client Software Issue','Network/Internet Issue',
+        'Email Issue','Hardware Issue','Other'
+    ) NOT NULL,
+
+    detailed_description TEXT,
+
+    reported_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    assigned_it_staff INT NULL,
+    assigned_at DATETIME NULL,
+
+    resolution TEXT,
+    resolution_date DATETIME,
+
+    severity ENUM('Low','Medium','High','Critical') DEFAULT 'Medium',
+
+    is_resolved TINYINT(1) DEFAULT 0,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (token_raiser_id) REFERENCES users(id),
+    FOREIGN KEY (department_id) REFERENCES departments(id),
+    FOREIGN KEY (branch_id) REFERENCES branches(id),
+    FOREIGN KEY (assigned_it_staff) REFERENCES users(id)
+);
 -- Supporting task tables
 CREATE TABLE task_comments (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -574,23 +631,90 @@ DELIMITER ;
 
 -- Auto-generate employee ID (EXE-001, ADM-001, STF-001...)
 DELIMITER $$
-CREATE TRIGGER trg_employee_id BEFORE INSERT ON users FOR EACH ROW
+
+CREATE TRIGGER trg_employee_id
+BEFORE INSERT ON users
+FOR EACH ROW
 BEGIN
     DECLARE nxt INT;
+    
     IF NEW.role_id IS NOT NULL THEN
-        SET @prefix = (SELECT CASE role_name
-            WHEN 'executive' THEN 'EXE'
-            WHEN 'admin' THEN 'ADM'
-            WHEN 'staff' THEN 'STF'
-            ELSE 'EMP'
-        END FROM roles WHERE id = NEW.role_id);
-        SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(employee_id,'-',-1) AS UNSIGNED)),0)+1
-        INTO nxt FROM users WHERE employee_id LIKE CONCAT(@prefix,'-%');
+
+        SET @prefix = (
+            SELECT CASE role_name
+                WHEN 'executive' THEN 'EXE'
+                WHEN 'manager' THEN 'MGR'
+                WHEN 'admin' THEN 'ADM'
+                WHEN 'staff' THEN 'STF'
+                ELSE 'EMP'
+            END
+            FROM roles
+            WHERE id = NEW.role_id
+        );
+
+        SELECT COALESCE(
+            MAX(CAST(SUBSTRING_INDEX(employee_id,'-',-1) AS UNSIGNED)),
+            0
+        ) + 1
+        INTO nxt
+        FROM users
+        WHERE employee_id LIKE CONCAT(@prefix,'-%');
+
         SET NEW.employee_id = CONCAT(@prefix,'-',LPAD(nxt,3,'0'));
+
     END IF;
 END$$
+
 DELIMITER ;
 
+DELIMITER $$
+
+CREATE TRIGGER trg_employee_id_on_role_change
+BEFORE UPDATE ON users
+FOR EACH ROW
+BEGIN
+    DECLARE nxt INT;
+
+    -- Only regenerate when role actually changes
+    IF NEW.role_id IS NOT NULL AND NEW.role_id != OLD.role_id THEN
+
+        SET @prefix = (
+            SELECT CASE role_name
+                WHEN 'executive' THEN 'EXE'
+                WHEN 'manager' THEN 'MGR'
+                WHEN 'admin' THEN 'ADM'
+                WHEN 'staff' THEN 'STF'
+                ELSE 'EMP'
+            END
+            FROM roles
+            WHERE id = NEW.role_id
+        );
+
+        SELECT COALESCE(
+            MAX(CAST(SUBSTRING_INDEX(employee_id,'-',-1) AS UNSIGNED)),
+            0
+        ) + 1
+        INTO nxt
+        FROM users
+        WHERE employee_id LIKE CONCAT(@prefix,'-%');
+
+        SET NEW.employee_id = CONCAT(@prefix,'-',LPAD(nxt,3,'0'));
+
+    END IF;
+END$$
+
+DELIMITER ;
+
+DELIMITER $$
+CREATE TRIGGER trg_it_token_number BEFORE INSERT ON task_it FOR EACH ROW
+BEGIN
+    DECLARE nxt INT;
+    SELECT COUNT(*) + 1 INTO nxt
+    FROM task_it
+    WHERE YEAR(created_at) = YEAR(NOW());
+    SET NEW.token_number = CONCAT('IT-', YEAR(NOW()), '-', LPAD(nxt, 5, '0'));
+END$$
+DELIMITER ;
 -- Auto-generate fiscal year label
 DELIMITER $$
 CREATE TRIGGER before_fy_insert BEFORE INSERT ON fiscal_years FOR EACH ROW

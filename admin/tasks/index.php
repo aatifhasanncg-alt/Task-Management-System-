@@ -156,8 +156,7 @@ if ($filterBankRef) {
 }
 if ($filterOverdue) {
     $where[] = 't.due_date < CURDATE()';
-    $where[] = 'ts.status_name != ?';
-    $params[] = 'Done';
+    $where[] = 'ts.counts_as_done = 0';
 }
 if ($search) {
     $where[] = '(t.title LIKE ? OR t.task_number LIKE ? OR c.company_name LIKE ? OR at.full_name LIKE ?)';
@@ -186,6 +185,7 @@ $taskSt = $db->prepare("
            b.branch_name,
            c.company_name,
            ts.status_name                      AS status,
+           ts.counts_as_done,
            cb.full_name                        AS created_by_name,
            at.full_name                        AS assigned_to_name,
            wf_from.from_dept_id                AS transfer_from_dept_id,
@@ -480,7 +480,7 @@ include '../../includes/header.php';
                             <?php endif; ?>
                             <?php foreach ($tasks as $t):
                                 $sClass = 'status-' . strtolower(str_replace(' ', '-', $t['status'] ?? ''));
-                                $overdue = $t['due_date'] && strtotime($t['due_date']) < time() && $t['status'] !== 'Done';
+                                $overdue = $t['due_date'] && strtotime($t['due_date']) < time() && !$t['counts_as_done'];
                                 $hasTransfer = !empty($t['transfer_from_dept_id']) || !empty($t['transfer_to_dept_id']);
                                 $transferredIn = !empty($t['transfer_to_dept_id']) && (int) $t['transfer_to_dept_id'] === $adminDeptId && (int) $t['transfer_from_dept_id'] !== $adminDeptId;
                                 $transferredOut = !empty($t['transfer_from_dept_id']) && (int) $t['transfer_from_dept_id'] === $adminDeptId && (int) $t['department_id'] !== $adminDeptId;
@@ -512,10 +512,12 @@ include '../../includes/header.php';
                                     <td>
                                         <div
                                             style="font-weight:500;font-size:.87rem;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                            <?= htmlspecialchars($t['title']) ?></div>
+                                            <?= htmlspecialchars($t['title']) ?>
+                                        </div>
                                         <?php if ($t['company_name']): ?>
                                             <div style="font-size:.73rem;color:#9ca3af;">
-                                                <?= htmlspecialchars($t['company_name']) ?></div><?php endif; ?>
+                                                <?= htmlspecialchars($t['company_name']) ?>
+                                            </div><?php endif; ?>
                                     </td>
                                     <td>
                                         <span
@@ -524,7 +526,8 @@ include '../../includes/header.php';
                                         </span>
                                         <?php if (!empty($t['branch_name'])): ?>
                                             <div style="font-size:.68rem;color:#9ca3af;margin-top:.1rem;">
-                                                <?= htmlspecialchars($t['branch_name']) ?></div><?php endif; ?>
+                                                <?= htmlspecialchars($t['branch_name']) ?>
+                                            </div><?php endif; ?>
                                     </td>
                                     <td style="font-size:.85rem;"><?= htmlspecialchars($t['assigned_to_name'] ?? '—') ?>
                                     </td>
@@ -539,9 +542,11 @@ include '../../includes/header.php';
                                     </td>
                                     <td
                                         style="font-size:.8rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#6b7280;' ?>">
-                                        <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?></td>
+                                        <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
+                                    </td>
                                     <td style="font-size:.78rem;color:#9ca3af;">
-                                        <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?></td>
+                                        <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?>
+                                    </td>
                                     <td>
                                         <div class="d-flex gap-1">
                                             <a href="view.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-outline-secondary"
@@ -564,15 +569,18 @@ include '../../includes/header.php';
                             <ul class="pagination pagination-sm mb-0">
                                 <?php if ($page > 1): ?>
                                     <li class="page-item"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a>
+                                    </li>
                                 <?php endif; ?>
                                 <?php for ($p = max(1, $page - 2); $p <= min($pages, $page + 2); $p++): ?>
                                     <li class="page-item <?= $p == $page ? 'active' : '' ?>"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a>
+                                    </li>
                                 <?php endfor; ?>
                                 <?php if ($page < $pages): ?>
                                     <li class="page-item"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a>
+                                    </li>
                                 <?php endif; ?>
                             </ul>
                         </nav>

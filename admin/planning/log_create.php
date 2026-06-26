@@ -6,7 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAnyRole();
+requireAdmin();
 
 $db = getDB();
 $user = currentUser();
@@ -73,6 +73,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $timeIn = $_POST['time_in'] ?: null;
     $timeOut = $_POST['time_out'] ?: null;
     $visitStatus = $_POST['visit_status'] ?? 'visited';
+    $rescheduleDate    = $_POST['reschedule_date'] ?: null;
+    $rescheduleTimeIn  = $_POST['reschedule_time_in'] ?: null;
+    $rescheduleTimeOut = $_POST['reschedule_time_out'] ?: null;
+    $rescheduleNotes   = trim($_POST['reschedule_notes'] ?? '');
     $workDesc = trim($_POST['work_description'] ?? '');
     $supervisorId = (isset($_POST['supervisor_id']) && $_POST['supervisor_id'] !== '')
         ? (int) $_POST['supervisor_id']
@@ -88,6 +92,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Please select a client.';
     if (!$logDate)
         $errors[] = 'Log date is required.';
+    if ($visitStatus === 'rescheduled') {
+    if (!$rescheduleDate) {
+            $errors[] = 'Please select a new date for the rescheduled visit.';
+        } elseif ($rescheduleDate <= $logDate) {
+            $errors[] = 'Rescheduled date must be after the log date.';
+        }
+    }
 
     $durHours = 0;
     if ($timeIn && $timeOut) {
@@ -127,14 +138,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $workDesc,
             $visitStatus
         ]);
+        
         $logId = $db->lastInsertId();
-
-
-
         logActivity('Logged visit to client #' . $clientId, 'consulting', 'log_id=' . $logId);
-        setFlash('success', 'Visit logged successfully!');
-        header('Location: log_list.php?month=' . $monthYear);
-        exit;
+        
+        $rescheduledEntryId = null; // we'll need this — see schema note below
+        
+        if ($visitStatus === 'rescheduled' && $rescheduleDate) {
+            $rdObj = new DateTime($rescheduleDate);
+            $rPlanMonth = $rdObj->format('Y-m-01');
+            $rWeekNum = (int) ceil((int) $rdObj->format('j') / 7);
+            $rDow = $rdObj->format('l');
+        
+            // Week range, clipped to the month (matches your existing week_number logic)
+            $monthStart = new DateTime($rPlanMonth);
+            $monthEnd   = (clone $monthStart)->modify('last day of this month');
+            $wStart     = (clone $monthStart)->modify('+' . (($rWeekNum - 1) * 7) . ' days');
+            $wEnd       = (clone $wStart)->modify('+6 days');
+            if ($wEnd > $monthEnd) {
+                $wEnd = clone $monthEnd;
+    }
+
+    // Find existing plan for this user/dept/branch/month/week, else create
+    $planStmt = $db->prepare("
+        SELECT id FROM work_plans
+        WHERE user_id = ? AND department_id = ? AND branch_id = ?
+          AND plan_month = ? AND week_number = ?
+        LIMIT 1
+    ");
+    $planStmt->execute([$uid, $deptId, $branchId, $rPlanMonth, $rWeekNum]);
+    $planId = $planStmt->fetchColumn();
+
+    if (!$planId) {
+        $createPlan = $db->prepare("
+            INSERT INTO work_plans
+            (user_id, supervisor_id, department_id, branch_id, plan_month,
+             week_number, week_start_date, week_end_date, status)
+            VALUES (?,?,?,?,?,?,?,?, 'draft')
+        ");
+        $createPlan->execute([
+            $uid, $supervisorId, $deptId, $branchId,
+            $rPlanMonth, $rWeekNum,
+            $wStart->format('Y-m-d'), $wEnd->format('Y-m-d'),
+        ]);
+        $planId = (int) $db->lastInsertId();
+    }
+
+    // Client code for the plan entry
+    $ccStmt = $db->prepare("SELECT company_code FROM companies WHERE id = ?");
+    $ccStmt->execute([$clientId]);
+    $clientCode = $ccStmt->fetchColumn() ?: null;
+
+    $plannedHours = 0;
+    if ($rescheduleTimeIn && $rescheduleTimeOut) {
+        $diffR = strtotime($rescheduleTimeOut) - strtotime($rescheduleTimeIn);
+        $plannedHours = $diffR > 0 ? round($diffR / 3600, 2) : 0;
+    }
+
+    $insEntry = $db->prepare("
+        INSERT INTO work_plan_entries
+        (plan_id, client_id, client_code, assigned_to, plan_date, day_of_week,
+         planned_time_in, planned_time_out, planned_hours, notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    ");
+    $insEntry->execute([
+        $planId,
+        $clientId,
+        $clientCode,
+        $uid,
+        $rescheduleDate,
+        $rDow,
+        $rescheduleTimeIn,
+        $rescheduleTimeOut,
+        $plannedHours,
+        $rescheduleNotes !== '' ? $rescheduleNotes : $workDesc,
+    ]);
+$rescheduledEntryId = (int) $db->lastInsertId();
+      $db->prepare("UPDATE work_logs SET rescheduled_to_entry_id = ? WHERE id = ?")
+       ->execute([$rescheduledEntryId, $logId]);
+
+    logActivity(
+        'Rescheduled visit for client #' . $clientId . ' to ' . $rescheduleDate,
+        'consulting',
+        'plan_entry_id=' . $rescheduledEntryId . ', from_log_id=' . $logId
+    );
+}
+
+setFlash(
+    'success',
+    $visitStatus === 'rescheduled'
+        ? 'Visit logged and rescheduled — new plan entry created!'
+        : 'Visit logged successfully!'
+);
+header('Location: log_list.php?month=' . $monthYear);
+exit;
     }
 }
 
@@ -290,7 +387,7 @@ function vstBadge(string $s): string
 
                                     <div class="col-md-3">
                                         <label class="form-label-mis">Visit Status</label>
-                                        <select name="visit_status" class="form-select">
+                                        <select name="visit_status" id="visitStatus" class="form-select" onchange="toggleReschedule()">
                                             <option value="visited" <?= ($_POST['visit_status'] ?? 'visited') === 'visited' ? 'selected' : '' ?>>✅ Visited</option>
                                             <option value="missed" <?= ($_POST['visit_status'] ?? '') === 'missed' ? 'selected' : '' ?>>❌ Missed</option>
                                             <option value="rescheduled" <?= ($_POST['visit_status'] ?? '') === 'rescheduled' ? 'selected' : '' ?>>🔄 Rescheduled</option>
@@ -302,7 +399,45 @@ function vstBadge(string $s): string
                                         <textarea name="work_description" class="form-control" rows="3"
                                             placeholder="What work was done during this visit..."><?= htmlspecialchars($_POST['work_description'] ?? '') ?></textarea>
                                     </div>
-
+                                    <div class="col-12" id="rescheduleSection" style="display:none;">
+                                        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:1rem;margin-top:.5rem;">
+                                            <div style="font-size:.8rem;font-weight:700;color:#92400e;margin-bottom:.75rem;">
+                                                <i class="fas fa-redo me-1"></i>Reschedule To — New Plan Entry
+                                            </div>
+                                            <div class="row g-3">
+                                                <div class="col-md-4">
+                                                    <label class="form-label-mis">New Visit Date <span class="required-star">*</span></label>
+                                                    <input type="date" name="reschedule_date" id="rescheduleDate" class="form-control"
+                                                        min="<?= date('Y-m-d', strtotime('+1 day')) ?>"
+                                                        value="<?= htmlspecialchars($_POST['reschedule_date'] ?? '') ?>">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label-mis">Planned Time In</label>
+                                                    <input type="time" name="reschedule_time_in" id="rescheduleTimeIn" class="form-control"
+                                                        value="<?= htmlspecialchars($_POST['reschedule_time_in'] ?? '') ?>"
+                                                        onchange="calcRescheduleDuration()">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label-mis">Planned Time Out</label>
+                                                    <input type="time" name="reschedule_time_out" id="rescheduleTimeOut" class="form-control"
+                                                        value="<?= htmlspecialchars($_POST['reschedule_time_out'] ?? '') ?>"
+                                                        onchange="calcRescheduleDuration()">
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <div style="background:#fff;border-radius:8px;padding:8px;text-align:center;">
+                                                        <div style="font-size:.7rem;color:#9ca3af;">Planned Duration</div>
+                                                        <div style="font-size:1.1rem;font-weight:800;color:#c9a84c;" id="rescheduleDurationDisp">—</div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-9">
+                                                    <label class="form-label-mis">Reschedule Notes</label>
+                                                    <input type="text" name="reschedule_notes" class="form-control"
+                                                        placeholder="Reason / new arrangement notes..."
+                                                        value="<?= htmlspecialchars($_POST['reschedule_notes'] ?? '') ?>">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -391,6 +526,31 @@ function vstBadge(string $s): string
             disp.style.color = '#9ca3af';
         }
     }
+    function toggleReschedule() {
+        const status = document.getElementById('visitStatus').value;
+        const section = document.getElementById('rescheduleSection');
+        const dateField = document.getElementById('rescheduleDate');
+        if (status === 'rescheduled') {
+            section.style.display = 'block';
+            dateField.setAttribute('required', 'required');
+        } else {
+            section.style.display = 'none';
+            dateField.removeAttribute('required');
+        }
+    }
+    function calcRescheduleDuration() {
+        const tin = document.getElementById('rescheduleTimeIn').value;
+        const tout = document.getElementById('rescheduleTimeOut').value;
+        const disp = document.getElementById('rescheduleDurationDisp');
+        if (tin && tout) {
+            const diff = (new Date('1970-01-01T' + tout) - new Date('1970-01-01T' + tin)) / 3600000;
+            disp.textContent = diff > 0 ? diff.toFixed(2) + 'h' : '—';
+            disp.style.color = diff > 0 ? '#c9a84c' : '#ef4444';
+        } else {
+            disp.textContent = '—';
+            disp.style.color = '#9ca3af';
+        }
+    }
 
     function fillFromPlan(clientId, entryId, timeIn, timeOut) {
         // Set client in TomSelect
@@ -404,5 +564,7 @@ function vstBadge(string $s): string
 
     // Init duration on load
     calcDuration();
+    toggleReschedule();
+    calcRescheduleDuration();
 </script>
 <?php include '../../includes/footer.php'; ?>

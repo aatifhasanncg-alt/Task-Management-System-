@@ -99,7 +99,7 @@ function parseXlsxNative(string $filePath): array|false
 }
 
 if (!isCoreAdmin()) {
-    setFlash('error', 'Access denied. Only Core Admin executives can add staff.');
+    setFlash('error', 'Access denied. Only Administrator can add staff.');
     header('Location: index.php');
     exit;
 }
@@ -135,7 +135,7 @@ $allAdmins = $db->query("
     SELECT u.id, u.full_name, b.branch_name FROM users u
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN branches b ON b.id = u.branch_id
-    WHERE r.role_name IN('admin','executive') AND u.is_active = 1
+    WHERE r.role_name IN('admin','executive','manager') AND u.is_active = 1
     ORDER BY u.full_name
 ")->fetchAll();
 
@@ -187,17 +187,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
+        $enable2fa = isset($_POST['enable_2fa']) && $_POST['enable_2fa'] === '1';
+        $storedSecret = $enable2fa ? $secret : null; // don't even keep the secret if 2FA is off
+
         $hashedPwd = password_hash($password, PASSWORD_DEFAULT);
 
         $db->prepare("
-            INSERT INTO users
-            (full_name, username, email, phone,
-            password, role_id, branch_id, department_id,
-            managed_by, joining_date, address,
-            emergency_contact,
-            ga_secret, ga_enabled, is_active, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NOW())
-        ")->execute([
+        INSERT INTO users
+        (full_name, username, email, phone,
+        password, role_id, branch_id, department_id,
+        managed_by, joining_date, address,
+        emergency_contact,
+        ga_secret, ga_enabled, is_active, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NOW())
+    ")->execute([
                     $fullName,
                     $username,
                     $email,
@@ -210,10 +213,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $joiningDate ?: null,
                     $address ?: null,
                     $emergencyContact ?: null,
-                    $secret,
+                    $storedSecret,
                 ]);
 
-        $newId = $db->lastInsertId();
+        $newId = (int) $db->lastInsertId();
+
+        // Flag: must change password on first login
+        $db->prepare("UPDATE users SET must_change_password = 1 WHERE id = ?")
+           ->execute([$newId]);
+
         // Save additional departments (UDA)
         $extraDepts = $_POST['extra_departments'] ?? [];
         foreach ($extraDepts as $extraDeptId) {
@@ -222,48 +230,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $deptManagers = $_POST['extra_dept_managers'] ?? [];
                 $deptManagedBy = (int) ($deptManagers[$extraDeptId] ?? 0) ?: null;
                 $db->prepare("
-                    INSERT IGNORE INTO user_department_assignments (user_id, department_id, managed_by)
-                    VALUES (?, ?, ?)
-                ")->execute([$newId, $extraDeptId, $deptManagedBy]);
+                INSERT IGNORE INTO user_department_assignments (user_id, department_id, managed_by)
+                VALUES (?, ?, ?)
+            ")->execute([$newId, $extraDeptId, $deptManagedBy]);
             }
         }
-        // Send welcome email with credentials + secret
+
+        // ── Send welcome email — credentials only, 2FA block only if actually enabled ──
         try {
             require_once '../../config/mailer.php';
-            $emailHtml = emailWrapper("
-                <h2 style='color:#0a0f1e;'>Welcome to MISPro</h2>
-                <p>Dear <strong>{$fullName}</strong>,</p>
-                <p>Your account has been created. Here are your login credentials:</p>
-                <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;width:160px;'>Username</td>
-                        <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$username}</td>
-                    </tr>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;'>Password</td>
-                        <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$password}</td>
-                    </tr>
-                    <tr>
-                        <td style='padding:8px;background:#f9fafb;font-weight:600;'>2FA Secret</td>
-                        <td style='padding:8px;font-family:monospace;font-size:1rem;font-weight:700;'>{$secret}</td>
-                    </tr>
-                </table>
+
+            $safeFullName = htmlspecialchars($fullName, ENT_QUOTES);
+            $safeUsername = htmlspecialchars($username, ENT_QUOTES);
+            // Password is shown once, in a system email the admin controls — escape to prevent
+            // any stray HTML-special chars from breaking the markup, NOT to "secure" the password itself.
+            $safePassword = htmlspecialchars($password, ENT_QUOTES);
+
+            $twofaRowsHtml = '';
+            $twofaNoteHtml = '';
+            if ($enable2fa) {
+                $safeSecret = htmlspecialchars($secret, ENT_QUOTES);
+                $twofaRowsHtml = "
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;'>2FA Secret</td>
+                    <td style='padding:8px;font-family:monospace;font-size:1rem;font-weight:700;'>{$safeSecret}</td>
+                </tr>";
+                $twofaNoteHtml = "
                 <p style='font-size:.85rem;color:#6b7280;'>
-                    Please install <strong>Google Authenticator</strong> on your phone and add this account using the secret key above before your first login.
-                </p>
-                <a href='" . APP_URL . "/auth/login.php'
-                   style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
-                    Login to MISPro
-                </a>
-            ");
-            sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
+                    Please install <strong>Google Authenticator</strong> on your phone and add this account
+                    using the secret key above before your first login.
+                </p>";
+            }
+
+            $emailHtml = emailWrapper("
+            <h2 style='color:#0a0f1e;'>Welcome to TaskHub</h2>
+            <p>Dear <strong>{$safeFullName}</strong>,</p>
+            <p>Your account has been created. Here are your login credentials:</p>
+            <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;width:160px;'>Username</td>
+                    <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$safeUsername}</td>
+                </tr>
+                <tr>
+                    <td style='padding:8px;background:#f9fafb;font-weight:600;'>Password</td>
+                    <td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$safePassword}</td>
+                </tr>
+                {$twofaRowsHtml}
+            </table>
+            {$twofaNoteHtml}
+            <p style='font-size:.8rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;
+                       border-radius:8px;padding:.6rem .8rem;'>
+                <i class='fas fa-lock'></i> For your security, you will be required to change this
+                password on your first login.
+            </p>
+            <a href='" . APP_URL . "/auth/login.php'
+               style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
+                Login to TaskHub
+            </a>
+        ");
+            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
+            // Email failure is non-fatal — log it instead of silently swallowing
+            error_log('Welcome email failed for user ' . $newId . ': ' . $e->getMessage());
         }
 
+        // SECURITY: never put the raw password in logActivity / audit trail
         logActivity("Staff added: {$fullName}", 'users');
         setFlash('success', "Staff member \"{$fullName}\" added. Credentials sent to {$email}.");
         header("Location: view.php?id={$newId}");
-        exit; // ← redirect to view so QR is visible
+        exit;
     }
 }
 
@@ -390,7 +425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
 
         $finalPass = $password ?: 'Welcome@123';
         $hashed = password_hash($finalPass, PASSWORD_DEFAULT);
-        $newSecret = $ga->createSecret();
+        $newSecret = null;
 
         try {
             $db->prepare("
@@ -413,17 +448,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
                         $emergency ?: null,
                         $newSecret,
                     ]);
-        } catch (Exception $e) {
+           } catch (Exception $e) {
             $skipped++;
             $skipReasons[] = "Row {$lineNum}: DB error — " . $e->getMessage();
             continue;
         }
 
+        $newUserId = (int) $db->lastInsertId();
+        $db->prepare("UPDATE users SET must_change_password = 1 WHERE id = ?")
+            ->execute([$newUserId]);
+
         // Send welcome email
         try {
             require_once '../../config/mailer.php';
             $emailHtml = emailWrapper("
-                <h2>Welcome to MISPro</h2>
+                <h2>Welcome to TaskHub</h2>
                 <p>Dear <strong>{$fullName}</strong>,</p>
                 <p><strong>Username:</strong> {$username}</p>
                 <p><strong>Password:</strong> {$finalPass}</p>
@@ -437,10 +476,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
                    style='display:inline-block;background:#c9a84c;color:#0a0f1e;
                           padding:10px 24px;border-radius:8px;text-decoration:none;
                           font-weight:700;margin-top:12px;'>
-                    Login to MISPro
+                    Login to TaskHub
                 </a>
             ");
-            sendMail($email, $fullName, '[MISPro] Your Account Has Been Created', $emailHtml);
+            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
             // Email failure is non-fatal — user was still created
         }
@@ -645,7 +684,13 @@ include '../../includes/header.php';
                                                     onclick="togglePassword('password', this)">
                                                     <i class="fas fa-eye"></i>
                                                 </button>
+                                                <button type="button" class="btn btn-outline-success"
+                                                    onclick="generateStrongPassword()" title="Generate strong password">
+                                                    <i class="fas fa-dice"></i>
+                                                </button>
                                             </div>
+                                            <div id="pwStrengthHint"
+                                                style="font-size:.7rem;color:#9ca3af;margin-top:.3rem;"></div>
                                         </div>
 
                                         <div class="col-md-6">
@@ -669,7 +714,8 @@ include '../../includes/header.php';
                                                             class="ms-2">Google 2FA Setup</span></h5>
                                                     <div class="form-check form-switch mb-0">
                                                         <input class="form-check-input" type="checkbox" id="enable2fa"
-                                                            checked onchange="toggle2FA(this)">
+                                                            name="enable_2fa" value="1" checked
+                                                            onchange="toggle2FA(this)">
                                                         <label class="form-check-label" for="enable2fa"
                                                             style="font-size:.78rem;color:#6b7280;">Enable 2FA</label>
                                                     </div>
@@ -809,7 +855,7 @@ include '../../includes/header.php';
                             <div style="font-size:.82rem;color:#6b7280;line-height:1.7;">
                                 <div class="mb-2">
                                     <i class="fas fa-info-circle text-warning me-2"></i>
-                                    <strong>Only Core Admin executives can add staff.</strong>
+                                    <strong>Only Administrator can add staff.</strong>
                                 </div>
                                 <div class="mb-2">Employee ID is auto-generated if left blank.</div>
                                 <div class="mb-2">A welcome email with login credentials will be sent automatically.
@@ -940,7 +986,8 @@ include '../../includes/header.php';
                                 </div>
                                 <div style="font-size:.72rem;color:#6b7280;margin-top:.5rem;">
                                     * Required. Password defaults to <strong>Welcome@123</strong> if blank.
-                                    Role: <code>staff</code>, <code>admin</code>, or <code>executive</code>.
+                                    Role: <code>staff</code>, <code>admin</code>, <code>manager</code>, or
+                                    <code>executive</code>.
                                     2FA secret is auto-generated per user and emailed automatically.
                                 </div>
                             </div>
@@ -957,7 +1004,7 @@ include '../../includes/header.php';
                                 <p style="font-size:.78rem;color:#6b7280;margin-bottom:.75rem;">
                                     Use our pre-formatted Excel template with sample rows and column hints.
                                 </p>
-                                <a href="<?= APP_URL ?>/executive/staff/download_template.php"
+                                <a href="<?= APP_URL ?>/admin/staff/download_template.php"
                                     class="btn btn-gold btn-sm w-100">
                                     <i class="fas fa-file-csv me-1"></i>Download Template (.csv)
                                 </a>
@@ -968,7 +1015,7 @@ include '../../includes/header.php';
                             <div style="font-size:.82rem;font-weight:700;color:#1f2937;margin-bottom:.75rem;">
                                 <i class="fas fa-list-check text-warning me-1"></i>Valid Roles
                             </div>
-                            <?php foreach (['staff', 'admin', 'executive'] as $rn): ?>
+                            <?php foreach (['staff', 'admin', 'manager', 'executive'] as $rn): ?>
                                 <span style="background:#f3f4f6;border-radius:4px;padding:.1rem .4rem;
                              margin:.1rem .1rem 0 0;display:inline-block;font-size:.78rem;">
                                     <?= $rn ?>
@@ -1032,7 +1079,56 @@ include '../../includes/header.php';
                         icon.classList.replace('fa-eye-slash', 'fa-eye');
                     }
                 }
+                function generateStrongPassword(length = 14) {
+                    const lower = 'abcdefghijklmnopqrstuvwxyz';
+                    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+                    const digits = '0123456789';
+                    const symbols = '!@#$%^&*()-_=+?';
+                    const all = lower + upper + digits + symbols;
 
+                    // Use crypto.getRandomValues for cryptographically strong randomness,
+                    // not Math.random() which is predictable.
+                    function randInt(max) {
+                        const arr = new Uint32Array(1);
+                        crypto.getRandomValues(arr);
+                        return arr[0] % max;
+                    }
+
+                    // Guarantee at least one of each category, then fill the rest randomly
+                    let chars = [
+                        lower[randInt(lower.length)],
+                        upper[randInt(upper.length)],
+                        digits[randInt(digits.length)],
+                        symbols[randInt(symbols.length)],
+                    ];
+                    for (let i = chars.length; i < length; i++) {
+                        chars.push(all[randInt(all.length)]);
+                    }
+
+                    // Shuffle (Fisher–Yates) so the guaranteed chars aren't always in the same position
+                    for (let i = chars.length - 1; i > 0; i--) {
+                        const j = randInt(i + 1);
+                        [chars[i], chars[j]] = [chars[j], chars[i]];
+                    }
+
+                    const password = chars.join('');
+
+                    const pwField = document.getElementById('password');
+                    const confirmField = document.getElementById('confirm_password');
+                    pwField.value = password;
+                    confirmField.value = password;
+
+                    // Show it briefly so the admin can see/copy what was generated
+                    pwField.type = 'text';
+                    confirmField.type = 'text';
+                    setTimeout(() => {
+                        pwField.type = 'password';
+                        confirmField.type = 'password';
+                    }, 4000);
+
+                    document.getElementById('pwStrengthHint').innerHTML =
+                        '<i class="fas fa-check-circle" style="color:#16a34a;"></i> Strong password generated (' + length + ' chars) — visible for 4s';
+                }
                 // ── Copy 2FA secret ───────────────────────────────────────────────────────────
                 function copyGaSecret() {
                     const text = document.getElementById('gaSecretDisplay').value;
