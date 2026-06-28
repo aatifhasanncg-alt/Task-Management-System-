@@ -239,9 +239,11 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">
                                             Full Name <span class="required-star">*</span>
                                         </label>
-                                        <input type="text" name="full_name" class="form-control"
+                                        <input type="text" name="full_name" id="full_name" class="form-control"
                                             value="<?= htmlspecialchars($_POST['full_name'] ?? $staff['full_name']) ?>"
                                             required placeholder="e.g. Ram Prasad Sharma">
+                                        <div class="invalid-feedback-mis" id="err_full_name"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -268,10 +270,12 @@ include '../../includes/header.php';
                                                 style="background:#f9fafb;border-color:#e5e7eb;">
                                                 <i class="fas fa-envelope" style="color:#9ca3af;font-size:.8rem;"></i>
                                             </span>
-                                            <input type="email" name="email" class="form-control"
+                                            <input type="email" name="email" id="email" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['email'] ?? $staff['email']) ?>"
                                                 required placeholder="staff@askglobal.com.np">
                                         </div>
+                                        <div class="invalid-feedback-mis" id="err_email"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -342,10 +346,12 @@ include '../../includes/header.php';
                                                 style="background:#f9fafb;border-color:#e5e7eb;">
                                                 <i class="fas fa-at" style="color:#9ca3af;font-size:.8rem;"></i>
                                             </span>
-                                            <input type="text" name="username" class="form-control"
+                                            <input type="text" name="username" id="username" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['username'] ?? $staff['username']) ?>"
                                                 required placeholder="login username">
                                         </div>
+                                        <div class="invalid-feedback-mis" id="err_username"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -359,6 +365,8 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_roleSelect"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         <?php if ($staff['role_id'] != ($allRoles[0]['id'] ?? 0)): ?>
                                             <small style="font-size:.65rem;color:#f59e0b;">
                                                 <i class="fas fa-triangle-exclamation me-1"></i>
@@ -452,7 +460,7 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">
                                             Branch <span class="required-star">*</span>
                                         </label>
-                                        <select name="branch_id" class="form-select">
+                                        <select name="branch_id" id="branch_id" class="form-select">
                                             <option value="">-- Select Branch --</option>
                                             <?php foreach ($allBranches as $b): ?>
                                                 <option value="<?= $b['id'] ?>" <?= ($staff['branch_id'] == $b['id']) ? 'selected' : '' ?>>
@@ -460,13 +468,15 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_branch_id"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
                                         <label class="form-label-mis">
                                             Department <span class="required-star">*</span>
                                         </label>
-                                        <select name="department_id" class="form-select">
+                                        <select name="department_id" id="department_id" class="form-select">
                                             <option value="">-- Select Department --</option>
                                             <?php foreach ($allDepts as $d): ?>
                                                 <option value="<?= $d['id'] ?>" <?= ($staff['department_id'] == $d['id']) ? 'selected' : '' ?>>
@@ -474,6 +484,8 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_department_id"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
                                     <div class="col-12">
                                         <label class="form-label-mis">
@@ -533,20 +545,7 @@ include '../../includes/header.php';
                     <!-- ── RIGHT SIDEBAR ── -->
                     <div class="col-lg-4">
 
-                        <!-- Save Actions -->
-                        <div class="card-mis mb-3" style="border-left:4px solid #c9a84c;">
-                            <div class="card-mis-header">
-                                <h5><i class="fas fa-floppy-disk text-warning me-2"></i>Save Changes</h5>
-                            </div>
-                            <div class="card-mis-body">
-                                <button type="submit" class="btn btn-gold w-100 mb-2">
-                                    <i class="fas fa-save me-2"></i>Update Staff Member
-                                </button>
-                                <a href="view.php?id=<?= $staffId ?>" class="btn btn-outline-secondary w-100">
-                                    <i class="fas fa-times me-2"></i>Cancel
-                                </a>
-                            </div>
-                        </div>
+                    
 
                         <!-- Current Info snapshot -->
                         <div class="card-mis mb-3">
@@ -629,199 +628,244 @@ include '../../includes/header.php';
                             </div>
                         </div>
 
-                    </div><!-- end col-lg-4 -->
+                   </div><!-- end col-lg-4 -->
 
                 </div><!-- end row -->
+
+                <!-- ── Save Actions (bottom of form) ── -->
+                <div style="
+                    display: flex;
+                    justify-content: flex-start;
+                    gap: .75rem;
+                    margin-top: 1.5rem;
+                    padding-top: 1.25rem;
+                    border-top: 1px solid #f3f4f6;
+                ">
+                    <button type="submit" id="editStaffSubmitBtn" class="btn btn-gold">
+                        <span id="editStaffBtnIcon"><i class="fas fa-save me-2"></i>Update Staff Member</span>
+                        <span id="editStaffBtnLoading" style="display:none;align-items:center;">
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            Saving...
+                        </span>
+                    </button>
+                    <a href="view.php?id=<?= $staffId ?>" class="btn btn-outline-secondary">
+                        <i class="fas fa-times me-2"></i>Cancel
+                    </a>
+                </div>
+
             </form>
 
         </div>
+    </div>
+    <!-- ── Floating Scroll-to-Bottom Arrow ── -->
+    <button id="scrollDownArrow" type="button" title="Jump to Save button"
+        style="
+            position: fixed;
+            bottom: 28px;
+            right: 28px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #c9a84c;
+            color: #0a0f1e;
+            border: none;
+            box-shadow: 0 6px 20px rgba(0,0,0,.18);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            cursor: pointer;
+            z-index: 999;
+            transition: opacity .2s, transform .2s;
+        ">
+        <i class="fas fa-arrow-down"></i>
+    </button>
+    <style>
+        #managedBySelect+.ts-wrapper {
+            display: block !important;
+            visibility: visible !important;
+        }
+    </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
 
-        <style>
-            #managedBySelect+.ts-wrapper {
-                display: block !important;
-                visibility: visible !important;
-            }
-        </style>
-        <script>
-            document.addEventListener('DOMContentLoaded', function () {
-
-                // ── Managed By Tom Select ─────────────────────────────────────────────────
-                const managedByTs = new TomSelect('#managedBySelect', {
-                    placeholder: 'Search by name, ID or branch…',
-                    dropdownParent: 'body',
-                    allowEmptyOption: true,
-                    maxOptions: 300,
-                    searchField: ['text'],
-                    render: {
-                        option: function (data, escape) {
-                            const parts = data.text.split(' — ');
-                            const name = parts[0] || '';
-                            const meta = parts[1] || '';
-                            return `<div style="padding:.4rem .2rem;">
+            // ── Managed By Tom Select ─────────────────────────────────────────────────
+            const managedByTs = new TomSelect('#managedBySelect', {
+                placeholder: 'Search by name, ID or branch…',
+                dropdownParent: 'body',
+                allowEmptyOption: true,
+                maxOptions: 300,
+                searchField: ['text'],
+                render: {
+                    option: function (data, escape) {
+                        const parts = data.text.split(' — ');
+                        const name = parts[0] || '';
+                        const meta = parts[1] || '';
+                        return `<div style="padding:.4rem .2rem;">
                     <div style="font-weight:600;font-size:.87rem;">${escape(name)}</div>
                     ${meta ? `<div style="font-size:.75rem;color:#6b7280;">${escape(meta)}</div>` : ''}
                 </div>`;
-                        },
-                        item: function (data, escape) {
-                            return `<div>${escape(data.text.split(' — ')[0])}</div>`;
-                        }
+                    },
+                    item: function (data, escape) {
+                        return `<div>${escape(data.text.split(' — ')[0])}</div>`;
                     }
-                });
-
-                const preManagedBy = '<?= (int) ($staff['managed_by'] ?? 0) ?>';
-                if (preManagedBy && preManagedBy !== '0') managedByTs.setValue(preManagedBy, true);
-
-
-                // ── Toggle switches ───────────────────────────────────────────────────────
-                function initToggle(checkId, trackId, thumbId, onColor) {
-                    const check = document.getElementById(checkId);
-                    const track = document.getElementById(trackId);
-                    const thumb = document.getElementById(thumbId);
-                    if (!check || !track || !thumb) return;
-
-                    function update() {
-                        track.style.background = check.checked ? onColor : '#d1d5db';
-                        thumb.style.left = check.checked ? '18px' : '2px';
-                    }
-                    check.addEventListener('change', update);
-                    update();
                 }
-
-                initToggle('isActiveCheck', 'activeTrack', 'activeThumb', '#10b981');
-                initToggle('gaCheck', 'gaTrack', 'gaThumb', '#3b82f6');
-
-                // Clicking the toggle label card also fires the checkbox
-                ['activeToggle', 'gaToggle'].forEach(id => {
-                    const label = document.getElementById(id);
-                    if (label) {
-                        label.style.cursor = 'pointer';
-                        label.addEventListener('mouseenter', () => label.style.borderColor = '#c9a84c');
-                        label.addEventListener('mouseleave', () => label.style.borderColor = '#e5e7eb');
-                    }
-                });
-
-                // ── Role change warning ───────────────────────────────────────────────────
-                const roleSelect = document.getElementById('roleSelect');
-                const warning = document.getElementById('roleChangeWarning');
-                const oldRoleLabel = document.getElementById('oldRoleLabel');
-                const newRoleLabel = document.getElementById('newRoleLabel');
-                const originalRole = '<?= (int) $staff['role_id'] ?>';
-                const originalRoleName = '<?= htmlspecialchars(ucfirst($currentRoleName), ENT_QUOTES) ?>';
-
-                if (roleSelect) {
-                    roleSelect.addEventListener('change', function () {
-                        if (this.value !== originalRole) {
-                            const newName = this.options[this.selectedIndex].text;
-                            oldRoleLabel.textContent = originalRoleName;
-                            newRoleLabel.textContent = newName;
-                            warning.style.display = 'block';
-                        } else {
-                            warning.style.display = 'none';
-                        }
-                    });
-                }
-
-                // ── Form submit confirmation if role changed ──────────────────────────────
-                document.getElementById('editStaffForm')?.addEventListener('submit', function (e) {
-                    if (roleSelect && roleSelect.value !== originalRole) {
-                        if (!confirm('Role is changing. This will reset permissions. Continue?')) {
-                            e.preventDefault();
-                        }
-                    }
-                });
-
-            });
-            // ── Extra Departments (pre-loaded from UDA) ───────────────────────────────────
-            const adminOptions = <?= json_encode(array_map(fn($a) => [
-                'id' => $a['id'],
-                'name' => $a['full_name'],
-                'branch' => $a['branch_name'] ?? '',
-            ], $allAdmins)) ?>;
-
-            function adminOptionsHtml(selectedId = '') {
-                let html = '<option value="">— No Manager —</option>';
-                adminOptions.forEach(a => {
-                    const sel = String(a.id) === String(selectedId) ? 'selected' : '';
-                    html += `<option value="${a.id}" ${sel}>${a.name}${a.branch ? ' (' + a.branch + ')' : ''}</option>`;
-                });
-                return html;
-            }
-
-            const extraDeptMap = {};   // { deptId: { name, managed_by } }
-            const extraDeptTomSelects = {};   // { deptId: TomSelect instance }
-
-            // Pre-populate from server (with existing managed_by values)
-            const preloadedDepts = <?= json_encode(array_column($udaFull, null, 'department_id')) ?>;
-            for (const [id, row] of Object.entries(preloadedDepts)) {
-                extraDeptMap[id] = { name: row.dept_name, managed_by: row.managed_by ?? '' };
-            }
-            renderExtraDepts();
-
-            // Init TomSelect on the Add Department picker
-            new TomSelect('#extra-dept-select', {
-                placeholder: 'Search department…',
-                allowEmptyOption: true,
-                dropdownParent: 'body',
-                maxOptions: 200,
-                onChange(val) {
-                    if (!val) return;
-                    const sel = document.getElementById('extra-dept-select');
-                    const name = sel.options[sel.selectedIndex]?.text;
-                    if (extraDeptMap[val]) {
-                        sel.tomselect?.setValue('', true);
-                        return;
-                    }
-                    extraDeptMap[val] = { name, managed_by: '' };
-                    renderExtraDepts();
-                    sel.tomselect?.setValue('', true);
-                },
             });
 
-            function addExtraDept() {
-                const ts = document.getElementById('extra-dept-select').tomselect;
+            const preManagedBy = '<?= (int) ($staff['managed_by'] ?? 0) ?>';
+            if (preManagedBy && preManagedBy !== '0') managedByTs.setValue(preManagedBy, true);
+
+
+            // ── Toggle switches ───────────────────────────────────────────────────────
+            function initToggle(checkId, trackId, thumbId, onColor) {
+                const check = document.getElementById(checkId);
+                const track = document.getElementById(trackId);
+                const thumb = document.getElementById(thumbId);
+                if (!check || !track || !thumb) return;
+
+                function update() {
+                    track.style.background = check.checked ? onColor : '#d1d5db';
+                    thumb.style.left = check.checked ? '18px' : '2px';
+                }
+                check.addEventListener('change', update);
+                update();
+            }
+
+            initToggle('isActiveCheck', 'activeTrack', 'activeThumb', '#10b981');
+            initToggle('gaCheck', 'gaTrack', 'gaThumb', '#3b82f6');
+
+            // Clicking the toggle label card also fires the checkbox
+            ['activeToggle', 'gaToggle'].forEach(id => {
+                const label = document.getElementById(id);
+                if (label) {
+                    label.style.cursor = 'pointer';
+                    label.addEventListener('mouseenter', () => label.style.borderColor = '#c9a84c');
+                    label.addEventListener('mouseleave', () => label.style.borderColor = '#e5e7eb');
+                }
+            });
+
+            // ── Role change warning ───────────────────────────────────────────────────
+            const roleSelect = document.getElementById('roleSelect');
+            const warning = document.getElementById('roleChangeWarning');
+            const oldRoleLabel = document.getElementById('oldRoleLabel');
+            const newRoleLabel = document.getElementById('newRoleLabel');
+            const originalRole = '<?= (int) $staff['role_id'] ?>';
+            const originalRoleName = '<?= htmlspecialchars(ucfirst($currentRoleName), ENT_QUOTES) ?>';
+
+            if (roleSelect) {
+                roleSelect.addEventListener('change', function () {
+                    if (this.value !== originalRole) {
+                        const newName = this.options[this.selectedIndex].text;
+                        oldRoleLabel.textContent = originalRoleName;
+                        newRoleLabel.textContent = newName;
+                        warning.style.display = 'block';
+                    } else {
+                        warning.style.display = 'none';
+                    }
+                });
+            }
+
+            // ── Form submit confirmation if role changed ──────────────────────────────
+            document.getElementById('editStaffForm')?.addEventListener('submit', function (e) {
+                if (roleSelect && roleSelect.value !== originalRole) {
+                    if (!confirm('Role is changing. This will reset permissions. Continue?')) {
+                        e.preventDefault();
+                    }
+                }
+            });
+
+        });
+        // ── Extra Departments (pre-loaded from UDA) ───────────────────────────────────
+        const adminOptions = <?= json_encode(array_map(fn($a) => [
+            'id' => $a['id'],
+            'name' => $a['full_name'],
+            'branch' => $a['branch_name'] ?? '',
+        ], $allAdmins)) ?>;
+
+        function adminOptionsHtml(selectedId = '') {
+            let html = '<option value="">— No Manager —</option>';
+            adminOptions.forEach(a => {
+                const sel = String(a.id) === String(selectedId) ? 'selected' : '';
+                html += `<option value="${a.id}" ${sel}>${a.name}${a.branch ? ' (' + a.branch + ')' : ''}</option>`;
+            });
+            return html;
+        }
+
+        const extraDeptMap = {};   // { deptId: { name, managed_by } }
+        const extraDeptTomSelects = {};   // { deptId: TomSelect instance }
+
+        // Pre-populate from server (with existing managed_by values)
+        const preloadedDepts = <?= json_encode(array_column($udaFull, null, 'department_id')) ?>;
+        for (const [id, row] of Object.entries(preloadedDepts)) {
+            extraDeptMap[id] = { name: row.dept_name, managed_by: row.managed_by ?? '' };
+        }
+        renderExtraDepts();
+
+        // Init TomSelect on the Add Department picker
+        new TomSelect('#extra-dept-select', {
+            placeholder: 'Search department…',
+            allowEmptyOption: true,
+            dropdownParent: 'body',
+            maxOptions: 200,
+            onChange(val) {
+                if (!val) return;
                 const sel = document.getElementById('extra-dept-select');
-                const id = ts ? ts.getValue() : sel.value;
                 const name = sel.options[sel.selectedIndex]?.text;
-                if (!id || extraDeptMap[id]) { ts?.setValue('', true); return; }
-                extraDeptMap[id] = { name, managed_by: '' };
+                if (extraDeptMap[val]) {
+                    sel.tomselect?.setValue('', true);
+                    return;
+                }
+                extraDeptMap[val] = { name, managed_by: '' };
                 renderExtraDepts();
-                ts?.setValue('', true);
+                sel.tomselect?.setValue('', true);
+            },
+        });
+
+        function addExtraDept() {
+            const ts = document.getElementById('extra-dept-select').tomselect;
+            const sel = document.getElementById('extra-dept-select');
+            const id = ts ? ts.getValue() : sel.value;
+            const name = sel.options[sel.selectedIndex]?.text;
+            if (!id || extraDeptMap[id]) { ts?.setValue('', true); return; }
+            extraDeptMap[id] = { name, managed_by: '' };
+            renderExtraDepts();
+            ts?.setValue('', true);
+        }
+
+        function removeExtraDept(id) {
+            if (extraDeptTomSelects[id]) {
+                extraDeptTomSelects[id].destroy();
+                delete extraDeptTomSelects[id];
+            }
+            delete extraDeptMap[id];
+            renderExtraDepts();
+        }
+
+        function setDeptManager(deptId, val) {
+            if (extraDeptMap[deptId]) {
+                extraDeptMap[deptId].managed_by = val;
+                const hiddenInput = document.querySelector(
+                    `input[name="extra_dept_managers[${deptId}]"]`
+                );
+                if (hiddenInput) hiddenInput.value = val;
+            }
+        }
+
+        function renderExtraDepts() {
+            const list = document.getElementById('extra-dept-list');
+            const inputs = document.getElementById('extra-dept-inputs');
+
+            // Destroy existing TomSelect instances before wiping DOM
+            for (const [id, ts] of Object.entries(extraDeptTomSelects)) {
+                ts.destroy();
+                delete extraDeptTomSelects[id];
             }
 
-            function removeExtraDept(id) {
-                if (extraDeptTomSelects[id]) {
-                    extraDeptTomSelects[id].destroy();
-                    delete extraDeptTomSelects[id];
-                }
-                delete extraDeptMap[id];
-                renderExtraDepts();
-            }
+            list.innerHTML = '';
+            inputs.innerHTML = '';
 
-            function setDeptManager(deptId, val) {
-                if (extraDeptMap[deptId]) {
-                    extraDeptMap[deptId].managed_by = val;
-                    const hiddenInput = document.querySelector(
-                        `input[name="extra_dept_managers[${deptId}]"]`
-                    );
-                    if (hiddenInput) hiddenInput.value = val;
-                }
-            }
-
-            function renderExtraDepts() {
-                const list = document.getElementById('extra-dept-list');
-                const inputs = document.getElementById('extra-dept-inputs');
-
-                // Destroy existing TomSelect instances before wiping DOM
-                for (const [id, ts] of Object.entries(extraDeptTomSelects)) {
-                    ts.destroy();
-                    delete extraDeptTomSelects[id];
-                }
-
-                list.innerHTML = '';
-                inputs.innerHTML = '';
-
-                for (const [id, data] of Object.entries(extraDeptMap)) {
-                    list.insertAdjacentHTML('beforeend', `
+            for (const [id, data] of Object.entries(extraDeptMap)) {
+                list.insertAdjacentHTML('beforeend', `
             <div style="background:#f8faff;border:1px solid #bfdbfe;border-radius:10px;
                         padding:.55rem .75rem;display:flex;flex-direction:column;gap:.4rem;
                         min-width:240px;max-width:280px;">
@@ -850,23 +894,109 @@ include '../../includes/header.php';
             </div>
         `);
 
-                    inputs.insertAdjacentHTML('beforeend', `
+                inputs.insertAdjacentHTML('beforeend', `
             <input type="hidden" name="extra_departments[]"          value="${id}">
             <input type="hidden" name="extra_dept_managers[${id}]"   value="${data.managed_by}">
         `);
 
-                    // Boot TomSelect on the newly added manager select
-                    extraDeptTomSelects[id] = new TomSelect(`#ts-dept-${id}`, {
-                        placeholder: 'Search manager…',
-                        allowEmptyOption: true,
-                        dropdownParent: 'body',
-                        maxOptions: 200,
-                        onChange(val) { setDeptManager(id, val); },
-                    });
-                }
+                // Boot TomSelect on the newly added manager select
+                extraDeptTomSelects[id] = new TomSelect(`#ts-dept-${id}`, {
+                    placeholder: 'Search manager…',
+                    allowEmptyOption: true,
+                    dropdownParent: 'body',
+                    maxOptions: 200,
+                    onChange(val) { setDeptManager(id, val); },
+                });
             }
-        </script>
+        }
+        function showFieldError(id, msg) {
+            const el = document.getElementById(id);
+            const err = document.getElementById('err_' + id);
+            if (el) el.classList.add('is-invalid');
+            if (err) { err.textContent = msg; err.style.display = 'block'; }
+        }
+        function clearFieldError(id) {
+            const el = document.getElementById(id);
+            const err = document.getElementById('err_' + id);
+            if (el) el.classList.remove('is-invalid');
+            if (err) err.style.display = 'none';
+        }
 
-        <?php include '../../includes/footer.php'; ?>
-    </div>
+        document.getElementById('editStaffForm')?.addEventListener('submit', function (e) {
+            let valid = true;
+
+            const requiredFields = [
+                { id: 'full_name', label: 'Full name' },
+                { id: 'email', label: 'Email' },
+                { id: 'username', label: 'Username' },
+                { id: 'roleSelect', label: 'Role' },
+                { id: 'branch_id', label: 'Branch' },
+                { id: 'department_id', label: 'Department' },
+            ];
+
+            requiredFields.forEach(f => {
+                const el = document.getElementById(f.id);
+                if (!el || !el.value.trim()) {
+                    valid = false;
+                    showFieldError(f.id, `${f.label} is required.`);
+                } else {
+                    clearFieldError(f.id);
+                }
+            });
+
+            const email = document.getElementById('email');
+            if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+                valid = false;
+                showFieldError('email', 'Invalid email format.');
+            }
+
+            if (!valid) {
+                e.preventDefault();
+                const firstInvalid = document.querySelector('.is-invalid');
+                if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return false;
+            }
+
+            // Only lock the button if the role-change confirm() (in the other listener) wasn't cancelled.
+            // Since that listener runs in registration order and calls preventDefault on cancel,
+            // by the time this code path completes the submit is proceeding.
+            const btn = document.getElementById('editStaffSubmitBtn');
+            btn.disabled = true;
+            btn.style.opacity = '0.75';
+            btn.style.cursor = 'not-allowed';
+            document.getElementById('editStaffBtnIcon').style.display = 'none';
+            document.getElementById('editStaffBtnLoading').style.display = 'inline-flex';
+            document.getElementById('editStaffBtnLoading').style.alignItems = 'center';
+        });
+        // ── Scroll-to-bottom arrow ──────────────────────────────────────────────────
+(function () {
+    const arrow = document.getElementById('scrollDownArrow');
+    const form = document.getElementById('editStaffForm');
+    if (!arrow || !form) return;
+
+    function updateArrowVisibility() {
+        const scrollPos = window.scrollY + window.innerHeight;
+        const pageHeight = document.documentElement.scrollHeight;
+        const nearBottom = pageHeight - scrollPos < 150; // px threshold
+        arrow.style.opacity = nearBottom ? '0' : '1';
+        arrow.style.pointerEvents = nearBottom ? 'none' : 'auto';
+    }
+
+    arrow.addEventListener('click', function () {
+        const submitBtn = document.getElementById('editStaffSubmitBtn');
+        if (submitBtn) {
+            submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+            window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        }
+    });
+
+    window.addEventListener('scroll', updateArrowVisibility);
+    window.addEventListener('resize', updateArrowVisibility);
+    updateArrowVisibility(); // run once on load
+})();
+    </script>
+
+    <?php include '../../includes/footer.php'; ?>
+</div>
 </div>

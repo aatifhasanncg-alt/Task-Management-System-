@@ -572,10 +572,10 @@ include '../../includes/header.php';
                             <input type="hidden" name="edit_company" value="1">
                             <div class="row g-3">
                                 <div class="col-md-6">
-                                    <label class="form-label-mis">Company Name <span
-                                            class="text-danger">*</span></label>
-                                    <input type="text" name="company_name" class="form-control form-control-sm"
+                                    <label class="form-label-mis">Company Name <span class="text-danger">*</span></label>
+                                    <input type="text" name="company_name" id="edit_company_name" class="form-control form-control-sm"
                                         value="<?= htmlspecialchars($company['company_name']) ?>" required>
+                                    <div class="invalid-feedback-mis" id="err_edit_company_name" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label-mis">Company Code</label>
@@ -584,8 +584,9 @@ include '../../includes/header.php';
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label-mis">PAN Number</label>
-                                    <input type="text" name="pan_number" class="form-control form-control-sm"
+                                    <input type="text" name="pan_number" id="edit_pan_number" class="form-control form-control-sm"
                                         value="<?= htmlspecialchars($company['pan_number'] ?? '') ?>">
+                                    <div class="invalid-feedback-mis" id="err_edit_pan_number" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label-mis">Reg Number</label>
@@ -649,8 +650,9 @@ include '../../includes/header.php';
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label-mis">Contact Email</label>
-                                    <input type="email" name="contact_email" class="form-control form-control-sm"
+                                    <input type="email" name="contact_email" id="edit_contact_email" class="form-control form-control-sm"
                                         value="<?= htmlspecialchars($company['contact_email'] ?? '') ?>">
+                                    <div class="invalid-feedback-mis" id="err_edit_contact_email" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                 </div>
                                 <div class="col-12">
                                     <label class="form-label-mis">Address</label>
@@ -661,16 +663,76 @@ include '../../includes/header.php';
                         </form>
                     </div>
                     <div class="modal-footer">
-                        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                        <button class="btn btn-gold btn-sm"
-                            onclick="document.getElementById('editCompanyForm').submit();">
-                            <i class="fas fa-save me-1"></i>Save Changes
-                        </button>
-                    </div>
+                    <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" id="editCompanySaveBtn" class="btn btn-gold btn-sm" onclick="submitEditCompanyForm();">
+                        <span id="editCompanyBtnIcon"><i class="fas fa-save me-1"></i>Save Changes</span>
+                        <span id="editCompanyBtnLoading" style="display:none;align-items:center;">
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            Saving...
+                        </span>
+                    </button>
+                </div>
                 </div>
             </div>
         </div>
+        <script>
+        function showFieldError(id, msg) {
+            const el = document.getElementById(id);
+            const err = document.getElementById('err_' + id);
+            if (el) el.classList.add('is-invalid');
+            if (err) { err.textContent = msg; err.style.display = 'block'; }
+        }
+        function clearFieldError(id) {
+            const el = document.getElementById(id);
+            const err = document.getElementById('err_' + id);
+            if (el) el.classList.remove('is-invalid');
+            if (err) err.style.display = 'none';
+        }
 
+        function submitEditCompanyForm() {
+            let valid = true;
+
+            const name = document.getElementById('edit_company_name');
+            if (!name.value.trim()) {
+                valid = false;
+                showFieldError('edit_company_name', 'Company name is required.');
+            } else {
+                clearFieldError('edit_company_name');
+            }
+
+            const pan = document.getElementById('edit_pan_number');
+            if (pan.value.trim() && !/^\d{9}$/.test(pan.value.trim())) {
+                valid = false;
+                showFieldError('edit_pan_number', 'PAN number must be exactly 9 digits.');
+            } else {
+                clearFieldError('edit_pan_number');
+            }
+
+            const email = document.getElementById('edit_contact_email');
+            if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+                valid = false;
+                showFieldError('edit_contact_email', 'Invalid contact email.');
+            } else {
+                clearFieldError('edit_contact_email');
+            }
+
+            if (!valid) {
+                const firstInvalid = document.querySelector('#editCompanyModal .is-invalid');
+                if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return false;
+            }
+
+            const btn = document.getElementById('editCompanySaveBtn');
+            btn.disabled = true;
+            btn.style.opacity = '0.75';
+            btn.style.cursor = 'not-allowed';
+            document.getElementById('editCompanyBtnIcon').style.display = 'none';
+            document.getElementById('editCompanyBtnLoading').style.display = 'inline-flex';
+            document.getElementById('editCompanyBtnLoading').style.alignItems = 'center';
+
+            document.getElementById('editCompanyForm').submit();
+        }
+        </script>
         <?php include '../../includes/footer.php'; ?>
     </div>
 </div>

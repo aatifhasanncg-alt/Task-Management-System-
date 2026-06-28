@@ -61,7 +61,7 @@ $staffList = $db->prepare("
     LEFT JOIN branches b ON b.id = u.branch_id
     LEFT JOIN roles r    ON r.id = u.role_id
     LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE r.role_name IN ('staff','admin')
+    WHERE r.role_name IN ('staff','admin','manager')
       AND u.is_active = 1
       AND (
           u.department_id = ?
@@ -263,7 +263,7 @@ include '../../includes/header.php';
 </div>
 <?php endif; ?>
 
-<form method="POST" novalidate>
+<form method="POST" id="editTaskForm" novalidate>
     <input type="hidden" name="csrf_token"  value="<?= csrfToken() ?>">
     <input type="hidden" name="update_task" value="1">
 
@@ -391,6 +391,7 @@ include '../../includes/header.php';
                                     $sel = $selectedAssign === (int)$s['id'] ? 'selected' : '';
                                     $label = $s['full_name'];
                                     if ($s['employee_id'])   $label .= ' (' . $s['employee_id'] . ')';
+                                    if ($s['role_name'] === 'manager') $label .= ' [Manager]';
                                     if ($s['branch_name'])   $label .= ' — ' . $s['branch_name'];
                                 ?>
                                 <option value="<?= $s['id'] ?>" <?= $sel ?>>
@@ -479,18 +480,20 @@ include '../../includes/header.php';
                             </div>
                         </div>
 
-                        <!-- Description -->
+                       <!-- Description -->
                         <div class="col-12">
                             <label class="form-label-mis">Description</label>
-                            <textarea name="description" class="form-control"
-                                      rows="3"><?= htmlspecialchars($f['description'] ?? '') ?></textarea>
+                            <textarea name="description" id="description" class="form-control"
+                                      rows="3" maxlength="500"><?= htmlspecialchars($f['description'] ?? '') ?></textarea>
+                            <small id="description_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                         </div>
 
                         <!-- Remarks -->
                         <div class="col-12">
                             <label class="form-label-mis">Remarks</label>
-                            <textarea name="remarks" class="form-control"
-                                      rows="2"><?= htmlspecialchars($f['remarks'] ?? '') ?></textarea>
+                            <textarea name="remarks" id="remarks" class="form-control"
+                                      rows="2" maxlength="300"><?= htmlspecialchars($f['remarks'] ?? '') ?></textarea>
+                            <small id="remarks_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                         </div>
 
                     </div>
@@ -498,8 +501,12 @@ include '../../includes/header.php';
             </div>
 
             <div class="d-flex gap-3">
-                <button type="submit" name="update_task" value="1" class="btn btn-gold">
-                    <i class="fas fa-save me-2"></i>Save Changes
+                <button type="submit" name="update_task" value="1" id="editSubmitBtn" class="btn btn-gold">
+                    <span id="editBtnIcon"><i class="fas fa-save me-2"></i>Save Changes</span>
+                    <span id="editBtnLoading" style="display:none;">
+                        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                        Saving...
+                    </span>
                 </button>
                 <a href="view.php?id=<?= $id ?>" class="btn btn-outline-secondary">Cancel</a>
             </div>
@@ -707,6 +714,52 @@ function updateCapacityBar() {
 }
 
 document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
+// ADD this new block — right after the existing line:
+// document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
+
+document.getElementById('editTaskForm').addEventListener('submit', function (e) {
+    const titleInput = document.querySelector('input[name="title"]');
+    const statusSel  = document.querySelector('select[name="status"]');
+
+    let valid = true;
+    if (!titleInput.value.trim()) { valid = false; titleInput.classList.add('is-invalid'); }
+    else titleInput.classList.remove('is-invalid');
+
+    if (!statusSel.value) { valid = false; statusSel.classList.add('is-invalid'); }
+    else statusSel.classList.remove('is-invalid');
+
+    if (!valid) {
+        e.preventDefault();
+        const firstInvalid = document.querySelector('.is-invalid');
+        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return false;
+    }
+
+    // Lock the button so a frustrated double-click can't fire two updates
+    const btn = document.getElementById('editSubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.75';
+    btn.style.cursor = 'not-allowed';
+    document.getElementById('editBtnIcon').style.display = 'none';
+    document.getElementById('editBtnLoading').style.display = 'inline-flex';
+    document.getElementById('editBtnLoading').style.alignItems = 'center';
+});
+// ADD inside the existing <script> block (e.g. right after the DOMContentLoaded listener ends):
+bindCounter('description', 'description_count', 500);
+bindCounter('remarks', 'remarks_count', 300);
+// ADD this function once in each file's script section:
+function bindCounter(textareaId, counterId, max) {
+    const ta = document.getElementById(textareaId);
+    const counter = document.getElementById(counterId);
+    if (!ta || !counter) return;
+    const update = () => {
+        const len = ta.value.length;
+        counter.textContent = `${len}/${max}`;
+        counter.style.color = len >= max ? '#ef4444' : (len >= max * 0.9 ? '#f59e0b' : '#9ca3af');
+    };
+    ta.addEventListener('input', update);
+    update();
+}
 </script>
 
 <?php include '../../includes/footer.php'; ?>

@@ -557,14 +557,16 @@ include '../../includes/header.php';
             <button onclick="closeEditModal()"
                 style="background:none;border:none;font-size:1.1rem;color:#9ca3af;cursor:pointer;">✕</button>
         </div>
-        <form method="POST">
+        <form method="POST" id="editClientForm" novalidate>
             <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
             <input type="hidden" name="action" value="edit_company">
             <div style="padding:1.5rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Company Name <span style="color:#ef4444;">*</span></label>
-                    <input type="text" name="company_name" class="form-control form-control-sm"
+                    <input type="text" name="company_name" id="edit_client_company_name" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['company_name']) ?>" required>
+                    <div class="invalid-feedback-mis" id="err_edit_client_company_name"
+                        style="color:#ef4444;font-size:.72rem;display:none;"></div>
                 </div>
                 <div>
                     <label class="form-label-mis">Company Type</label>
@@ -590,8 +592,10 @@ include '../../includes/header.php';
                 </div>
                 <div>
                     <label class="form-label-mis">PAN Number</label>
-                    <input type="text" name="pan_number" class="form-control form-control-sm"
+                    <input type="text" name="pan_number" id="edit_client_pan_number" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['pan_number'] ?? '') ?>">
+                    <div class="invalid-feedback-mis" id="err_edit_client_pan_number"
+                        style="color:#ef4444;font-size:.72rem;display:none;"></div>
                 </div>
                 <div>
                     <label class="form-label-mis">Registration Number</label>
@@ -633,8 +637,10 @@ include '../../includes/header.php';
                 </div>
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Contact Email</label>
-                    <input type="email" name="contact_email" class="form-control form-control-sm"
+                    <input type="email" name="contact_email" id="edit_client_contact_email" class="form-control form-control-sm"
                         value="<?= htmlspecialchars($company['contact_email'] ?? '') ?>">
+                    <div class="invalid-feedback-mis" id="err_edit_client_contact_email"
+                        style="color:#ef4444;font-size:.72rem;display:none;"></div>
                 </div>
                 <div style="grid-column:1/-1;">
                     <label class="form-label-mis">Address</label>
@@ -647,9 +653,13 @@ include '../../includes/header.php';
                 <button type="button" onclick="closeEditModal()"
                     style="background:#f3f4f6;color:#6b7280;border:none;border-radius:8px;
                            padding:.55rem 1.1rem;font-size:.85rem;cursor:pointer;">Cancel</button>
-                <button type="submit" class="btn btn-gold btn-sm" style="padding:.55rem 1.25rem;">
-                    <i class="fas fa-save me-1"></i>Save Changes
-                </button>
+                <button type="submit" id="editClientSubmitBtn" class="btn btn-gold btn-sm" style="padding:.55rem 1.25rem;">
+                <span id="editClientBtnIcon"><i class="fas fa-save me-1"></i>Save Changes</span>
+                <span id="editClientBtnLoading" style="display:none;align-items:center;">
+                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Saving...
+                </span>
+            </button>
             </div>
         </form>
     </div>
@@ -805,6 +815,61 @@ document.querySelectorAll('.sm-status-opt').forEach(el => {
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { closeEditModal(); closeStatusModal(); }
+});
+function showFieldError(id, msg) {
+    const el = document.getElementById(id);
+    const err = document.getElementById('err_' + id);
+    if (el) el.classList.add('is-invalid');
+    if (err) { err.textContent = msg; err.style.display = 'block'; }
+}
+function clearFieldError(id) {
+    const el = document.getElementById(id);
+    const err = document.getElementById('err_' + id);
+    if (el) el.classList.remove('is-invalid');
+    if (err) err.style.display = 'none';
+}
+
+document.getElementById('editClientForm')?.addEventListener('submit', function (e) {
+    let valid = true;
+
+    const name = document.getElementById('edit_client_company_name');
+    if (!name.value.trim()) {
+        valid = false;
+        showFieldError('edit_client_company_name', 'Company name is required.');
+    } else {
+        clearFieldError('edit_client_company_name');
+    }
+
+    const pan = document.getElementById('edit_client_pan_number');
+    if (pan.value.trim() && !/^\d{9}$/.test(pan.value.trim())) {
+        valid = false;
+        showFieldError('edit_client_pan_number', 'PAN number must be exactly 9 digits.');
+    } else {
+        clearFieldError('edit_client_pan_number');
+    }
+
+    const email = document.getElementById('edit_client_contact_email');
+    if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+        valid = false;
+        showFieldError('edit_client_contact_email', 'Invalid contact email.');
+    } else {
+        clearFieldError('edit_client_contact_email');
+    }
+
+    if (!valid) {
+        e.preventDefault();
+        const firstInvalid = document.querySelector('#edit-modal .is-invalid');
+        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return false;
+    }
+
+    const btn = document.getElementById('editClientSubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.75';
+    btn.style.cursor = 'not-allowed';
+    document.getElementById('editClientBtnIcon').style.display = 'none';
+    document.getElementById('editClientBtnLoading').style.display = 'inline-flex';
+    document.getElementById('editClientBtnLoading').style.alignItems = 'center';
 });
 </script>
 

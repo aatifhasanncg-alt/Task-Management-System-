@@ -153,7 +153,7 @@ include '../../includes/header.php';
 <div id="tab-single" style="display:<?= $activeTab === 'single' ? 'block' : 'none' ?>;">
 <div class="row g-4">
     <div class="col-lg-8">
-        <form method="POST">
+        <form method="POST" novalidate id="addCompanyForm">
             <input type="hidden" name="csrf_token"   value="<?= csrfToken() ?>">
             <input type="hidden" name="form_action"  value="single">
 
@@ -166,9 +166,10 @@ include '../../includes/header.php';
 
                         <div class="col-md-8">
                             <label class="form-label-mis">Company Name <span class="required-star">*</span></label>
-                            <input type="text" name="company_name" class="form-control"
-                                   value="<?= htmlspecialchars($_POST['company_name'] ?? '') ?>"
-                                   placeholder="Full legal name" required>
+                            <input type="text" name="company_name" id="company_name" class="form-control" maxlength="200"
+                                value="<?= htmlspecialchars($_POST['company_name'] ?? '') ?>" required>
+                            <div class="invalid-feedback-mis" id="err_company_name" style="color:#ef4444;font-size:.72rem;display:none;"></div>
+                            <small id="company_name_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                         </div>
 
                         <div class="col-md-4">
@@ -221,9 +222,15 @@ include '../../includes/header.php';
 
                         <div class="col-md-4">
                             <label class="form-label-mis">PAN Number</label>
-                            <input type="text" name="pan_number" class="form-control"
-                                   value="<?= htmlspecialchars($_POST['pan_number'] ?? '') ?>"
-                                   placeholder="09-digit PAN">
+                            <input type="text"
+                                name="pan_number"
+                                id="pan_number"
+                                class="form-control"
+                                maxlength="9"
+                                pattern="\d{9}"
+                                placeholder="09 digit PAN"
+                                value="<?= htmlspecialchars($_POST['pan_number'] ?? '') ?>">
+                            <div class="invalid-feedback-mis" id="err_pan_number" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                         </div>
 
                         <div class="col-md-4">
@@ -260,15 +267,17 @@ include '../../includes/header.php';
                             <input type="text" name="contact_person" class="form-control"
                                    value="<?= htmlspecialchars($_POST['contact_person'] ?? '') ?>">
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label-mis">Contact Phone</label>
-                            <input type="text" name="contact_phone" class="form-control"
-                                   value="<?= htmlspecialchars($_POST['contact_phone'] ?? '') ?>">
-                        </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <label class="form-label-mis">Contact Email</label>
-                            <input type="email" name="contact_email" class="form-control"
-                                   value="<?= htmlspecialchars($_POST['contact_email'] ?? '') ?>">
+                            <input type="email" name="contact_email" id="contact_email" class="form-control"
+                                value="<?= htmlspecialchars($_POST['contact_email'] ?? '') ?>">
+                            <div class="invalid-feedback-mis" id="err_contact_email" style="color:#ef4444;font-size:.72rem;display:none;"></div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label-mis">Contact Phone</label>
+                            <input type="tel" name="contact_phone" id="contact_phone" class="form-control"
+                                value="<?= htmlspecialchars($_POST['contact_phone'] ?? '') ?>">
+                            <div class="invalid-feedback-mis" id="err_contact_phone" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label-mis">Address</label>
@@ -279,8 +288,12 @@ include '../../includes/header.php';
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-gold">
-                <i class="fas fa-save me-1"></i>Save Company
+            <button type="submit" id="addCompanySubmitBtn" class="btn-gold btn">
+                <span id="addCompanyBtnIcon"><i class="fas fa-save me-2"></i>Save Company</span>
+                <span id="addCompanyBtnLoading" style="display:none;align-items:center;">
+                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Saving...
+                </span>
             </button>
         </form>
     </div>
@@ -505,6 +518,31 @@ include '../../includes/header.php';
 </div><!-- /tab-bulk -->
 
 </div><!-- padding wrapper -->
+
+<!-- ── Floating Scroll-to-Bottom Arrow ── -->
+<button id="scrollDownArrow" type="button" title="Jump to Save button"
+    style="
+        position: fixed;
+        bottom: 28px;
+        right: 28px;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: #c9a84c;
+        color: #0a0f1e;
+        border: none;
+        box-shadow: 0 6px 20px rgba(0,0,0,.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        cursor: pointer;
+        z-index: 999;
+        transition: opacity .2s, transform .2s;
+    ">
+    <i class="fas fa-arrow-down"></i>
+</button>
+
 <?php include '../../includes/footer.php'; ?>
 </div></div><!-- main-content / app-wrapper -->
 
@@ -574,4 +612,117 @@ document.getElementById('bulk-form').addEventListener('submit', function() {
     document.getElementById('upload-btn').disabled = true;
     document.getElementById('upload-spinner').style.display = 'flex';
 });
+function bindCounter(inputId, counterId, max) {
+    const el = document.getElementById(inputId);
+    const counter = document.getElementById(counterId);
+    if (!el || !counter) return;
+    const update = () => {
+        const len = el.value.length;
+        counter.textContent = `${len}/${max}`;
+        counter.style.color = len >= max ? '#ef4444' : (len >= max * 0.9 ? '#f59e0b' : '#9ca3af');
+    };
+    el.addEventListener('input', update);
+    update();
+}
+bindCounter('company_name', 'company_name_count', 200);
+
+function showFieldError(id, msg) {
+    const el = document.getElementById(id);
+    const err = document.getElementById('err_' + id);
+    if (el) el.classList.add('is-invalid');
+    if (err) { err.textContent = msg; err.style.display = 'block'; }
+}
+function clearFieldError(id) {
+    const el = document.getElementById(id);
+    const err = document.getElementById('err_' + id);
+    if (el) el.classList.remove('is-invalid');
+    if (err) err.style.display = 'none';
+}
+
+document.getElementById('addCompanyForm').addEventListener('submit', function (e) {
+    let valid = true;
+
+    const name = document.getElementById('company_name');
+    if (!name.value.trim()) {
+        valid = false;
+        showFieldError('company_name', 'Company name is required.');
+    } else if (name.value.length > 200) {
+        valid = false;
+        showFieldError('company_name', 'Company name too long (max 200).');
+    } else {
+        clearFieldError('company_name');
+    }
+
+    const pan = document.getElementById('pan_number');
+    if (pan.value.trim() && !/^\d{9}$/.test(pan.value.trim())) {
+        valid = false;
+        showFieldError('pan_number', 'PAN number must be exactly 9 digits.');
+    } else {
+        clearFieldError('pan_number');
+    }
+
+    const email = document.getElementById('contact_email');
+    if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+        valid = false;
+        showFieldError('contact_email', 'Invalid contact email.');
+    } else {
+        clearFieldError('contact_email');
+    }
+
+    const phone = document.getElementById('contact_phone');
+    if (phone.value.trim() && !/^[\d\s\+\-\(\)]{7,20}$/.test(phone.value.trim())) {
+        valid = false;
+        showFieldError('contact_phone', 'Invalid phone format.');
+    } else {
+        clearFieldError('contact_phone');
+    }
+
+    if (!valid) {
+        e.preventDefault();
+        const firstInvalid = document.querySelector('.is-invalid');
+        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return false;
+    }
+
+    const btn = document.getElementById('addCompanySubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.75';
+    btn.style.cursor = 'not-allowed';
+    document.getElementById('addCompanyBtnIcon').style.display = 'none';
+    document.getElementById('addCompanyBtnLoading').style.display = 'inline-flex';
+    document.getElementById('addCompanyBtnLoading').style.alignItems = 'center';
+});
+// ── Scroll-to-bottom arrow ──────────────────────────────────────────────────
+(function () {
+    const arrow = document.getElementById('scrollDownArrow');
+    if (!arrow) return;
+
+    function getTargetButton() {
+        const singleVisible = document.getElementById('tab-single').style.display !== 'none';
+        return singleVisible
+            ? document.getElementById('addCompanySubmitBtn')
+            : document.getElementById('upload-btn');
+    }
+
+    function updateArrowVisibility() {
+        const scrollPos = window.scrollY + window.innerHeight;
+        const pageHeight = document.documentElement.scrollHeight;
+        const nearBottom = pageHeight - scrollPos < 150;
+        arrow.style.opacity = nearBottom ? '0' : '1';
+        arrow.style.pointerEvents = nearBottom ? 'none' : 'auto';
+    }
+
+    arrow.addEventListener('click', function () {
+        const target = getTargetButton();
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+            window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        }
+    });
+
+    window.addEventListener('scroll', updateArrowVisibility);
+    window.addEventListener('resize', updateArrowVisibility);
+    updateArrowVisibility();
+})();
 </script>

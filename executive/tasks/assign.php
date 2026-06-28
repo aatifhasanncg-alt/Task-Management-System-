@@ -121,11 +121,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notifMsg .= " has been assigned to you";
             if ($dueDate) $notifMsg .= " · Due " . date('M j, Y', strtotime($dueDate));
             $notifMsg .= ".";
-            $role = strtolower($assigneeTo);
+            $roleStmt = $db->prepare("
+                SELECT r.role_name 
+                FROM users u 
+                JOIN roles r ON r.id = u.role_id 
+                WHERE u.id = ?
+            ");
+            $roleStmt->execute([$assignedTo]);
+            $role = strtolower($roleStmt->fetchColumn() ?: 'staff');
 
             $rolePathMap = [
                 'admin'     => 'admin',
-                'executive' => 'admin',
+                'executive' => 'executive',
                 'manager'   => 'manager',
                 'staff'     => 'staff',
             ];
@@ -185,7 +192,7 @@ include '../../includes/header.php';
                             <li><?= htmlspecialchars($e) ?></li><?php endforeach; ?>
                     </ul>
                 </div><?php endif; ?>
-            <form method="POST" novalidate>
+            <form method="POST" id="assignForm" novalidate>
                 <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                 <div class="row g-4">
                     <div class="col-lg-8">
@@ -197,8 +204,9 @@ include '../../includes/header.php';
                                 <div class="row g-3">
                                     <div class="col-12"><label class="form-label-mis">Task Title <span
                                                 style="color:#ef4444;">*</span></label>
-                                        <input type="text" name="title" class="form-control" maxlength="255"
+                                        <input type="text" name="title" id="title" class="form-control" maxlength="255"
                                             value="<?= htmlspecialchars($_POST['title'] ?? '') ?>" required>
+                                        <div class="invalid-feedback-mis" id="err_title" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
                                     <div class="col-md-4"><label class="form-label-mis">Department <span
                                                 style="color:#ef4444;">*</span></label>
@@ -223,7 +231,7 @@ include '../../includes/header.php';
                                         </select>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label-mis">Assign To</label>
+                                        <label class="form-label-mis">Assign To <span style="color:#ef4444;">*</span></label>
                                         <select name="assigned_to" id="assigned_to_sel" class="form-select" required>
                                             <option value="">-- Select Staff --</option>
                                         </select>
@@ -243,6 +251,7 @@ include '../../includes/header.php';
                                         <select name="auditor_id" id="auditor_id" class="form-select">
                                             <option value="">-- Select Auditor --</option>
                                         </select>
+                                        <small id="auditor_limit_desc" class="text-muted d-block mt-1" style="font-size:.72rem;"></small>
                                     </div>
                                     <!-- Capacity Bar -->
                                     <div id="auditor-capacity" style="margin-top:.4rem;display:none;">
@@ -256,7 +265,7 @@ include '../../includes/header.php';
                                         </div>
                                     </div>
                                    <div class="col-md-4">
-                                        <label class="form-label-mis">Status</label>
+                                        <label class="form-label-mis">Status <span style="color:#ef4444;">*</span></label>
                                         <select name="status_id" class="form-select" required>
                                             <option value="">-- Select Status --</option>
                                             <?php 
@@ -278,11 +287,14 @@ include '../../includes/header.php';
                                                 </option><?php endforeach; ?>
                                         </select>
                                     </div>
-                                    <div class="col-md-3"><label class="form-label-mis">Due Date</label>
-                                        <input type="date" name="due_date" class="form-control"
+                                    <div class="col-md-3">
+                                        <label class="form-label-mis">Due Date <span style="color:#ef4444;">*</span></label>
+                                        <input type="date" name="due_date" id="due_date" class="form-control"
                                             value="<?= htmlspecialchars($_POST['due_date'] ?? '') ?>" required>
+                                        <div class="invalid-feedback-mis" id="err_due_date" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
-                                    <div class="col-md-3"><label class="form-label-mis">Fiscal Year</label>
+                                    <div class="col-md-3">
+                                        <label class="form-label-mis">Fiscal Year <span style="color:#ef4444;">*</span></label>
                                         <select name="fiscal_year" class="form-select" required>
                                             <?php $currentFY = getCurrentFiscalYear($db); ?>
                                             <?php foreach ($years as $y): ?>
@@ -314,13 +326,15 @@ include '../../includes/header.php';
                                         </select>
                                     </div>
                                     <div class="col-12"><label class="form-label-mis">Description</label>
-                                        <textarea name="description" class="form-control"
-                                            rows="3"><?= htmlspecialchars($_POST['description'] ?? '') ?></textarea>
+                                        <textarea name="description" id="description" class="form-control"
+                                            rows="3" maxlength="500"><?= htmlspecialchars($_POST['description'] ?? '') ?></textarea>
+                                        <small id="description_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                                     </div>
                                     <div class="col-12"><label class="form-label-mis">Remarks / Initial
                                             Instructions</label>
-                                        <textarea name="remarks" class="form-control" rows="2"
+                                        <textarea name="remarks" id="remarks" class="form-control" rows="2" maxlength="300"
                                             placeholder="Initial remarks or instructions..."><?= htmlspecialchars($_POST['remarks'] ?? '') ?></textarea>
+                                        <small id="remarks_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                                     </div>
                                 </div>
                             </div>
@@ -336,8 +350,13 @@ include '../../includes/header.php';
                             </div>
                         </div>
                         <div class="d-flex gap-3 mb-4">
-                            <button type="submit" class="btn-gold btn"><i class="fas fa-paper-plane me-2"></i>Assign
-                                Task</button>
+                            <button type="submit" id="assignSubmitBtn" class="btn-gold btn">
+                                <span id="assignBtnIcon"><i class="fas fa-paper-plane me-2"></i>Assign Task</span>
+                                <span id="assignBtnLoading" style="display:none;">
+                                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                    Assigning Task...
+                                </span>
+                            </button>
                             <a href="index.php" class="btn btn-outline-secondary">Cancel</a>
                         </div>
                     </div>
@@ -475,7 +494,13 @@ include '../../includes/header.php';
                 .then(res => res.json())
                 .then(data => {
                     select.innerHTML = '<option value="">-- Select Auditor --</option>';
-                    data.forEach(a => {
+                    const descEl = document.getElementById('auditor_limit_desc');
+                    if (nature === 'countable') {
+                        descEl.textContent = `Countable limit per auditor varies — shown as (used / max) below`;
+                    } else {
+                        descEl.textContent = `Uncountable has no fixed cap — count shown is current workload`;
+                    }
+                    data.forEach(a => { 
                         const atLimit = nature === 'countable' && a.at_limit;
                         const label   = nature === 'countable'
                             ? `${a.auditor_name} (${a.countable_count} / ${a.max_limit})${atLimit ? ' — FULL' : ''}`
@@ -527,7 +552,95 @@ include '../../includes/header.php';
             document.getElementById('capacity-bar').style.width      = pct + '%';
             document.getElementById('capacity-bar').style.background = color;
             capDiv.style.display = 'block';
+            document.getElementById('auditor_limit_desc').textContent =
+                `${opt.text.split('(')[0].trim()} has used ${used} of ${limit} countable slots this fiscal year.`;
         }
 
         document.getElementById('auditor_id').addEventListener('change', updateCapacityBar);
+
+        const requiredFields = [
+            { id: 'title',           label: 'Task title' },
+            { id: 'dept_id',         label: 'Department' },
+            { id: 'branch_id',       label: 'Branch' },
+            { id: 'assigned_to_sel', label: 'Assignee' },
+            { id: 'due_date',        label: 'Due date' },
+        ];
+
+        function validateForm(e) {
+            let valid = true;
+
+            requiredFields.forEach(f => {
+                const el = document.getElementById(f.id);
+                const err = document.getElementById('err_' + f.id);
+                if (!el) return;
+                if (!el.value || el.value.trim() === '') {
+                    valid = false;
+                    el.classList.add('is-invalid');
+                    if (err) { err.textContent = `${f.label} is required.`; err.style.display = 'block'; }
+                } else {
+                    el.classList.remove('is-invalid');
+                    if (err) err.style.display = 'none';
+                }
+            });
+
+            // status_id select has no id on it currently — give it one (see step 4) then validate same way
+            const status = document.querySelector('select[name="status_id"]');
+            if (status) {
+                const errS = document.getElementById('err_status_id');
+                if (!status.value) {
+                    valid = false;
+                    status.classList.add('is-invalid');
+                    if (errS) { errS.textContent = 'Status is required.'; errS.style.display = 'block'; }
+                } else {
+                    status.classList.remove('is-invalid');
+                    if (errS) errS.style.display = 'none';
+                }
+            }
+
+            // auditor required only if nature isn't N/A or empty
+            const nature = document.getElementById('audit_nature').value;
+            if (nature && nature !== 'N/A') {
+                const auditor = document.getElementById('auditor_id');
+                if (!auditor.value) {
+                    valid = false;
+                    auditor.classList.add('is-invalid');
+                }
+            }
+
+            if (!valid) {
+                e.preventDefault();
+                e.stopPropagation();
+                const firstInvalid = document.querySelector('.is-invalid');
+                if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return false;
+            }
+
+            // Validation passed — lock the button so it can't be clicked again
+            const btn = document.getElementById('assignSubmitBtn');
+            btn.disabled = true;
+            btn.style.opacity = '0.75';
+            btn.style.cursor = 'not-allowed';
+            document.getElementById('assignBtnIcon').style.display = 'none';
+            document.getElementById('assignBtnLoading').style.display = 'inline-flex';
+            document.getElementById('assignBtnLoading').style.alignItems = 'center';
+
+            return true;
+        }
+
+        document.getElementById('assignForm').addEventListener('submit', validateForm);
+        bindCounter('description', 'description_count', 500);
+bindCounter('remarks', 'remarks_count', 300);
+        // ADD this function once in each file's script section:
+        function bindCounter(textareaId, counterId, max) {
+            const ta = document.getElementById(textareaId);
+            const counter = document.getElementById(counterId);
+            if (!ta || !counter) return;
+            const update = () => {
+                const len = ta.value.length;
+                counter.textContent = `${len}/${max}`;
+                counter.style.color = len >= max ? '#ef4444' : (len >= max * 0.9 ? '#f59e0b' : '#9ca3af');
+            };
+            ta.addEventListener('input', update);
+            update();
+        }
         </script>

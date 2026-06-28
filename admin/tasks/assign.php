@@ -711,14 +711,20 @@ include '../../includes/header.php';
                                     </div>
                                     <div class="col-12">
                                         <label class="form-label-mis">Description</label>
-                                        <textarea name="description" class="form-control" rows="2"
+                                        <textarea name="description" id="description" class="form-control" rows="2"
+                                            maxlength="500"
                                             placeholder="Brief description of the task"><?= htmlspecialchars($_POST['description'] ?? '') ?></textarea>
+                                        <small id="description_count"
+                                            style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                                     </div>
 
                                     <div class="col-12">
                                         <label class="form-label-mis">Remarks</label>
-                                        <textarea name="remarks" class="form-control" rows="2"
+                                        <textarea name="remarks" id="remarks" class="form-control" rows="2"
+                                            maxlength="300"
                                             placeholder="Any internal remarks"><?= htmlspecialchars($_POST['remarks'] ?? '') ?></textarea>
+                                        <small id="remarks_count"
+                                            style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                                     </div>
 
                                 </div>
@@ -732,8 +738,12 @@ include '../../includes/header.php';
                                 <h5>Actions</h5>
                             </div>
                             <div class="card-mis-body">
-                                <button type="submit" class="btn-gold btn w-100 mb-2">
-                                    <i class="fas fa-save me-2"></i>Assign Task
+                                <button type="submit" id="assignSubmitBtn" class="btn-gold btn w-100 mb-2">
+                                    <span id="assignBtnIcon"><i class="fas fa-save me-2"></i>Assign Task</span>
+                                    <span id="assignBtnLoading" style="display:none;">
+                                        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                        Assigning...
+                                    </span>
                                 </button>
                                 <a href="index.php" class="btn btn-outline-secondary w-100">
                                     <i class="fas fa-times me-2"></i>Cancel
@@ -1067,5 +1077,63 @@ include '../../includes/header.php';
         document.getElementById('capacity-bar').style.background = color;
         capDiv.style.display = 'block';
     }
+    // ADD inside the existing <script> block (the bindCounter function plus this call):
+    bindCounter('description', 'description_count', 500);
+    bindCounter('remarks', 'remarks_count', 300);
+    // ADD this function once in each file's script section:
+    function bindCounter(textareaId, counterId, max) {
+        const ta = document.getElementById(textareaId);
+        const counter = document.getElementById(counterId);
+        if (!ta || !counter) return;
+        const update = () => {
+            const len = ta.value.length;
+            counter.textContent = `${len}/${max}`;
+            counter.style.color = len >= max ? '#ef4444' : (len >= max * 0.9 ? '#f59e0b' : '#9ca3af');
+        };
+        ta.addEventListener('input', update);
+        update();
+    }
+    // ADD at the end of the existing <script> block:
+document.getElementById('assignForm').addEventListener('submit', function (e) {
+    let valid = true;
+    const errorsList = [];
+
+    const titleInput = document.querySelector('input[name="title"]');
+    if (!titleInput.value.trim()) { valid = false; titleInput.classList.add('is-invalid'); }
+    else titleInput.classList.remove('is-invalid');
+
+    // department_id may be a <select> (executive/cross-dept/multi-dept) or a hidden input (locked single dept)
+    const deptEl = document.querySelector('[name="department_id"]');
+    if (deptEl && deptEl.tagName === 'SELECT') {
+        if (!deptEl.value) { valid = false; deptEl.classList.add('is-invalid'); }
+        else deptEl.classList.remove('is-invalid');
+    }
+
+    // branch_id may be a <select> or a hidden input (locked)
+    const branchEl = document.querySelector('[name="branch_id"]');
+    if (branchEl && branchEl.tagName === 'SELECT') {
+        if (!branchEl.value) { valid = false; branchEl.classList.add('is-invalid'); }
+        else branchEl.classList.remove('is-invalid');
+    }
+
+    const fySel = document.querySelector('select[name="fiscal_year"]');
+    if (fySel && !fySel.value) { valid = false; fySel.classList.add('is-invalid'); }
+    else if (fySel) fySel.classList.remove('is-invalid');
+
+    if (!valid) {
+        e.preventDefault();
+        const firstInvalid = document.querySelector('.is-invalid');
+        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return false;
+    }
+
+    const btn = document.getElementById('assignSubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.75';
+    btn.style.cursor = 'not-allowed';
+    document.getElementById('assignBtnIcon').style.display = 'none';
+    document.getElementById('assignBtnLoading').style.display = 'inline-flex';
+    document.getElementById('assignBtnLoading').style.alignItems = 'center';
+});
 </script>
 <?php include '../../includes/footer.php'; ?>

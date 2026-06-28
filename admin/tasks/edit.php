@@ -462,7 +462,7 @@ include '../../includes/header.php';
                 <h5><i class="fas fa-info-circle text-warning me-2"></i>Task Details</h5>
             </div>
             <div class="card-mis-body">
-                <form method="POST">
+                <form method="POST" id="editTaskForm">
                     <input type="hidden" name="csrf_token"  value="<?= csrfToken() ?>">
                     <input type="hidden" name="update_task" value="1">
                     <div class="row g-3">
@@ -506,8 +506,9 @@ include '../../includes/header.php';
                         </div>
 
                         <div class="col-md-4">
-                            <label class="form-label-mis">Status</label>
-                            <select name="status" class="form-select">
+                            <div class="col-md-4">
+                            <label class="form-label-mis">Status <span class="required-star">*</span></label>
+                            <select name="status" id="status_sel" class="form-select">
                                 <?php foreach ($taskStatuses as $ts): ?>
                                     <option value="<?= htmlspecialchars($ts['status_name']) ?>"
                                         <?= ($task['status'] ?? '') === $ts['status_name'] ? 'selected' : '' ?>>
@@ -648,19 +649,25 @@ include '../../includes/header.php';
                         <?php endif; ?>
                         <div class="col-12">
                             <label class="form-label-mis">Description</label>
-                            <textarea name="description" class="form-control"
-                                rows="2"><?= htmlspecialchars($task['description'] ?? '') ?></textarea>
+                            <textarea name="description" id="description" class="form-control"
+                                rows="2" maxlength="500"><?= htmlspecialchars($task['description'] ?? '') ?></textarea>
+                            <small id="description_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                         </div>
 
                         <div class="col-12">
                             <label class="form-label-mis">Remarks</label>
-                            <textarea name="remarks" class="form-control"
-                                rows="2"><?= htmlspecialchars($task['remarks'] ?? '') ?></textarea>
+                            <textarea name="remarks" id="remarks" class="form-control"
+                                rows="2" maxlength="300"><?= htmlspecialchars($task['remarks'] ?? '') ?></textarea>
+                            <small id="remarks_count" style="font-size:.7rem;color:#9ca3af;float:right;"></small>
                         </div>
 
                         <div class="col-12">
-                            <button type="submit" class="btn btn-gold btn-sm">
-                                <i class="fas fa-save me-1"></i>Update Task
+                            <button type="submit" id="editSubmitBtn" class="btn btn-gold btn-sm">
+                                <span id="editBtnIcon"><i class="fas fa-save me-1"></i>Update Task</span>
+                                <span id="editBtnLoading" style="display:none;">
+                                    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                                    Saving...
+                                </span>
                             </button>
                         </div>
 
@@ -1002,4 +1009,47 @@ function updateCapacityBar() {
     document.getElementById('capacity-bar').style.background = color;
     capDiv.style.display = 'block';
 }
+// ADD inside the document.addEventListener('DOMContentLoaded', ...) block (plus the bindCounter function above it):
+bindCounter('description', 'description_count', 500);
+bindCounter('remarks', 'remarks_count', 300);
+// ADD this function once in each file's script section:
+function bindCounter(textareaId, counterId, max) {
+    const ta = document.getElementById(textareaId);
+    const counter = document.getElementById(counterId);
+    if (!ta || !counter) return;
+    const update = () => {
+        const len = ta.value.length;
+        counter.textContent = `${len}/${max}`;
+        counter.style.color = len >= max ? '#ef4444' : (len >= max * 0.9 ? '#f59e0b' : '#9ca3af');
+    };
+    ta.addEventListener('input', update);
+    update();
+}
+// ADD inside the existing document.addEventListener('DOMContentLoaded', ...) block, or right after it:
+document.getElementById('editTaskForm').addEventListener('submit', function (e) {
+    let valid = true;
+
+    const titleInput = document.querySelector('input[name="title"]');
+    if (!titleInput.value.trim()) { valid = false; titleInput.classList.add('is-invalid'); }
+    else titleInput.classList.remove('is-invalid');
+
+    const statusSel = document.getElementById('status_sel');
+    if (!statusSel.value) { valid = false; statusSel.classList.add('is-invalid'); }
+    else statusSel.classList.remove('is-invalid');
+
+    if (!valid) {
+        e.preventDefault();
+        const firstInvalid = document.querySelector('.is-invalid');
+        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return false;
+    }
+
+    const btn = document.getElementById('editSubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.75';
+    btn.style.cursor = 'not-allowed';
+    document.getElementById('editBtnIcon').style.display = 'none';
+    document.getElementById('editBtnLoading').style.display = 'inline-flex';
+    document.getElementById('editBtnLoading').style.alignItems = 'center';
+});
 </script>

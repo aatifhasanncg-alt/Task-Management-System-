@@ -592,7 +592,7 @@ include '../../includes/header.php';
             <div id="tab-single" style="display:block;">
                 <div class="row g-4">
                     <div class="col-lg-8">
-                        <form method="POST">
+                        <form method="POST" id="addStaffForm">
                             <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                             <!-- Add inside the form, right after csrf_token hidden input -->
                             <input type="hidden" name="ga_secret_hidden" value="<?= htmlspecialchars($secret) ?>">
@@ -605,17 +605,17 @@ include '../../includes/header.php';
                                     <div class="row g-3">
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Full Name <span
-                                                    class="required-star">*</span></label>
-                                            <input type="text" name="full_name" class="form-control"
+                                            <label class="form-label-mis">Full Name <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <input type="text" name="full_name" id="full_name" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['full_name'] ?? '') ?>" required>
+                                            <div class="invalid-feedback-mis" id="err_full_name" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Email <span
-                                                    class="required-star">*</span></label>
-                                            <input type="email" name="email" class="form-control"
+                                            <label class="form-label-mis">Email <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <input type="email" name="email" id="email" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" required>
+                                            <div class="invalid-feedback-mis" id="err_email" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
@@ -653,17 +653,15 @@ include '../../includes/header.php';
                                     <div class="row g-3">
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Username <span
-                                                    class="required-star">*</span></label>
-                                            <input type="text" name="username" class="form-control"
-                                                value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required
-                                                autocomplete="off">
+                                            <label class="form-label-mis">Username <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <input type="text" name="username" id="username" class="form-control"
+                                                value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required autocomplete="off">
+                                            <div class="invalid-feedback-mis" id="err_username" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Role <span
-                                                    class="required-star">*</span></label>
-                                            <select name="role_id" class="form-select" required>
+                                            <label class="form-label-mis">Role <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <select name="role_id" id="role_id" class="form-select" required>
                                                 <option value="">-- Select Role --</option>
                                                 <?php foreach ($allRoles as $r): ?>
                                                     <option value="<?= $r['id'] ?>" <?= ($_POST['role_id'] ?? '') == $r['id'] ? 'selected' : '' ?>>
@@ -671,39 +669,35 @@ include '../../includes/header.php';
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
+                                            <div class="invalid-feedback-mis" id="err_role_id" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Password <span
-                                                    class="required-star">*</span></label>
+                                            <label class="form-label-mis">Password <span class="required-star" style="color:#ef4444;">*</span></label>
                                             <div class="input-group">
-                                                <input type="password" name="password" id="password"
-                                                    class="form-control" required autocomplete="new-password"
-                                                    minlength="6">
-                                                <button type="button" class="btn btn-outline-secondary"
-                                                    onclick="togglePassword('password', this)">
+                                                <input type="password" name="password" id="password" class="form-control" required
+                                                    autocomplete="new-password" minlength="6">
+                                                <button type="button" class="btn btn-outline-secondary" onclick="togglePassword('password', this)">
                                                     <i class="fas fa-eye"></i>
                                                 </button>
-                                                <button type="button" class="btn btn-outline-success"
-                                                    onclick="generateStrongPassword()" title="Generate strong password">
+                                                <button type="button" class="btn btn-outline-success" onclick="generateStrongPassword()" title="Generate strong password">
                                                     <i class="fas fa-dice"></i>
                                                 </button>
                                             </div>
-                                            <div id="pwStrengthHint"
-                                                style="font-size:.7rem;color:#9ca3af;margin-top:.3rem;"></div>
+                                            <div id="pwStrengthHint" style="font-size:.7rem;color:#9ca3af;margin-top:.3rem;"></div>
+                                            <div class="invalid-feedback-mis" id="err_password" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Confirm Password <span
-                                                    class="required-star">*</span></label>
+                                            <label class="form-label-mis">Confirm Password <span class="required-star" style="color:#ef4444;">*</span></label>
                                             <div class="input-group">
-                                                <input type="password" name="confirm_password" id="confirm_password"
-                                                    class="form-control" required autocomplete="new-password">
-                                                <button type="button" class="btn btn-outline-secondary"
-                                                    onclick="togglePassword('confirm_password', this)">
+                                                <input type="password" name="confirm_password" id="confirm_password" class="form-control" required
+                                                    autocomplete="new-password">
+                                                <button type="button" class="btn btn-outline-secondary" onclick="togglePassword('confirm_password', this)">
                                                     <i class="fas fa-eye"></i>
                                                 </button>
                                             </div>
+                                            <div class="invalid-feedback-mis" id="err_confirm_password" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
                                         <!-- Replace the existing ga_secret field with this: -->
                                         <div class="col-12">
@@ -774,9 +768,8 @@ include '../../includes/header.php';
                                     <div class="row g-3">
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Branch <span
-                                                    class="required-star">*</span></label>
-                                            <select name="branch_id" class="form-select">
+                                            <label class="form-label-mis">Branch <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <select name="branch_id" id="branch_id" class="form-select" required>
                                                 <option value="">-- Select Branch --</option>
                                                 <?php foreach ($allBranches as $b): ?>
                                                     <option value="<?= $b['id'] ?>" <?= ($_POST['branch_id'] ?? '') == $b['id'] ? 'selected' : '' ?>>
@@ -784,12 +777,12 @@ include '../../includes/header.php';
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
+                                            <div class="invalid-feedback-mis" id="err_branch_id" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
 
                                         <div class="col-md-6">
-                                            <label class="form-label-mis">Department <span
-                                                    class="required-star">*</span></label>
-                                            <select name="department_id" class="form-select">
+                                            <label class="form-label-mis">Department <span class="required-star" style="color:#ef4444;">*</span></label>
+                                            <select name="department_id" id="department_id" class="form-select" required>
                                                 <option value="">-- Select Department --</option>
                                                 <?php foreach ($allDepts as $d): ?>
                                                     <option value="<?= $d['id'] ?>" <?= ($_POST['department_id'] ?? '') == $d['id'] ? 'selected' : '' ?>>
@@ -797,6 +790,7 @@ include '../../includes/header.php';
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
+                                            <div class="invalid-feedback-mis" id="err_department_id" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         </div>
                                         <div class="col-12">
                                             <label class="form-label-mis">
@@ -843,8 +837,12 @@ include '../../includes/header.php';
                                 </div>
                             </div>
 
-                            <button type="submit" class="btn btn-gold">
-                                <i class="fas fa-save me-1"></i>Add Staff Member
+                            <button type="submit" id="addStaffSubmitBtn" class="btn btn-gold">
+                                <span id="addStaffBtnIcon"><i class="fas fa-save me-1"></i>Add Staff Member</span>
+                                <span id="addStaffBtnLoading" style="display:none;align-items:center;">
+                                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                    Saving...
+                                </span>
                             </button>
                         </form>
                     </div>
@@ -1046,7 +1044,29 @@ include '../../includes/header.php';
 
                 </div>
             </div><!-- /tab-bulk -->
-
+            <!-- ── Floating Scroll-to-Bottom Arrow ── -->
+            <button id="scrollDownArrow" type="button" title="Jump to Save button"
+                style="
+                    position: fixed;
+                    bottom: 28px;
+                    right: 28px;
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 50%;
+                    background: #c9a84c;
+                    color: #0a0f1e;
+                    border: none;
+                    box-shadow: 0 6px 20px rgba(0,0,0,.18);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 1.1rem;
+                    cursor: pointer;
+                    z-index: 999;
+                    transition: opacity .2s, transform .2s;
+                ">
+                <i class="fas fa-arrow-down"></i>
+            </button>
 
             <script>
                 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -1350,5 +1370,109 @@ include '../../includes/header.php';
                         },
                     });
                 });
+                function showFieldError(id, msg) {
+                    const el = document.getElementById(id);
+                    const err = document.getElementById('err_' + id);
+                    if (el) el.classList.add('is-invalid');
+                    if (err) { err.textContent = msg; err.style.display = 'block'; }
+                }
+                function clearFieldError(id) {
+                    const el = document.getElementById(id);
+                    const err = document.getElementById('err_' + id);
+                    if (el) el.classList.remove('is-invalid');
+                    if (err) err.style.display = 'none';
+                }
+
+                document.getElementById('addStaffForm')?.addEventListener('submit', function (e) {
+                    let valid = true;
+
+                    const requiredFields = [
+                        { id: 'full_name',        label: 'Full name' },
+                        { id: 'email',            label: 'Email' },
+                        { id: 'username',         label: 'Username' },
+                        { id: 'role_id',          label: 'Role' },
+                        { id: 'password',         label: 'Password' },
+                        { id: 'confirm_password', label: 'Confirm password' },
+                        { id: 'branch_id',        label: 'Branch' },
+                        { id: 'department_id',    label: 'Department' },
+                    ];
+
+                    requiredFields.forEach(f => {
+                        const el = document.getElementById(f.id);
+                        if (!el || !el.value.trim()) {
+                            valid = false;
+                            showFieldError(f.id, `${f.label} is required.`);
+                        } else {
+                            clearFieldError(f.id);
+                        }
+                    });
+
+                    const email = document.getElementById('email');
+                    if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+                        valid = false;
+                        showFieldError('email', 'Invalid email format.');
+                    }
+
+                    const pw = document.getElementById('password');
+                    const cpw = document.getElementById('confirm_password');
+                    if (pw.value && pw.value.length < 6) {
+                        valid = false;
+                        showFieldError('password', 'Password must be at least 6 characters.');
+                    }
+                    if (pw.value && cpw.value && pw.value !== cpw.value) {
+                        valid = false;
+                        showFieldError('confirm_password', 'Passwords do not match.');
+                    }
+
+                    if (!valid) {
+                        e.preventDefault();
+                        const firstInvalid = document.querySelector('.is-invalid');
+                        if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        return false;
+                    }
+
+                    const btn = document.getElementById('addStaffSubmitBtn');
+                    btn.disabled = true;
+                    btn.style.opacity = '0.75';
+                    btn.style.cursor = 'not-allowed';
+                    document.getElementById('addStaffBtnIcon').style.display = 'none';
+                    document.getElementById('addStaffBtnLoading').style.display = 'inline-flex';
+                    document.getElementById('addStaffBtnLoading').style.alignItems = 'center';
+                });
+                // ── Scroll-to-bottom arrow ──────────────────────────────────────────────────
+                (function () {
+                    const arrow = document.getElementById('scrollDownArrow');
+                    if (!arrow) return;
+
+                    function getTargetButton() {
+                        // Whichever tab is visible, target that tab's submit button
+                        const singleVisible = document.getElementById('tab-single').style.display !== 'none';
+                        return singleVisible
+                            ? document.getElementById('addStaffSubmitBtn')
+                            : document.getElementById('upload-btn');
+                    }
+
+                    function updateArrowVisibility() {
+                        const scrollPos = window.scrollY + window.innerHeight;
+                        const pageHeight = document.documentElement.scrollHeight;
+                        const nearBottom = pageHeight - scrollPos < 150;
+                        arrow.style.opacity = nearBottom ? '0' : '1';
+                        arrow.style.pointerEvents = nearBottom ? 'none' : 'auto';
+                    }
+
+                    arrow.addEventListener('click', function () {
+                        const target = getTargetButton();
+                        if (target) {
+                            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        } else {
+                            window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+                        }
+                    });
+
+                    window.addEventListener('scroll', updateArrowVisibility);
+                    window.addEventListener('resize', updateArrowVisibility);
+                    updateArrowVisibility();
+                })();
             </script>
+
             <?php include '../../includes/footer.php'; ?>

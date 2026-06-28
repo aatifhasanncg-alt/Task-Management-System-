@@ -1,5 +1,5 @@
 <?php
-require_once '../../config/db';
+require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 
@@ -239,9 +239,11 @@ include '../../includes/header.php';
                                         <label class="form-label-mis">
                                             Full Name <span class="required-star">*</span>
                                         </label>
-                                        <input type="text" name="full_name" class="form-control"
+                                        <input type="text" name="full_name" id="full_name" class="form-control"
                                             value="<?= htmlspecialchars($_POST['full_name'] ?? $staff['full_name']) ?>"
                                             required placeholder="e.g. Ram Prasad Sharma">
+                                        <div class="invalid-feedback-mis" id="err_full_name"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -268,10 +270,12 @@ include '../../includes/header.php';
                                                 style="background:#f9fafb;border-color:#e5e7eb;">
                                                 <i class="fas fa-envelope" style="color:#9ca3af;font-size:.8rem;"></i>
                                             </span>
-                                            <input type="email" name="email" class="form-control"
+                                            <input type="email" name="email" id="email" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['email'] ?? $staff['email']) ?>"
                                                 required placeholder="staff@askglobal.com.np">
                                         </div>
+                                        <div class="invalid-feedback-mis" id="err_email"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -332,7 +336,6 @@ include '../../includes/header.php';
                             </div>
                             <div class="card-mis-body">
                                 <div class="row g-3">
-
                                     <div class="col-md-6">
                                         <label class="form-label-mis">
                                             Username <span class="required-star">*</span>
@@ -342,10 +345,12 @@ include '../../includes/header.php';
                                                 style="background:#f9fafb;border-color:#e5e7eb;">
                                                 <i class="fas fa-at" style="color:#9ca3af;font-size:.8rem;"></i>
                                             </span>
-                                            <input type="text" name="username" class="form-control"
+                                            <input type="text" name="username" id="username" class="form-control"
                                                 value="<?= htmlspecialchars($_POST['username'] ?? $staff['username']) ?>"
                                                 required placeholder="login username">
                                         </div>
+                                        <div class="invalid-feedback-mis" id="err_username"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
@@ -359,6 +364,7 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_roleSelect" style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                         <?php if ($staff['role_id'] != ($allRoles[0]['id'] ?? 0)): ?>
                                             <small style="font-size:.65rem;color:#f59e0b;">
                                                 <i class="fas fa-triangle-exclamation me-1"></i>
@@ -447,12 +453,11 @@ include '../../includes/header.php';
                             </div>
                             <div class="card-mis-body" style="overflow:visible;">
                                 <div class="row g-3">
-
                                     <div class="col-md-6">
                                         <label class="form-label-mis">
                                             Branch <span class="required-star">*</span>
                                         </label>
-                                        <select name="branch_id" class="form-select">
+                                        <select name="branch_id" id="branch_id" class="form-select">
                                             <option value="">-- Select Branch --</option>
                                             <?php foreach ($allBranches as $b): ?>
                                                 <option value="<?= $b['id'] ?>" <?= ($staff['branch_id'] == $b['id']) ? 'selected' : '' ?>>
@@ -460,13 +465,15 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_branch_id"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
 
                                     <div class="col-md-6">
                                         <label class="form-label-mis">
                                             Department <span class="required-star">*</span>
                                         </label>
-                                        <select name="department_id" class="form-select">
+                                        <select name="department_id" id="department_id" class="form-select">
                                             <option value="">-- Select Department --</option>
                                             <?php foreach ($allDepts as $d): ?>
                                                 <option value="<?= $d['id'] ?>" <?= ($staff['department_id'] == $d['id']) ? 'selected' : '' ?>>
@@ -474,6 +481,8 @@ include '../../includes/header.php';
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="invalid-feedback-mis" id="err_department_id"
+                                            style="color:#ef4444;font-size:.72rem;display:none;"></div>
                                     </div>
                                     <div class="col-12">
                                         <label class="form-label-mis">
@@ -539,8 +548,14 @@ include '../../includes/header.php';
                                 <h5><i class="fas fa-floppy-disk text-warning me-2"></i>Save Changes</h5>
                             </div>
                             <div class="card-mis-body">
-                                <button type="submit" class="btn btn-gold w-100 mb-2">
-                                    <i class="fas fa-save me-2"></i>Update Staff Member
+                                <button type="submit" id="editStaffSubmitBtn" class="btn btn-gold w-100 mb-2">
+                                    <span id="editStaffBtnIcon"><i class="fas fa-save me-2"></i>Update Staff
+                                        Member</span>
+                                    <span id="editStaffBtnLoading" style="display:none;align-items:center;">
+                                        <span class="spinner-border spinner-border-sm me-2" role="status"
+                                            aria-hidden="true"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="view.php?id=<?= $staffId ?>" class="btn btn-outline-secondary w-100">
                                     <i class="fas fa-times me-2"></i>Cancel
@@ -822,38 +837,38 @@ include '../../includes/header.php';
 
                 for (const [id, data] of Object.entries(extraDeptMap)) {
                     list.insertAdjacentHTML('beforeend', `
-            <div style="background:#f8faff;border:1px solid #bfdbfe;border-radius:10px;
-                        padding:.55rem .75rem;display:flex;flex-direction:column;gap:.4rem;
-                        min-width:240px;max-width:280px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
-                    <span style="color:#3b82f6;font-size:.78rem;font-weight:700;
-                                 display:flex;align-items:center;gap:.35rem;">
-                        <i class="fas fa-layer-group" style="font-size:.65rem;"></i>
-                        ${data.name}
-                    </span>
-                    <button type="button" onclick="removeExtraDept('${id}')"
-                            style="background:none;border:none;color:#9ca3af;
-                                   cursor:pointer;padding:0;font-size:.78rem;line-height:1;"
-                            title="Remove">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-                <div>
-                    <div style="font-size:.65rem;color:#9ca3af;font-weight:600;
-                                margin-bottom:.2rem;letter-spacing:.03em;">
-                        <i class="fas fa-user-tie" style="margin-right:.25rem;"></i>MANAGER
-                    </div>
-                    <select id="ts-dept-${id}" style="width:100%;">
-                        ${adminOptionsHtml(data.managed_by)}
-                    </select>
-                </div>
-            </div>
-        `);
+                        <div style="background:#f8faff;border:1px solid #bfdbfe;border-radius:10px;
+                                    padding:.55rem .75rem;display:flex;flex-direction:column;gap:.4rem;
+                                    min-width:240px;max-width:280px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+                                <span style="color:#3b82f6;font-size:.78rem;font-weight:700;
+                                            display:flex;align-items:center;gap:.35rem;">
+                                    <i class="fas fa-layer-group" style="font-size:.65rem;"></i>
+                                    ${data.name}
+                                </span>
+                                <button type="button" onclick="removeExtraDept('${id}')"
+                                        style="background:none;border:none;color:#9ca3af;
+                                            cursor:pointer;padding:0;font-size:.78rem;line-height:1;"
+                                        title="Remove">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            <div>
+                                <div style="font-size:.65rem;color:#9ca3af;font-weight:600;
+                                            margin-bottom:.2rem;letter-spacing:.03em;">
+                                    <i class="fas fa-user-tie" style="margin-right:.25rem;"></i>MANAGER
+                                </div>
+                                <select id="ts-dept-${id}" style="width:100%;">
+                                    ${adminOptionsHtml(data.managed_by)}
+                                </select>
+                            </div>
+                        </div>
+                    `);
 
                     inputs.insertAdjacentHTML('beforeend', `
-            <input type="hidden" name="extra_departments[]"          value="${id}">
-            <input type="hidden" name="extra_dept_managers[${id}]"   value="${data.managed_by}">
-        `);
+                        <input type="hidden" name="extra_departments[]"          value="${id}">
+                        <input type="hidden" name="extra_dept_managers[${id}]"   value="${data.managed_by}">
+                    `);
 
                     // Boot TomSelect on the newly added manager select
                     extraDeptTomSelects[id] = new TomSelect(`#ts-dept-${id}`, {
@@ -865,6 +880,65 @@ include '../../includes/header.php';
                     });
                 }
             }
+            function showFieldError(id, msg) {
+                const el = document.getElementById(id);
+                const err = document.getElementById('err_' + id);
+                if (el) el.classList.add('is-invalid');
+                if (err) { err.textContent = msg; err.style.display = 'block'; }
+            }
+            function clearFieldError(id) {
+                const el = document.getElementById(id);
+                const err = document.getElementById('err_' + id);
+                if (el) el.classList.remove('is-invalid');
+                if (err) err.style.display = 'none';
+            }
+
+            document.getElementById('editStaffForm')?.addEventListener('submit', function (e) {
+                let valid = true;
+
+                const requiredFields = [
+                    { id: 'full_name',  label: 'Full name' },
+                    { id: 'email',      label: 'Email' },
+                    { id: 'username',   label: 'Username' },
+                    { id: 'roleSelect', label: 'Role' },        // ← fixed
+                    { id: 'branch_id',  label: 'Branch' },
+                    { id: 'department_id', label: 'Department' },
+                ];
+
+                requiredFields.forEach(f => {
+                    const el = document.getElementById(f.id);
+                    if (!el || !el.value.trim()) {
+                        valid = false;
+                        showFieldError(f.id, `${f.label} is required.`);
+                    } else {
+                        clearFieldError(f.id);
+                    }
+                });
+
+                const email = document.getElementById('email');
+                if (email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
+                    valid = false;
+                    showFieldError('email', 'Invalid email format.');
+                }
+
+                if (!valid) {
+                    e.preventDefault();
+                    const firstInvalid = document.querySelector('.is-invalid');
+                    if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return false;
+                }
+
+                // Only lock the button if the role-change confirm() (in the other listener) wasn't cancelled.
+                // Since that listener runs in registration order and calls preventDefault on cancel,
+                // by the time this code path completes the submit is proceeding.
+                const btn = document.getElementById('editStaffSubmitBtn');
+                btn.disabled = true;
+                btn.style.opacity = '0.75';
+                btn.style.cursor = 'not-allowed';
+                document.getElementById('editStaffBtnIcon').style.display = 'none';
+                document.getElementById('editStaffBtnLoading').style.display = 'inline-flex';
+                document.getElementById('editStaffBtnLoading').style.alignItems = 'center';
+            });
         </script>
 
         <?php include '../../includes/footer.php'; ?>
