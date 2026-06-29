@@ -448,8 +448,12 @@ function vstBadge(string $s): string
                                 <h5>Actions</h5>
                             </div>
                             <div class="card-mis-body">
-                                <button type="submit" class="btn-gold btn w-100 mb-2">
-                                    <i class="fas fa-save me-2"></i>Save Log
+                                <button type="submit" id="saveLogBtn" class="btn-gold btn w-100 mb-2">
+                                    <span id="saveLogBtnIcon"><i class="fas fa-save me-2"></i>Save Log</span>
+                                    <span id="saveLogBtnLoading" style="display:none;align-items:center;justify-content:center;">
+                                        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="log_list.php" class="btn btn-outline-secondary w-100">
                                     <i class="fas fa-times me-2"></i>Cancel
@@ -566,5 +570,12 @@ function vstBadge(string $s): string
     calcDuration();
     toggleReschedule();
     calcRescheduleDuration();
+    document.getElementById('logForm').addEventListener('submit', function () {
+        const btn = document.getElementById('saveLogBtn');
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        document.getElementById('saveLogBtnIcon').style.display = 'none';
+        document.getElementById('saveLogBtnLoading').style.display = 'inline-flex';
+    });
 </script>
 <?php include '../../includes/footer.php'; ?>

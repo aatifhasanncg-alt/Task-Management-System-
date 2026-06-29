@@ -67,7 +67,7 @@ $scopeStmt->execute([$uid, $uid]);
 $scopeIds = array_unique(array_column($scopeStmt->fetchAll(PDO::FETCH_ASSOC), 'id'));
 
 // Never include self — approvals are only for staff under you
-$scopeIds = array_filter($scopeIds, fn($id) => (int)$id !== $uid);
+$scopeIds = array_filter($scopeIds, fn($id) => (int) $id !== $uid);
 
 if (empty($scopeIds)) {
     $inList = '0'; // no staff managed → show nothing
@@ -84,7 +84,7 @@ $monthLabel = $monthDate->format('F Y');
 // ── Handle approve/reject POST ────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
-    require_once '../../config/notify.php'; 
+    require_once '../../config/notify.php';
     require_once '../../config/mailer.php';
     $planId = (int) ($_POST['plan_id'] ?? 0);
     $action = $_POST['action'] ?? '';
@@ -163,14 +163,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         [
                             'template' => 'work_plan_status',
                             'plan' => [
-                                'week'        => $weekNumber,
-                                'week_start'  => $planRow['week_start_date'] ?? null,
-                                'week_end'    => $planRow['week_end_date'] ?? null,
-                                'entry_count' => (int)$stats['entry_count'],
-                                'total_hours' => (float)$stats['total_hours'],
-                                'status'      => $newStatus,
-                                'remarks'     => $remarks,
-                                'reviewer'    => $user['full_name']
+                                'week' => $weekNumber,
+                                'week_start' => $planRow['week_start_date'] ?? null,
+                                'week_end' => $planRow['week_end_date'] ?? null,
+                                'entry_count' => (int) $stats['entry_count'],
+                                'total_hours' => (float) $stats['total_hours'],
+                                'status' => $newStatus,
+                                'remarks' => $remarks,
+                                'reviewer' => $user['full_name']
                             ]
                         ]
                     );
@@ -420,7 +420,7 @@ include '../../includes/header.php';
                                     </a>
 
                                     <!-- Quick approve -->
-                                    <form method="POST" onsubmit="return confirm('Approve this plan?')">
+                                    <form method="POST" class="approveForm" onsubmit="return handleApproveSubmit(this)">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="plan_id" value="<?= $p['id'] ?>">
                                         <input type="hidden" name="action" value="approve">
@@ -429,13 +429,17 @@ include '../../includes/header.php';
                                                 style="flex:1;min-width:0;font-size:.78rem;padding:5px 9px;"
                                                 placeholder="Approval note (optional)">
                                             <button type="submit" class="btn btn-gold btn-sm">
-                                                <i class="fas fa-check"></i> Approve
+                                                <span class="btnIcon"><i class="fas fa-check"></i> Approve</span>
+                                                <span class="btnLoading" style="display:none;align-items:center;gap:.3rem;">
+                                                    <span class="spinner-border spinner-border-sm"
+                                                        style="width:.7rem;height:.7rem;"></span> Saving...
+                                                </span>
                                             </button>
                                         </div>
                                     </form>
 
                                     <!-- Quick reject -->
-                                    <form method="POST" onsubmit="return confirm('Reject this plan?')" style="margin-top:6px;">
+                                    <form method="POST" class="rejectForm" onsubmit="return handleApproveSubmit(this)">
                                         <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
                                         <input type="hidden" name="plan_id" value="<?= $p['id'] ?>">
                                         <input type="hidden" name="action" value="reject">
@@ -444,7 +448,11 @@ include '../../includes/header.php';
                                                 style="flex:1;min-width:0;font-size:.78rem;padding:5px 9px;"
                                                 placeholder="Rejection reason (required)">
                                             <button type="submit" class="cn-btn cn-btn-danger cn-btn-sm">
-                                                <i class="fas fa-times"></i> Reject
+                                                <span class="btnIcon"><i class="fas fa-times"></i> Reject</span>
+                                                <span class="btnLoading" style="display:none;align-items:center;gap:.3rem;">
+                                                    <span class="spinner-border spinner-border-sm"
+                                                        style="width:.7rem;height:.7rem;"></span> Saving...
+                                                </span>
                                             </button>
                                         </div>
                                     </form>
@@ -567,4 +575,19 @@ include '../../includes/header.php';
         </div>
     </div>
 </div>
+<script>
+function handleApproveSubmit(form) {
+    const proceed = form.classList.contains('rejectForm')
+        ? confirm('Reject this plan?')
+        : confirm('Approve this plan?');
+    if (!proceed) return false;
+
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.querySelector('.btnIcon').style.display = 'none';
+    btn.querySelector('.btnLoading').style.display = 'inline-flex';
+    return true;
+}
+</script>
 <?php include '../../includes/footer.php'; ?>

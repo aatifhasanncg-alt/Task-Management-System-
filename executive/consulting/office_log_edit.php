@@ -353,8 +353,12 @@ include '../../includes/header.php';
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Update Log
+                                <button type="submit" id="updateOfficeLogBtn" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <span id="updateOfficeLogBtnIcon"><i class="fas fa-save"></i> Update Log</span>
+                                    <span id="updateOfficeLogBtnLoading" style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width:.85rem;height:.85rem;"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="office_log_view.php?id=<?= $logId ?>" class="cn-btn cn-btn-out"
                                    style="justify-content:center;">
@@ -417,5 +421,12 @@ function updateStatusCards() {
 
 calcDuration();
 updateStatusCards();
+document.getElementById('editLogForm').addEventListener('submit', function () {
+    const btn = document.getElementById('updateOfficeLogBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    document.getElementById('updateOfficeLogBtnIcon').style.display = 'none';
+    document.getElementById('updateOfficeLogBtnLoading').style.display = 'inline-flex';
+});
 </script>
 <?php include '../../includes/footer.php'; ?>

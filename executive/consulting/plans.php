@@ -9,25 +9,25 @@ require_once '../../config/helpers.php';
 require_once '../../config/notify.php';
 requireExecutive();
 
-$db   = getDB();
+$db = getDB();
 $user = currentUser();
-$uid  = (int)$user['id'];
+$uid = (int) $user['id'];
 
-$now        = new DateTime();
-$month      = $_GET['month'] ?? $now->format('Y-m');
-$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
+$now = new DateTime();
+$month = $_GET['month'] ?? $now->format('Y-m');
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
-$staffId    = (int)($_GET['staff_id'] ?? 0);
+$staffId = (int) ($_GET['staff_id'] ?? 0);
 $statusFilter = $_GET['status'] ?? 'submitted';
-$weekFilter = (int)($_GET['week'] ?? 0);
+$weekFilter = (int) ($_GET['week'] ?? 0);
 
 // ── Handle approve / reject POST ──────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
-    $planId  = (int)($_POST['plan_id'] ?? 0);
-    $action  = $_POST['action'] ?? '';
+    $planId = (int) ($_POST['plan_id'] ?? 0);
+    $action = $_POST['action'] ?? '';
     $remarks = trim($_POST['remarks'] ?? '');
 
     if ($planId && in_array($action, ['approve', 'reject', 'bulk_approve'])) {
@@ -41,23 +41,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     WHERE id=? AND status='submitted'
                 ")->execute([$uid, $pid]);
 
-                $pRow = $db->prepare("SELECT user_id, week_number, plan_month FROM work_plans WHERE id=?");
+                $pRow = $db->prepare("SELECT wp.user_id, wp.week_number, wp.plan_month, u.role 
+                       FROM work_plans wp 
+                       JOIN users u ON u.id = wp.user_id 
+                       WHERE wp.id=?");
                 $pRow->execute([$pid]);
                 $pr = $pRow->fetch();
                 if ($pr) {
-                    $wn = (int)$pr['week_number'];
+                    $wn = (int) $pr['week_number'];
                     $ml = date('F Y', strtotime($pr['plan_month']));
+                    $ownerRole = $pr['role'] ?? '';
+                    $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                        ? "/{$ownerRole}/planning/myplan_view.php?id=" . $pid
+                        : '/staff/planning/plan_view.php?id=' . $pid;
                     notify(
-                        (int)$pr['user_id'],
+                        (int) $pr['user_id'],
                         'Work Plan Approved',
                         'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved.',
                         'task',
-                        APP_URL . '/staff/planning/plan_view.php?id=' . $pid,
+                        APP_URL . $viewPath,
                         true,
-                        ['template' => 'work_plan_status', 'plan' => [
-                            'week' => $wn, 'status' => 'approved',
-                            'remarks' => '', 'reviewer' => $user['full_name']
-                        ]]
+                        [
+                            'template' => 'work_plan_status',
+                            'plan' => [
+                                'week' => $wn,
+                                'status' => 'approved',
+                                'remarks' => '',
+                                'reviewer' => $user['full_name']
+                            ]
+                        ]
                     );
                 }
             }
@@ -71,38 +83,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ")->execute([$uid, $remarks ?: null, $planId]);
 
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date,
+           u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
-                $wn = (int)$pr['week_number'];
+                $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
-                    (int)$pr['user_id'],
+                    (int) $pr['user_id'],
                     'Work Plan Approved',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved by ' . $user['full_name'] . '.',
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
-                    ['template' => 'work_plan_status', 'plan' => [
-                        'week'        => $wn,
-                        'week_start'  => $pr['week_start_date'],
-                        'week_end'    => $pr['week_end_date'],
-                        'entry_count' => (int)$pr['entry_count'],
-                        'total_hours' => (float)$pr['total_hours'],
-                        'status'      => 'approved',
-                        'remarks'     => $remarks,
-                        'reviewer'    => $user['full_name'],
-                    ]]
+                    [
+                        'template' => 'work_plan_status',
+                        'plan' => [
+                            'week' => $wn,
+                            'week_start' => $pr['week_start_date'],
+                            'week_end' => $pr['week_end_date'],
+                            'entry_count' => (int) $pr['entry_count'],
+                            'total_hours' => (float) $pr['total_hours'],
+                            'status' => 'approved',
+                            'remarks' => $remarks,
+                            'reviewer' => $user['full_name'],
+                        ]
+                    ]
                 );
             }
             setFlash('success', 'Plan approved successfully.');
@@ -120,38 +141,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ")->execute([$remarks, $planId]);
 
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date,
+           u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
-                $wn = (int)$pr['week_number'];
+                $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
-                    (int)$pr['user_id'],
+                    (int) $pr['user_id'],
                     'Work Plan Rejected',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' was rejected. Reason: ' . $remarks,
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
-                    ['template' => 'work_plan_status', 'plan' => [
-                        'week'        => $wn,
-                        'week_start'  => $pr['week_start_date'],
-                        'week_end'    => $pr['week_end_date'],
-                        'entry_count' => (int)$pr['entry_count'],
-                        'total_hours' => (float)$pr['total_hours'],
-                        'status'      => 'rejected',
-                        'remarks'     => $remarks,
-                        'reviewer'    => $user['full_name'],
-                    ]]
+                    [
+                        'template' => 'work_plan_status',
+                        'plan' => [
+                            'week' => $wn,
+                            'week_start' => $pr['week_start_date'],
+                            'week_end' => $pr['week_end_date'],
+                            'entry_count' => (int) $pr['entry_count'],
+                            'total_hours' => (float) $pr['total_hours'],
+                            'status' => 'rejected',
+                            'remarks' => $remarks,
+                            'reviewer' => $user['full_name'],
+                        ]
+                    ]
                 );
             }
             setFlash('warning', 'Plan rejected.');
@@ -180,12 +210,21 @@ $staffList = $db->query("
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Build plan query ──────────────────────────────────────────
-$where  = ["wp.plan_month = ?"];
-$params = [$monthStart];
+$where = ["wp.plan_month = ?", "wp.user_id != ?"];
+$params = [$monthStart, $uid];
 
-if ($staffId)     { $where[] = "wp.user_id = ?";     $params[] = $staffId; }
-if ($statusFilter){ $where[] = "wp.status = ?";      $params[] = $statusFilter; }
-if ($weekFilter)  { $where[] = "wp.week_number = ?"; $params[] = $weekFilter; }
+if ($staffId) {
+    $where[] = "wp.user_id = ?";
+    $params[] = $staffId;
+}
+if ($statusFilter) {
+    $where[] = "wp.status = ?";
+    $params[] = $statusFilter;
+}
+if ($weekFilter) {
+    $where[] = "wp.week_number = ?";
+    $params[] = $weekFilter;
+}
 
 $whereSQL = implode(' AND ', $where);
 
@@ -215,7 +254,7 @@ $plans = $plans->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Status counts for tabs ────────────────────────────────────
 $statusCounts = [];
-foreach (['draft','submitted','approved','rejected'] as $s) {
+foreach (['draft', 'submitted', 'approved', 'rejected'] as $s) {
     $cQ = $db->prepare("
         SELECT COUNT(*) FROM work_plans wp
         JOIN users u ON u.id = wp.user_id
@@ -224,16 +263,18 @@ foreach (['draft','submitted','approved','rejected'] as $s) {
         LEFT JOIN departments d2 ON d2.id = uda.department_id
         WHERE wp.plan_month = ?
           AND wp.status = ?
+          AND wp.user_id != ?
           AND (
               d.dept_code = 'CON' OR d.dept_name LIKE '%consult%'
               OR d2.dept_code = 'CON' OR d2.dept_name LIKE '%consult%'
           )
           " . ($staffId ? "AND wp.user_id = ?" : "") . "
     ");
-    $cp = [$monthStart, $s];
-    if ($staffId) $cp[] = $staffId;
+    $cp = [$monthStart, $s, $uid];
+    if ($staffId)
+        $cp[] = $staffId;
     $cQ->execute($cp);
-    $statusCounts[$s] = (int)$cQ->fetchColumn();
+    $statusCounts[$s] = (int) $cQ->fetchColumn();
 }
 
 $pageTitle = 'Plan Lists';
@@ -360,7 +401,8 @@ include '../../includes/header.php';
                     </div>
                     <div class="d-flex gap-2 flex-wrap align-items-center">
                         <input type="month" class="form-control form-control-sm" style="width:150px;"
-                               value="<?= $month ?>" onchange="location='?month='+this.value+'&staff_id=<?= $staffId ?>&status=<?= $statusFilter ?>'">
+                            value="<?= $month ?>"
+                            onchange="location='?month='+this.value+'&staff_id=<?= $staffId ?>&status=<?= $statusFilter ?>'">
                         <a href="plans.php?month=<?= $month ?>" class="btn btn-sm btn-outline-secondary">
                             <i class="fas fa-list me-1"></i> All Plans
                         </a>
@@ -377,10 +419,10 @@ include '../../includes/header.php';
                 $allCount = array_sum($statusCounts);
                 $tabs = ['' => 'All', 'submitted' => 'Pending', 'approved' => 'Approved', 'rejected' => 'Rejected', 'draft' => 'Draft'];
                 foreach ($tabs as $val => $label):
-                    $cnt    = $val === '' ? $allCount : ($statusCounts[$val] ?? 0);
+                    $cnt = $val === '' ? $allCount : ($statusCounts[$val] ?? 0);
                     $active = $statusFilter === $val ? 'active' : '';
-                    $url    = '?month=' . $month . '&staff_id=' . $staffId . '&status=' . $val . '&week=' . $weekFilter;
-                ?>
+                    $url = '?month=' . $month . '&staff_id=' . $staffId . '&status=' . $val . '&week=' . $weekFilter;
+                    ?>
                     <a href="<?= $url ?>" class="status-tab <?= $active ?>">
                         <?= $label ?> <span class="cnt"><?= $cnt ?></span>
                     </a>
@@ -431,15 +473,16 @@ include '../../includes/header.php';
                 <input type="hidden" name="plan_id" value="0">
 
                 <?php if ($statusFilter === 'submitted' && !empty($plans)): ?>
-                <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
-                    <label style="font-size:.78rem;color:#6b7280;display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="selectAll"> Select All
-                    </label>
-                    <button type="submit" class="cn-btn cn-btn-blue cn-btn-sm"
+                    <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+                        <label
+                            style="font-size:.78rem;color:#6b7280;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="checkbox" id="selectAll"> Select All
+                        </label>
+                        <button type="submit" class="cn-btn cn-btn-blue cn-btn-sm"
                             onclick="return confirm('Approve all selected plans?')">
-                        <i class="fas fa-check-double"></i> Bulk Approve Selected
-                    </button>
-                </div>
+                            <i class="fas fa-check-double"></i> Bulk Approve Selected
+                        </button>
+                    </div>
                 <?php endif; ?>
 
                 <!-- PLANS TABLE -->
@@ -460,75 +503,87 @@ include '../../includes/header.php';
                                 </tr>
                             </thead>
                             <tbody>
-                            <?php if (empty($plans)): ?>
-                                <tr>
-                                    <td colspan="9" style="text-align:center;color:#9ca3af;padding:30px;font-size:.83rem;">
-                                        No plans found.
-                                    </td>
-                                </tr>
-                            <?php else: ?>
-                                <?php foreach ($plans as $p):
-                                    $sc  = ['draft'=>'#9ca3af','submitted'=>'#3b82f6','approved'=>'#10b981','rejected'=>'#ef4444'];
-                                    $sc2 = ['draft'=>'#f3f4f6','submitted'=>'#eff6ff','approved'=>'#f0fdf4','rejected'=>'#fef2f2'];
-                                    $st  = $p['status'] ?? 'draft';
-                                ?>
-                                <tr>
-                                    <td class="text-center">
-                                        <?php if ($st === 'submitted'): ?>
-                                            <input type="checkbox" name="plan_ids[]" value="<?= $p['id'] ?>" class="plan-chk">
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <div style="font-weight:600;font-size:.82rem;"><?= htmlspecialchars($p['full_name']) ?></div>
-                                        <div style="font-size:.68rem;color:#9ca3af;"><?= htmlspecialchars($p['employee_id'] ?? '') ?></div>
-                                    </td>
-                                    <td class="text-center"><strong style="color:#c9a84c;">W<?= $p['week_number'] ?></strong></td>
-                                    <td style="font-size:.78rem;color:#6b7280;">
-                                        <?= date('d M', strtotime($p['week_start_date'])) ?> –
-                                        <?= date('d M', strtotime($p['week_end_date'])) ?>
-                                    </td>
-                                    <td class="text-center"><strong><?= $p['entry_count'] ?></strong></td>
-                                    <td class="text-center">
-                                        <strong style="color:#c9a84c;"><?= number_format($p['planned_hours'],1) ?>h</strong>
-                                    </td>
-                                    <td class="text-center">
-                                        <span style="background:<?= $sc2[$st] ?>;color:<?= $sc[$st] ?>;
+                                <?php if (empty($plans)): ?>
+                                    <tr>
+                                        <td colspan="9"
+                                            style="text-align:center;color:#9ca3af;padding:30px;font-size:.83rem;">
+                                            No plans found.
+                                        </td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($plans as $p):
+                                        $sc = ['draft' => '#9ca3af', 'submitted' => '#3b82f6', 'approved' => '#10b981', 'rejected' => '#ef4444'];
+                                        $sc2 = ['draft' => '#f3f4f6', 'submitted' => '#eff6ff', 'approved' => '#f0fdf4', 'rejected' => '#fef2f2'];
+                                        $st = $p['status'] ?? 'draft';
+                                        ?>
+                                        <tr>
+                                            <td class="text-center">
+                                                <?php if ($st === 'submitted'): ?>
+                                                    <input type="checkbox" name="plan_ids[]" value="<?= $p['id'] ?>"
+                                                        class="plan-chk">
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <div style="font-weight:600;font-size:.82rem;">
+                                                    <?= htmlspecialchars($p['full_name']) ?>
+                                                </div>
+                                                <div style="font-size:.68rem;color:#9ca3af;">
+                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?>
+                                                </div>
+                                            </td>
+                                            <td class="text-center"><strong
+                                                    style="color:#c9a84c;">W<?= $p['week_number'] ?></strong></td>
+                                            <td style="font-size:.78rem;color:#6b7280;">
+                                                <?= date('d M', strtotime($p['week_start_date'])) ?> –
+                                                <?= date('d M', strtotime($p['week_end_date'])) ?>
+                                            </td>
+                                            <td class="text-center"><strong><?= $p['entry_count'] ?></strong></td>
+                                            <td class="text-center">
+                                                <strong
+                                                    style="color:#c9a84c;"><?= number_format($p['planned_hours'], 1) ?>h</strong>
+                                            </td>
+                                            <td class="text-center">
+                                                <span style="background:<?= $sc2[$st] ?>;color:<?= $sc[$st] ?>;
                                             padding:2px 10px;border-radius:20px;font-size:.72rem;
                                             font-weight:600;text-transform:capitalize;">
-                                            <?= $st ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-center" style="font-size:.75rem;color:#9ca3af;">
-                                        <?= $p['created_at'] ? date('d M Y', strtotime($p['created_at'])) : '—' ?>
-                                    </td>
-                                    <td class="text-center">
-                                        <div style="display:flex;gap:4px;justify-content:center;">
-                                            <a href="plan_view.php?id=<?= $p['id'] ?>"
-                                               class="cn-btn cn-btn-blue cn-btn-sm" title="View">
-                                                <i class="fas fa-eye"></i>
-                                            </a>
-                                            <?php if ($st === 'submitted'): ?>
-                                                <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
-                                                        style="color:#10b981;border-color:#10b981;"
-                                                        onclick="quickApprove(<?= $p['id'] ?>)" title="Approve">
-                                                    <i class="fas fa-check"></i>
-                                                </button>
-                                                <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
-                                                        style="color:#ef4444;border-color:#ef4444;"
-                                                        onclick="openReject(<?= $p['id'] ?>)" title="Reject">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                            <?php endif; ?>
-                                            <?php if ($st === 'approved' || $st === 'rejected'): ?>
-                                                <span style="font-size:.7rem;color:#9ca3af;">
-                                                    <?= $p['approver_name'] ? 'by ' . htmlspecialchars(explode(' ', $p['approver_name'])[0]) : '' ?>
+                                                    <?= $st ?>
                                                 </span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
+                                            </td>
+                                            <td class="text-center" style="font-size:.75rem;color:#9ca3af;">
+                                                <?= $p['created_at'] ? date('d M Y', strtotime($p['created_at'])) : '—' ?>
+                                            </td>
+                                            <td class="text-center">
+                                                <div style="display:flex;gap:4px;justify-content:center;">
+                                                    <a href="plan_view.php?id=<?= $p['id'] ?>"
+                                                        class="cn-btn cn-btn-blue cn-btn-sm" title="View">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                    <a href="plan_edit.php?id=<?= $p['id'] ?>"
+                                                        class="cn-btn cn-btn-out cn-btn-sm" title="Edit">
+                                                        <i class="fas fa-pen"></i>
+                                                    </a>
+                                                    <?php if ($st === 'submitted'): ?>
+                                                        <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
+                                                            style="color:#10b981;border-color:#10b981;"
+                                                            onclick="quickApprove(<?= $p['id'] ?>, this)" title="Approve">
+                                                            <i class="fas fa-check"></i>
+                                                        </button>
+                                                        <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
+                                                            style="color:#ef4444;border-color:#ef4444;"
+                                                            onclick="openReject(<?= $p['id'] ?>)" title="Reject">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if ($st === 'approved' || $st === 'rejected'): ?>
+                                                        <span style="font-size:.7rem;color:#9ca3af;">
+                                                            <?= $p['approver_name'] ? 'by ' . htmlspecialchars(explode(' ', $p['approver_name'])[0]) : '' ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -552,12 +607,12 @@ include '../../includes/header.php';
             <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
             <input type="hidden" name="action" value="reject">
             <input type="hidden" name="plan_id" id="rejectPlanId" value="">
-            <textarea name="remarks" class="cn-input" rows="3" placeholder="Rejection reason..."
-                      required style="width:100%;margin-bottom:12px;box-sizing:border-box;"></textarea>
+            <textarea name="remarks" class="cn-input" rows="3" placeholder="Rejection reason..." required
+                style="width:100%;margin-bottom:12px;box-sizing:border-box;"></textarea>
             <div style="display:flex;gap:8px;justify-content:flex-end;">
                 <button type="button" class="cn-btn cn-btn-out cn-btn-sm" onclick="closeReject()">Cancel</button>
                 <button type="submit" class="cn-btn cn-btn-sm"
-                        style="background:#ef4444;color:#fff;border-color:#ef4444;">
+                    style="background:#ef4444;color:#fff;border-color:#ef4444;">
                     <i class="fas fa-times"></i> Reject
                 </button>
             </div>
@@ -577,36 +632,49 @@ include '../../includes/header.php';
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script>
-$(document).ready(function () {
-    if ($('#plansTable tbody tr td').length > 1) {
-        $('#plansTable').DataTable({
-            order: [[7, 'desc']], pageLength: 25,
-            language: { search: 'Search plans:' }
-        });
+    $(document).ready(function () {
+        if ($('#plansTable tbody tr td').length > 1) {
+            $('#plansTable').DataTable({
+                order: [[7, 'desc']], pageLength: 25,
+                language: { search: 'Search plans:' }
+            });
+        }
+    });
+
+    new TomSelect('#staffSelect', {
+        placeholder: 'Search staff...', maxOptions: 100, allowEmptyOption: true
+    });
+
+    document.getElementById('selectAll')?.addEventListener('change', function () {
+        document.querySelectorAll('.plan-chk').forEach(c => c.checked = this.checked);
+    });
+
+    function quickApprove(id, btn) {
+        if (!confirm('Approve this plan?')) return;
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+        document.getElementById('approvePlanId').value = id;
+        document.getElementById('approveForm').submit();
     }
-});
 
-new TomSelect('#staffSelect', {
-    placeholder: 'Search staff...', maxOptions: 100, allowEmptyOption: true
-});
+    function openReject(id) {
+        document.getElementById('rejectPlanId').value = id;
+        document.getElementById('rejectModal').style.display = 'flex';
+    }
 
-document.getElementById('selectAll')?.addEventListener('change', function () {
-    document.querySelectorAll('.plan-chk').forEach(c => c.checked = this.checked);
-});
+    function closeReject() {
+        document.getElementById('rejectModal').style.display = 'none';
+    }
+    document.getElementById('rejectForm').addEventListener('submit', function () {
+        const btn = this.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rejecting...';
+    });
 
-function quickApprove(id) {
-    if (!confirm('Approve this plan?')) return;
-    document.getElementById('approvePlanId').value = id;
-    document.getElementById('approveForm').submit();
-}
-
-function openReject(id) {
-    document.getElementById('rejectPlanId').value = id;
-    document.getElementById('rejectModal').style.display = 'flex';
-}
-
-function closeReject() {
-    document.getElementById('rejectModal').style.display = 'none';
-}
+    document.getElementById('bulkForm').addEventListener('submit', function (e) {
+        const btn = this.querySelector('button[type="submit"]');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Approving...';
+    });
 </script>
 <?php include '../../includes/footer.php'; ?>

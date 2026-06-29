@@ -267,7 +267,7 @@ $pageTitle = 'All Visit Logs';
 include '../../includes/header.php';
 ?>
 
-<link rel="stylesheet" href="../../../staff/planning/consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/datatables.custom.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">

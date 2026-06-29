@@ -409,8 +409,14 @@ include '../../includes/header.php';
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Update Plan
+                                <button type="submit" id="savePlanBtn" class="cn-btn cn-btn-gold"
+                                    style="justify-content:center;">
+                                    <span id="savePlanBtnIcon"><i class="fas fa-save"></i> Update Plan</span>
+                                    <span id="savePlanBtnLoading"
+                                        style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                        <span class="spinner-border spinner-border-sm"
+                                            style="width:.85rem;height:.85rem;"></span> Saving...
+                                    </span>
                                 </button>
                                 <?php if ($plan['status'] === 'rejected'): ?>
                                     <div style="margin-top:8px;padding:8px 10px;background:#fef9ec;border-radius:6px;
@@ -656,6 +662,14 @@ include '../../includes/header.php';
     // Show empty state if no entries
     if (!document.querySelectorAll('.entry-row').length)
         document.getElementById('emptyEntries').style.display = '';
+    document.getElementById('planForm').addEventListener('submit', function () {
+        const btn = document.getElementById('savePlanBtn');
+        if (!btn) return; // view-only state has no active submit button
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        document.getElementById('savePlanBtnIcon').style.display = 'none';
+        document.getElementById('savePlanBtnLoading').style.display = 'inline-flex';
+    });
 </script>
 
 <?php include '../../includes/footer.php'; ?>

@@ -12,10 +12,10 @@ $uid = (int) $user['id'];
 // ── Get or create today's/target work_plans row for this user ──────────────
 function getOrCreatePlanId(PDO $db, int $uid, string $planDate): int
 {
-    $ts  = strtotime($planDate);
+    $ts = strtotime($planDate);
     $dow = (int) date('N', $ts); // 1=Mon, 7=Sun
     $weekStart = date('Y-m-d', strtotime('-' . ($dow - 1) . ' days', $ts));
-    $weekEnd   = date('Y-m-d', strtotime('+' . (7 - $dow) . ' days', $ts));
+    $weekEnd = date('Y-m-d', strtotime('+' . (7 - $dow) . ' days', $ts));
     $planMonth = date('Y-m-01', $ts);
     $weekNumber = (int) date('W', $ts);
 
@@ -28,7 +28,8 @@ function getOrCreatePlanId(PDO $db, int $uid, string $planDate): int
     ");
     $stmt->execute([$uid, $weekStart]);
     $planId = $stmt->fetchColumn();
-    if ($planId) return (int) $planId;
+    if ($planId)
+        return (int) $planId;
 
     // Also check by overlapping date range in case week_start_date was stored differently
     $stmt2 = $db->prepare("
@@ -40,15 +41,16 @@ function getOrCreatePlanId(PDO $db, int $uid, string $planDate): int
     ");
     $stmt2->execute([$uid, $weekStart, $weekEnd]);
     $planId = $stmt2->fetchColumn();
-    if ($planId) return (int) $planId;
+    if ($planId)
+        return (int) $planId;
 
     // Fetch user fields
     $uStmt = $db->prepare("SELECT department_id, branch_id, managed_by FROM users WHERE id = ? LIMIT 1");
     $uStmt->execute([$uid]);
     $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
-    $deptId       = $uRow['department_id'] ?? null;
-    $branchId     = $uRow['branch_id']     ?? null;
-    $supervisorId = $uRow['managed_by']    ?? null;
+    $deptId = $uRow['department_id'] ?? null;
+    $branchId = $uRow['branch_id'] ?? null;
+    $supervisorId = $uRow['managed_by'] ?? null;
 
     // Insert — if unique constraint fires, retrieve existing row instead
     try {
@@ -60,8 +62,14 @@ function getOrCreatePlanId(PDO $db, int $uid, string $planDate): int
             VALUES (?,?,?,?,?,?,?,?,'draft',NOW())
         ");
         $ins->execute([
-            $uid, $supervisorId, $deptId, $branchId,
-            $planMonth, $weekNumber, $weekStart, $weekEnd
+            $uid,
+            $supervisorId,
+            $deptId,
+            $branchId,
+            $planMonth,
+            $weekNumber,
+            $weekStart,
+            $weekEnd
         ]);
         return (int) $db->lastInsertId();
 
@@ -75,7 +83,8 @@ function getOrCreatePlanId(PDO $db, int $uid, string $planDate): int
             ");
             $retry->execute([$uid, $weekStart]);
             $planId = $retry->fetchColumn();
-            if ($planId) return (int) $planId;
+            if ($planId)
+                return (int) $planId;
         }
         throw $e;
     }
@@ -323,10 +332,10 @@ $stmt = $db->prepare("
 $stmt->execute([$uid, $today, $tomorrow]);
 $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Fetch this week's full schedule
-$todayTs   = strtotime($today);
-$todayDow  = (int) date('N', $todayTs);
+$todayTs = strtotime($today);
+$todayDow = (int) date('N', $todayTs);
 $weekStart = date('Y-m-d', strtotime('-' . ($todayDow - 1) . ' days', $todayTs));
-$weekEnd   = date('Y-m-d', strtotime('+' . (7 - $todayDow) . ' days', $todayTs));
+$weekEnd = date('Y-m-d', strtotime('+' . (7 - $todayDow) . ' days', $todayTs));
 
 $weekStmt = $db->prepare("
     SELECT wpe.*, c.company_name, c.company_code
@@ -476,7 +485,7 @@ include '../../includes/header.php';
                         <span style="font-size:.78rem;color:#9ca3af;">
                             Week: <?= date('d M', strtotime($weekStart)) ?> – <?= date('d M', strtotime($weekEnd)) ?>
                         </span>
-                        
+
                     </div>
                 </div>
             </div>
@@ -634,11 +643,11 @@ include '../../includes/header.php';
                                             <span style="font-size:.75rem;color:#d1d5db;">No visits</span>
                                         <?php endif; ?>
                                         <button type="button"
-    onclick="event.stopPropagation(); openPlanModal(0, 0, '<?= $dayDate ?>', '', '', '', 0)"
-    style="background:#c9a84c;border:none;color:#fff;border-radius:6px;
+                                            onclick="event.stopPropagation(); openPlanModal(0, 0, '<?= $dayDate ?>', '', '', '', 0)"
+                                            style="background:#c9a84c;border:none;color:#fff;border-radius:6px;
     padding:3px 9px;font-size:.72rem;cursor:pointer;white-space:nowrap;line-height:1.6;">
-    <i class="fas fa-plus"></i>
-</button>
+                                            <i class="fas fa-plus"></i>
+                                        </button>
                                         <i class="fas fa-chevron-down" style="font-size:.7rem;color:#9ca3af;transition:.2s;"
                                             id="icon_<?= $dayDate ?>"></i>
                                     </div>
@@ -779,7 +788,13 @@ include '../../includes/header.php';
                 <div class="ms-auto d-flex gap-2">
                     <button type="button" class="btn btn-sm btn-outline-secondary"
                         onclick="closePlanEntryModal()">Cancel</button>
-                    <button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save</button>
+                    <button type="submit" id="planSaveBtn" class="btn btn-gold btn-sm">
+                        <span id="planSaveBtnIcon"><i class="fas fa-save me-1"></i>Save</span>
+                        <span id="planSaveBtnLoading" style="display:none;align-items:center;gap:.4rem;">
+                            <span class="spinner-border spinner-border-sm" style="width:.75rem;height:.75rem;"></span>
+                            Saving...
+                        </span>
+                    </button>
                 </div>
             </div>
         </form>
@@ -850,6 +865,12 @@ include '../../includes/header.php';
             alert('Please select a client.');
             return false;
         }
+
+        const btn = document.getElementById('planSaveBtn');
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        document.getElementById('planSaveBtnIcon').style.display = 'none';
+        document.getElementById('planSaveBtnLoading').style.display = 'inline-flex';
     });
 
     function openPlanModal(entryId = 0, clientId = 0, planDate = '', timeIn = '', timeOut = '', notes = '', supervisorId = 0) {

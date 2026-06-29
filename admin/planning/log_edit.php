@@ -79,7 +79,8 @@ $companies = $db->query("
 
 // ── Linked plan entry (for reference display) ──────────────────
 $linkedPlan = null;
-if ($log['plan_entry_id']) {
+if (!empty($log['plan_entry_id'])) {
+
     $lpStmt = $db->prepare("
         SELECT wpe.*, wp.week_number, wp.week_start_date, wp.week_end_date
         FROM work_plan_entries wpe
@@ -638,8 +639,15 @@ include '../../includes/header.php';
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Update Log
+                                <button type="submit" id="updateLogBtn" class="cn-btn cn-btn-gold"
+                                    style="justify-content:center;">
+                                    <span id="updateLogBtnIcon"><i class="fas fa-save"></i> Update Log</span>
+                                    <span id="updateLogBtnLoading"
+                                        style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"
+                                            style="width:.85rem;height:.85rem;"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="log_list.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
                                     style="justify-content:center;">
@@ -829,5 +837,12 @@ include '../../includes/header.php';
     calcHours();
     toggleReschedule();
     calcRescheduleDuration();
+    document.getElementById('logForm').addEventListener('submit', function () {
+        const btn = document.getElementById('updateLogBtn');
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        document.getElementById('updateLogBtnIcon').style.display = 'none';
+        document.getElementById('updateLogBtnLoading').style.display = 'inline-flex';
+    });
 </script>
 <?php include '../../includes/footer.php'; ?>

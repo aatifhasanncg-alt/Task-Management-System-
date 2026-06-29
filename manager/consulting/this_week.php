@@ -382,7 +382,8 @@ $pageTitle = "Today's & Tomorrow's Plan";
 include '../../includes/header.php';
 ?>
 
-<link rel="stylesheet" href="consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
+
 <style>
     /* ── Responsive: Today & Tomorrow grid ── */
     @media (max-width: 768px) {
@@ -779,7 +780,12 @@ include '../../includes/header.php';
                 <div class="ms-auto d-flex gap-2">
                     <button type="button" class="btn btn-sm btn-outline-secondary"
                         onclick="closePlanEntryModal()">Cancel</button>
-                    <button type="submit" class="btn btn-gold btn-sm"><i class="fas fa-save me-1"></i>Save</button>
+                    <button type="submit" id="planSaveBtn" class="btn btn-gold btn-sm">
+                        <span id="planSaveBtnIcon"><i class="fas fa-save me-1"></i>Save</span>
+                        <span id="planSaveBtnLoading" style="display:none;align-items:center;gap:.4rem;">
+                            <span class="spinner-border spinner-border-sm" style="width:.75rem;height:.75rem;"></span> Saving...
+                        </span>
+                    </button>
                 </div>
             </div>
         </form>
@@ -850,8 +856,13 @@ include '../../includes/header.php';
             alert('Please select a client.');
             return false;
         }
-    });
 
+        const btn = document.getElementById('planSaveBtn');
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        document.getElementById('planSaveBtnIcon').style.display = 'none';
+        document.getElementById('planSaveBtnLoading').style.display = 'inline-flex';
+    });
     function openPlanModal(entryId = 0, clientId = 0, planDate = '', timeIn = '', timeOut = '', notes = '', supervisorId = 0) {
         initClientSelect();
 

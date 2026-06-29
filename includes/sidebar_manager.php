@@ -189,7 +189,7 @@ function conNavActiveMgr(string $file, string $dir = ''): string
 
     <nav class="sidebar-nav">
 
-        <?php if ($__isConsultingDept): ?>
+        <?php if ($__isConsultingDept || $__hasUdaConsulting): ?>
             <!-- ═══════════════════════════════════════════════════
              CONSULTING DEPARTMENT MANAGER SIDEBAR
              No tasks — only planning, logs, performance
@@ -209,30 +209,16 @@ function conNavActiveMgr(string $file, string $dir = ''): string
                 <i class="fas fa-calendar-alt"></i><span>All Plans</span>
             </a>
 
-            <a href="<?= APP_URL ?>manager/consulting/today_tomorrow.php"
-                class="nav-item<?= conNavActiveMgr('today_tomorrow.php', 'consulting') ?>">
-                <i class="fas fa-calendar-day"></i>
-                <span>This Week Plans</span>
-                <?php if ($__planNotifCount > 0): ?>
-                    <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
-                        <?= $__planNotifCount ?>
-                    </span>
-                <?php endif; ?>
-            </a>
+            
 
-            <a href="<?= APP_URL ?>manager/consulting/plan_approvals.php"
-                class="nav-item<?= conNavActiveMgr('plan_approvals.php', 'consulting') ?>">
+            <a href="<?= APP_URL ?>manager/consulting/plan_approval.php"
+                class="nav-item<?= conNavActiveMgr('plan_approval.php', 'consulting') ?>">
                 <i class="fas fa-check-circle"></i><span>Plan Approvals</span>
             </a>
 
             <a href="<?= APP_URL ?>manager/consulting/log_list.php"
-                class="nav-item<?= isActiveMgr('/manager/consulting/log_list') ?>">
+                class="nav-item<?= conNavActiveMgr('log_list.php','consulting') ?>">
                 <i class="fas fa-clock"></i><span>Work Logs</span>
-            </a>
-            <a href="<?= APP_URL ?>manager/consulting/office_log_list.php"
-                class="nav-item <?= conNavActiveMgr('office_log_list.php', 'consulting') ?><?= conNavActiveMgr('office_log_view.php', 'consulting') ?><?= conNavActiveMgr('office_log_edit.php', 'consulting') ?>">
-                <i class="fas fa-clipboard-list"></i>
-                <span>Office Logs</span>
             </a>
             <a href="<?= APP_URL ?>manager/consulting/staff_report.php"
                 class="nav-item<?= conNavActiveMgr('staff_report.php', 'consulting') ?>">
@@ -244,11 +230,7 @@ function conNavActiveMgr(string $file, string $dir = ''): string
                 <i class="fas fa-building"></i><span>Client Report</span>
             </a>
 
-            
-            <a href="<?= APP_URL ?>manager/consulting/plan_approval.php"
-                class="nav-item<?= conNavActiveMgr('plan_approval.php', 'consulting') ?>">
-                <i class="fa-regular fa-check-circle"></i><span>Plan Approvals</span>
-            </a>
+        
             <!-- ── My Workspace: personal plan/log actions ── -->
             <div class="nav-section-label">
                 <i class="fas fa-user-clock me-1"></i> My Workspace
@@ -259,7 +241,8 @@ function conNavActiveMgr(string $file, string $dir = ''): string
             </a>
             <a href="<?= APP_URL ?>manager/consulting/this_week.php"
                 class="nav-item<?= conNavActiveMgr('this_week.php', 'consulting') ?>">
-                <i class="fa-regular fa-calendar-week"></i><span>This Week Plans</span>
+                <i class="fas fa-calendar-day"></i>
+                <span>This Week Plans</span>
                 <?php if ($__planNotifCount > 0): ?>
                     <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
                         <?= $__planNotifCount ?>
@@ -272,11 +255,11 @@ function conNavActiveMgr(string $file, string $dir = ''): string
             </a>
             <a href="<?= APP_URL ?>manager/consulting/create_plan.php"
                 class="nav-item<?= conNavActiveMgr('create_plan.php', 'consulting') ?>">
-                <i class="fas fa-plus-circle"></i><span>Create Plan</span>
+                <i class="fas fa-plus-circle"></i><span>Create Visit Plan</span>
             </a>
             <a href="<?= APP_URL ?>manager/consulting/log_create.php"
                 class="nav-item<?= conNavActiveMgr('log_create.php', 'consulting') ?>">
-                <i class="fas fa-pen"></i><span>Create Log</span>
+                <i class="fas fa-pen"></i><span>Create Visit Log</span>
             </a>
             <a href="<?= APP_URL ?>manager/consulting/office_log_create.php"
                 class="nav-item<?= conNavActiveMgr('office_log_create.php', 'consulting') ?>">
@@ -371,22 +354,10 @@ function conNavActiveMgr(string $file, string $dir = ''): string
                 class="nav-item<?= conNavActiveMgr('create_plan.php', 'branch') ?>">
                 <i class="fas fa-plus-circle"></i><span>Create Plan</span>
             </a>
-            <a href="<?= APP_URL ?>manager/consulting/branch/this_week.php"
-                class="nav-item<?= conNavActiveMgr('this_week.php', 'branch') ?>">
-                <i class="fas fa-calendar-week"></i><span>This Week Plans</span>
-                <?php if ($__planNotifCount > 0): ?>
-                    <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
-                        <?= $__planNotifCount ?>
-                    </span>
-                <?php endif; ?>
-            </a>
+           
             <a href="<?= APP_URL ?>manager/consulting/branch/log_list.php"
                 class="nav-item <?= conNavActiveMgr('log_list.php', 'branch') ?>">
                 <i class="fas fa-clock"></i><span>Work Logs</span>
-            </a>
-            <a href="<?= APP_URL ?>manager/consulting/branch/log_create.php"
-                class="nav-item<?= conNavActiveMgr('log_create.php', 'branch') ?>">
-                <i class="fas fa-pen"></i><span>Create Log</span>
             </a>
             <a href="<?= APP_URL ?>manager/consulting/branch/staff_report.php"
                 class="nav-item<?= conNavActiveMgr('staff_report.php', 'branch') ?>">
@@ -399,18 +370,34 @@ function conNavActiveMgr(string $file, string $dir = ''): string
             <a href="<?= APP_URL ?>it/issue_list.php" class="nav-item<?= conNavActiveMgr('issue_list.php', 'it') ?>">
                 <i class="fa-regular fa-bug"></i><span>Technical Issues</span>
             </a>
-            <!-- Office Work Section -->
+           <!-- ── My Workspace: personal plan/log actions ── -->
             <div class="nav-section-label">
-                <i class="fas fa-building me-1"></i> Office Work
+                <i class="fas fa-user-clock me-1"></i> My Workspace
             </div>
-
-            <a href="<?= APP_URL ?>manager/consulting/branch/office_log_list.php"
-                class="nav-item <?= conNavActiveMgr('office_log_list.php', 'branch') ?>">
-                <i class="fas fa-clipboard-list"></i>
-                <span>Office Logs</span>
+            <a href="<?= APP_URL ?>manager/consulting/my_plans.php"
+                class="nav-item<?= conNavActiveMgr('my_plans.php', 'consulting') ?>">
+                <i class="fa-regular fa-calendar"></i><span>My Plans</span>
             </a>
-            <a href="<?= APP_URL ?>manager/consulting/branch/office_log_create.php"
-                class="nav-item <?= conNavActiveMgr('office_log_create.php', 'branch') ?>">
+            <a href="<?= APP_URL ?>manager/consulting/this_week.php"
+                class="nav-item<?= conNavActiveMgr('this_week.php', 'consulting') ?>">
+                <i class="fa-regular fa-calendar-week"></i><span>This Week Plans</span>
+                <?php if ($__planNotifCount > 0): ?>
+                    <span class="nav-badge" style="margin-left:auto;background:#f59e0b;color:#000;">
+                        <?= $__planNotifCount ?>
+                    </span>
+                <?php endif; ?>
+            </a>
+            <a href="<?= APP_URL ?>manager/consulting/my_logs.php"
+                class="nav-item<?= conNavActiveMgr('my_logs.php', 'consulting') ?>">
+                <i class="fa-regular fa-clock"></i><span>My Logs</span>
+            </a>
+
+            <a href="<?= APP_URL ?>manager/consulting/log_create.php"
+                class="nav-item<?= conNavActiveMgr('log_create.php', 'consulting') ?>">
+                <i class="fas fa-pen"></i><span>Create Log</span>
+            </a>
+            <a href="<?= APP_URL ?>manager/consulting/office_log_create.php"
+                class="nav-item<?= conNavActiveMgr('office_log_create.php', 'consulting') ?>">
                 <i class="fas fa-plus"></i>
                 <span>Create Office Log</span>
             </a>

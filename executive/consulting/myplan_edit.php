@@ -6,7 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAdmin();
+requireExecutive();
 function planEmailRow(string $label, string $value): string
 {
     return str_pad($label, 16) . ': ' . $value . "\n";
@@ -277,7 +277,7 @@ $pageTitle = 'Edit Work Plan';
 include '../../includes/header.php';
 ?>
 
-<link rel="stylesheet" href="consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
@@ -305,7 +305,7 @@ include '../../includes/header.php';
 </style>
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include '../../includes/sidebar_executive.php'; ?>
 
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>

@@ -47,18 +47,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     WHERE id=? AND status='submitted'
                 ")->execute([$uid, $pid]);
 
-                $pRow = $db->prepare("SELECT user_id, week_number, plan_month FROM work_plans WHERE id=?");
+                $pRow = $db->prepare("SELECT wp.user_id, wp.week_number, wp.plan_month, u.role 
+                       FROM work_plans wp 
+                       JOIN users u ON u.id = wp.user_id 
+                       WHERE wp.id=?");
                 $pRow->execute([$pid]);
                 $pr = $pRow->fetch();
                 if ($pr) {
                     $wn = (int) $pr['week_number'];
                     $ml = date('F Y', strtotime($pr['plan_month']));
+                    $ownerRole = $pr['role'] ?? '';
+                    $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                        ? "/{$ownerRole}/planning/myplan_view.php?id=" . $pid
+                        : '/staff/planning/plan_view.php?id=' . $pid;
                     notify(
                         (int) $pr['user_id'],
                         'Work Plan Approved',
                         'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved.',
                         'task',
-                        APP_URL . '/staff/planning/plan_view.php?id=' . $pid,
+                        APP_URL . $viewPath,
                         true,
                         [
                             'template' => 'work_plan_status',
@@ -82,27 +89,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ")->execute([$uid, $remarks ?: null, $planId]);
 
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date,
+           u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
                 $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
                     (int) $pr['user_id'],
                     'Work Plan Approved',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved by ' . $user['full_name'] . '.',
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
                     [
                         'template' => 'work_plan_status',
@@ -134,27 +147,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ")->execute([$remarks, $planId]);
 
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date,
+           u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
                 $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
                     (int) $pr['user_id'],
                     'Work Plan Rejected',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' was rejected. Reason: ' . $remarks,
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
                     [
                         'template' => 'work_plan_status',
@@ -182,9 +201,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ── Staff list for filter ─────────────────────────────────────
-$bmBranchFilter = $isBranchManager ? "AND u.branch_id = {$branchId}" : "";
+$bmBranchFilter = "AND u.branch_id = ?";
 
-$staffList = $db->query("
+$staffList = $db->prepare("
     SELECT DISTINCT u.id, u.full_name, u.employee_id
     FROM users u
     LEFT JOIN departments d  ON d.id  = u.department_id
@@ -197,7 +216,9 @@ $staffList = $db->query("
       )
       {$bmBranchFilter}
     ORDER BY u.full_name
-")->fetchAll(PDO::FETCH_ASSOC);
+");
+$staffList->execute([$branchId]);
+$staffList = $staffList->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Build plan query ──────────────────────────────────────────
 $where = ["wp.plan_month = ?"];
@@ -240,6 +261,7 @@ $plans = $db->prepare("
     GROUP BY wp.id
     ORDER BY wp.created_at DESC
 ");
+$params[] = $branchId;
 $plans->execute($params);
 $plans = $plans->fetchAll(PDO::FETCH_ASSOC);
 
@@ -261,7 +283,7 @@ foreach (['draft', 'submitted', 'approved', 'rejected'] as $s) {
         {$bmBranchFilter}
         " . ($staffId ? "AND wp.user_id = ?" : "") . "
     ");
-    $cp = [$monthStart, $s];
+    $cp = [$monthStart, $s, $branchId];
     if ($staffId)
         $cp[] = $staffId;
     $cQ->execute($cp);
@@ -516,9 +538,11 @@ include '../../../includes/header.php';
                                             </td>
                                             <td>
                                                 <div style="font-weight:600;font-size:.82rem;">
-                                                    <?= htmlspecialchars($p['full_name']) ?></div>
+                                                    <?= htmlspecialchars($p['full_name']) ?>
+                                                </div>
                                                 <div style="font-size:.68rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?></div>
+                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?>
+                                                </div>
                                             </td>
                                             <td class="text-center"><strong
                                                     style="color:#c9a84c;">W<?= $p['week_number'] ?></strong></td>
@@ -547,10 +571,14 @@ include '../../../includes/header.php';
                                                         class="cn-btn cn-btn-blue cn-btn-sm" title="View">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
+                                                    <a href="plan_edit.php?id=<?= $p['id'] ?>"
+                                                        class="cn-btn cn-btn-out cn-btn-sm" title="Edit">
+                                                        <i class="fas fa-pen"></i>
+                                                    </a>
                                                     <?php if ($st === 'submitted'): ?>
                                                         <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
                                                             style="color:#10b981;border-color:#10b981;"
-                                                            onclick="quickApprove(<?= $p['id'] ?>)" title="Approve">
+                                                            onclick="quickApprove(<?= $p['id'] ?>, this)" title="Approve">
                                                             <i class="fas fa-check"></i>
                                                         </button>
                                                         <button type="button" class="cn-btn cn-btn-out cn-btn-sm"
@@ -634,8 +662,9 @@ include '../../../includes/header.php';
         document.querySelectorAll('.plan-chk').forEach(c => c.checked = this.checked);
     });
 
-    function quickApprove(id) {
+    function quickApprove(id, btn) {
         if (!confirm('Approve this plan?')) return;
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
         document.getElementById('approvePlanId').value = id;
         document.getElementById('approveForm').submit();
     }
@@ -648,5 +677,18 @@ include '../../../includes/header.php';
     function closeReject() {
         document.getElementById('rejectModal').style.display = 'none';
     }
+
+    document.getElementById('rejectForm').addEventListener('submit', function () {
+        const btn = this.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rejecting...';
+    });
+
+    document.getElementById('bulkForm').addEventListener('submit', function (e) {
+        const btn = this.querySelector('button[type="submit"]');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Approving...';
+    });
 </script>
 <?php include '../../../includes/footer.php'; ?>

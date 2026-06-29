@@ -89,18 +89,21 @@ if (!function_exists('isActiveExec')) {
         <!-- ── Tasks ── -->
         <div class="nav-section-label">Tasks</div>
 
-        <a href="<?= APP_URL ?>executive/tasks/index.php" class="nav-item <?= isActiveExec('/executive/tasks/index') ?><?= isActiveExec('/executive/tasks/view') ?><?= isActiveExec('/executive/tasks/edit') ?>">
+        <a href="<?= APP_URL ?>executive/tasks/index.php"
+            class="nav-item <?= isActiveExec('/executive/tasks/index') ?><?= isActiveExec('/executive/tasks/view') ?><?= isActiveExec('/executive/tasks/edit') ?>">
             <i class="fas fa-list-check"></i><span>All Tasks</span>
         </a>
 
-        <a href="<?= APP_URL ?>executive/tasks/assign.php" class="nav-item <?= isActiveExec('/executive/tasks/assign') ?>">
+        <a href="<?= APP_URL ?>executive/tasks/assign.php"
+            class="nav-item <?= isActiveExec('/executive/tasks/assign') ?>">
             <i class="fas fa-plus-circle"></i><span>Assign Task</span>
         </a>
 
         <!-- ── Directory ── -->
         <div class="nav-section-label">Directory</div>
 
-        <a href="<?= APP_URL ?>executive/companies/index.php" class="nav-item <?= isActiveExec('/executive/companies') ?>">
+        <a href="<?= APP_URL ?>executive/companies/index.php"
+            class="nav-item <?= isActiveExec('/executive/companies') ?>">
             <i class="fas fa-building"></i><span>Companies</span>
         </a>
 
@@ -111,48 +114,60 @@ if (!function_exists('isActiveExec')) {
         <div class="nav-section-label">Consulting</div>
 
         <a href="<?= APP_URL ?>executive/consulting/dashboard.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/dashboard') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/dashboard') ?>">
             <i class="fas fa-briefcase"></i><span>Consulting Dashboard</span>
         </a>
 
         <a href="<?= APP_URL ?>executive/consulting/plans.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/plans') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/plans') ?>">
             <i class="fas fa-tasks"></i><span>Work Plans</span>
         </a>
         <a href="<?= APP_URL ?>executive/consulting/create_plan.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/create_plan') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/create_plan') ?>">
             <i class="fas fa-pencil-alt"></i><span>Create Plan</span>
         </a>
 
         <a href="<?= APP_URL ?>executive/consulting/log_list.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/log_list') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/log_list') ?>">
             <i class="fas fa-check-circle"></i><span>Log List</span>
         </a>
-        <a href="<?= APP_URL ?>executive/consulting/log_create.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/log_create') ?>">
-            <i class="fas fa-pen"></i><span>Create Log </span>
-        </a>
-         <a href="<?= APP_URL ?>executive/consulting/office_log_create.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/office_log_create') ?>">
-            <i class="fas fa-plus-circle"></i><span>Office Create Log </span>
-        </a>
-        <a href="<?= APP_URL ?>executive/consulting/my_logs.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/my_logs') ?>">
-            <i class="fas fa-check-circle"></i><span>My Logs </span>
-        </a>
-        <a href="<?= APP_URL ?>executive/consulting/this_week.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/this_week') ?>">
-            <i class="fas fa-calendar-week"></i><span>This Week </span>
-        </a>
-
         <a href="<?= APP_URL ?>executive/consulting/client_report.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/client_report') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/client_report') ?>">
             <i class="fas fa-chart-line"></i><span>Client Reports</span>
         </a>
         <a href="<?= APP_URL ?>executive/consulting/staff_report.php"
-        class="nav-item <?= isActiveExec('/executive/consulting/staff_report') ?>">
+            class="nav-item <?= isActiveExec('/executive/consulting/staff_report') ?>">
             <i class="fas fa-chart-bar"></i><span>Staff Reports</span>
         </a>
+        <!-- ── My Workspace: personal plan/log actions ── -->
+        <div class="nav-section-label">
+            <i class="fas fa-user-clock me-1"></i> My Workspace
+        </div>
+        <a href="<?= APP_URL ?>executive/consulting/my_plans.php"
+            class="nav-item <?= isActiveExec('/executive/consulting/my_plans') ?><?= isActiveExec('/executive/consulting/myplan_view') ?><?= isActiveExec('/executive/consulting/myplan_edit') ?>">
+            <i class="fa-regular fa-calendar"></i><span>My Plans</span>
+        </a>
+        <a href="<?= APP_URL ?>executive/consulting/this_week.php"
+            class="nav-item <?= isActiveExec('/executive/consulting/this_week') ?>">
+            <i class="fa-regular fa-calendar-days"></i><span>This Week Plans</span>
+
+        </a>
+        <a href="<?= APP_URL ?>executive/consulting/my_logs.php"
+            class="nav-item <?= isActiveExec('/executive/consulting/my_logs') ?><?= isActiveExec('/executive/consulting/log_view') ?><?= isActiveExec('/executive/consulting/log_edit') ?><?= isActiveExec('/executive/consulting/office_log_view') ?><?= isActiveExec('/executive/consulting/office_log_edit') ?>">
+            <i class="fa-regular fa-clock"></i><span>My Logs</span>
+        </a>
+
+        <a href="<?= APP_URL ?>executive/consulting/log_create.php"
+            class="nav-item <?= isActiveExec('/executive/consulting/log_create') ?>">
+            <i class="fas fa-pen"></i><span>Create Log</span>
+        </a>
+        <a href="<?= APP_URL ?>executive/consulting/office_log_create.php"
+            class="nav-item <?= isActiveExec('/executive/consulting/office_log_create') ?>">
+            <i class="fas fa-plus"></i>
+            <span>Create Office Log</span>
+        </a>
+
+        
         <!-- ── Reports ── -->
         <div class="nav-section-label">Reports</div>
 
@@ -185,7 +200,8 @@ if (!function_exists('isActiveExec')) {
             class="nav-item <?= isActiveExec('/executive/reports/date_wise') ?>">
             <i class="fas fa-calendar-alt"></i><span>Date Trends</span>
         </a>
-        <a href="<?= APP_URL ?>executive/reports/summary.php" class="nav-item <?= isActiveExec('/executive/reports/summary') ?>">
+        <a href="<?= APP_URL ?>executive/reports/summary.php"
+            class="nav-item <?= isActiveExec('/executive/reports/summary') ?>">
             <i class="fas fa-landmark"></i><span>Bank Summary</span>
         </a>
         <a href="<?= APP_URL ?>executive/reports/auditor_report.php"

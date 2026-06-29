@@ -1,12 +1,12 @@
 <?php
 /**
- * planning/my_plans/plan_list.php — Admin: My Work Plans
+ * consulting/my_plans/plan_list.php — Manager: My Work Plans
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireAdmin();
+requireExecutive();
 
 $db = getDB();
 $user = currentUser();
@@ -65,7 +65,7 @@ $plans = $plans->fetchAll();
 $pageTitle = 'My Work Plans';
 include '../../includes/header.php';
 ?>
-<link rel="stylesheet" href="consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
 <style>
@@ -222,7 +222,7 @@ include '../../includes/header.php';
 </style>
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_admin.php'; ?>
+    <?php include '../../includes/sidebar_executive.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">

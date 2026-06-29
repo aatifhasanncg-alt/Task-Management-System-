@@ -108,37 +108,46 @@ if (!$errors) {
             ")->execute([$taskId, $uid]);
 
             // 4. Notify everyone in IT dept (primary or UDA) + IT department managers
-$itStaffStmt = $db->prepare("
-    SELECT DISTINCT u.id FROM users u
-    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
-    WHERE u.is_active = 1
-      AND (u.department_id = ? OR uda.department_id = ?)
-");
-$itStaffStmt->execute([$itDeptId, $itDeptId]);
-$notifyIds = $itStaffStmt->fetchAll(PDO::FETCH_COLUMN);
+            // 4. Notify everyone in IT dept (primary or UDA) + IT department managers
+            $itStaffStmt = $db->prepare("
+                SELECT DISTINCT u.id, r.role_name AS role
+                FROM users u
+                JOIN roles r ON r.id = u.role_id
+                LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+                WHERE u.is_active = 1
+                AND (u.department_id = ? OR uda.department_id = ?)
+            ");
+            $itStaffStmt->execute([$itDeptId, $itDeptId]);
+            $notifyRows = $itStaffStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Managers/admins who have been granted access to the IT department
-$mgrStmt = $db->prepare("
-    SELECT DISTINCT u.id
-    FROM admin_department_access ada
-    JOIN users u ON u.id = ada.admin_id
-    JOIN roles r ON r.id = u.role_id
-    WHERE ada.department_id = ?
-      AND u.is_active = 1
-      AND r.role_name IN ('manager', 'admin')
-");
-$mgrStmt->execute([$itDeptId]);
-$notifyIds = array_unique(array_merge($notifyIds, $mgrStmt->fetchAll(PDO::FETCH_COLUMN)));
+            // Managers/admins who have been granted access to the IT department
+            $mgrStmt = $db->prepare("
+                SELECT DISTINCT u.id, r.role_name AS role
+                FROM admin_department_access ada
+                JOIN users u ON u.id = ada.admin_id
+                JOIN roles r ON r.id = u.role_id
+                WHERE ada.department_id = ?
+                AND u.is_active = 1
+                AND r.role_name IN ('manager', 'admin')
+            ");
+            $mgrStmt->execute([$itDeptId]);
+            $mgrRows = $mgrStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            foreach ($notifyIds as $nid) {
-                if ((int) $nid === $uid)
+            // Merge & dedupe by user id, keeping first-seen role
+            $notifyMap = [];
+            foreach (array_merge($notifyRows, $mgrRows) as $row) {
+                $notifyMap[(int)$row['id']] = $row['role'];
+            }
+
+            foreach ($notifyMap as $nid => $nrole) {
+                if ($nid === $uid)
                     continue;
                 notify(
-                    (int) $nid,
+                    $nid,
                     'New IT Issue Raised',
                     $user['full_name'] . ' raised an IT issue: ' . $title . ' (' . $severity . ')',
                     'task',
-                    APP_URL . '/includes/issue_view.php?id=' . $taskId,
+                    APP_URL . '/' . $nrole . '/tasks/view.php?id=' . $taskId,
                     true,
                     ['template' => 'it_issue']
                 );
@@ -147,7 +156,7 @@ $notifyIds = array_unique(array_merge($notifyIds, $mgrStmt->fetchAll(PDO::FETCH_
             $db->commit();
             logActivity('Raised IT issue #' . $taskId, 'it_support');
             setFlash('success', 'Issue raised successfully! IT support has been notified.');
-            header('Location: ' . APP_URL . '/includes/issue_view.php?id=' . $taskId);
+            header('Location: ' . APP_URL . '/' . $role . '/tasks/view.php?id=' . $taskId);
             exit;
 
         } catch (Exception $e) {

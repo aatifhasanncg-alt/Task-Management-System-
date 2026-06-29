@@ -53,7 +53,7 @@ $sm = $statusMeta[$log['status']] ?? ['label' => ucfirst($log['status'] ?? '—'
 $pageTitle = 'View Office Log';
 include '../../includes/header.php';
 ?>
-<link rel="stylesheet" href="../../../staff/planning/consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
 

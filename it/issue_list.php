@@ -94,7 +94,7 @@ switch ($role) {
 <div class="main-content">
     <?php include __DIR__ . '/../includes/topbar.php'; ?>
     <div style="padding:1.5rem 0;">
-        <div class="page-hero d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="page-hero">
             <div>
                 <div class="page-hero-badge"><i class="fas fa-headset"></i> IT Support</div>
                 <h4 class="mb-1">
@@ -102,7 +102,6 @@ switch ($role) {
                 </h4>
                 <p class="mb-0" style="color:#6b7280;"><?= count($issues) ?> total</p>
             </div>
-            <a href="issue_create.php" class="btn btn-gold btn-sm"><i class="fas fa-plus me-1"></i>Raise Issue</a>
         </div>
 
         <form method="GET" class="filter-bar row g-2 align-items-end my-3">
@@ -112,20 +111,20 @@ switch ($role) {
                     value="<?= htmlspecialchars($search) ?>">
             </div>
             <div class="col-md-3">
-            <div class="col-md-3">
-                <label class="form-label-mis">Status</label>
-                <select name="status" class="form-select form-select-sm">
-                    <option value="">All</option>
-                    <?php foreach ($taskStatuses as $ts): ?>
-                        <option value="<?= htmlspecialchars($ts['status_name']) ?>" <?= $status === $ts['status_name'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($ts['status_name']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <button class="btn btn-gold btn-sm w-100">Filter</button>
-            </div>
+                <div class="col-md-3">
+                    <label class="form-label-mis">Status</label>
+                    <select name="status" class="form-select form-select-sm">
+                        <option value="">All</option>
+                        <?php foreach ($taskStatuses as $ts): ?>
+                            <option value="<?= htmlspecialchars($ts['status_name']) ?>" <?= $status === $ts['status_name'] ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($ts['status_name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-gold btn-sm w-100">Filter</button>
+                </div>
         </form>
 
         <div class="card-mis">

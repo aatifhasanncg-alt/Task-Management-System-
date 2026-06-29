@@ -363,8 +363,12 @@ include '../../includes/header.php';
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Save as Draft
+                                <button type="submit" id="savePlanBtn" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <span id="savePlanBtnIcon"><i class="fas fa-save"></i> Save as Draft</span>
+                                    <span id="savePlanBtnLoading" style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width:.85rem;height:.85rem;"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="plan_list.php?month=<?= $month ?>"
                                 class="cn-btn cn-btn-out" style="justify-content:center;">
@@ -538,7 +542,13 @@ function removeEntry(btn) {
     if (!document.querySelectorAll('.entry-row').length)
         document.getElementById('emptyEntries').style.display = '';
 }
-
+document.getElementById('planForm').addEventListener('submit', function () {
+    const btn = document.getElementById('savePlanBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    document.getElementById('savePlanBtnIcon').style.display = 'none';
+    document.getElementById('savePlanBtnLoading').style.display = 'inline-flex';
+});
 function renumber() {
     document.querySelectorAll('.entry-num').forEach((el, i) => el.textContent = i + 1);
 }

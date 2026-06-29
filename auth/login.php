@@ -21,7 +21,7 @@ if (!empty($_SESSION['user_id'])) {
     if ($deptCode === 'CON' && $role === 'admin') {
         header('Location: ' . APP_URL . 'admin/planning/index.php');
     } elseif ($deptCode === 'CON' && $role === 'manager') {
-        header('Location: ' . APP_URL . 'manager/planning/index.php');
+        header('Location: ' . APP_URL . 'manager/consulting/index.php');
     } elseif ($deptCode === 'CON' && $role === 'staff') {
         header('Location: ' . APP_URL . 'staff/planning/index.php');
     } else {
@@ -257,7 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($deptCode === 'CON' && $role === 'admin') {
                 header('Location: ' . APP_URL . 'admin/planning/index.php');
             } elseif ($deptCode === 'CON' && $role === 'manager') {
-                header('Location: ' . APP_URL . 'manager/planning/index.php');
+                header('Location: ' . APP_URL . 'manager/consutling/index.php');
             } elseif ($deptCode === 'CON' && $role === 'staff') {
                 header('Location: ' . APP_URL . 'staff/planning/index.php');
             } else {

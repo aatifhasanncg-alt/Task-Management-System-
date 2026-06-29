@@ -47,18 +47,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     WHERE id=? AND status='submitted'
                 ")->execute([$uid, $pid]);
 
-                $pRow = $db->prepare("SELECT user_id, week_number, plan_month FROM work_plans WHERE id=?");
+                // bulk_approve block:
+                $pRow = $db->prepare("SELECT user_id, week_number, plan_month, u.role 
+                       FROM work_plans wp 
+                       JOIN users u ON u.id = wp.user_id 
+                       WHERE wp.id=?");
                 $pRow->execute([$pid]);
                 $pr = $pRow->fetch();
                 if ($pr) {
                     $wn = (int) $pr['week_number'];
                     $ml = date('F Y', strtotime($pr['plan_month']));
+                    $ownerRole = $pr['role'] ?? '';
+                    $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                        ? "/{$ownerRole}/planning/myplan_view.php?id=" . $pid
+                        : '/staff/planning/plan_view.php?id=' . $pid;
                     notify(
                         (int) $pr['user_id'],
                         'Work Plan Approved',
                         'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved.',
                         'task',
-                        APP_URL . '/staff/planning/plan_view.php?id=' . $pid,
+                        APP_URL . $viewPath,
                         true,
                         [
                             'template' => 'work_plan_status',
@@ -81,28 +89,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE id=? AND status='submitted'
             ")->execute([$uid, $remarks ?: null, $planId]);
 
+            // approve block:
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date, u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
                 $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
                     (int) $pr['user_id'],
                     'Work Plan Approved',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' has been approved by ' . $user['full_name'] . '.',
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
                     [
                         'template' => 'work_plan_status',
@@ -133,28 +147,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE id=? AND status='submitted'
             ")->execute([$remarks, $planId]);
 
+            // reject block:
             $pRow = $db->prepare("
-                SELECT wp.user_id, wp.week_number, wp.plan_month,
-                       wp.week_start_date, wp.week_end_date,
-                       COUNT(wpe.id) AS entry_count,
-                       COALESCE(SUM(wpe.planned_hours),0) AS total_hours
-                FROM work_plans wp
-                LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
-                WHERE wp.id = ?
-                GROUP BY wp.id
-            ");
+    SELECT wp.user_id, wp.week_number, wp.plan_month,
+           wp.week_start_date, wp.week_end_date, u.role,
+           COUNT(wpe.id) AS entry_count,
+           COALESCE(SUM(wpe.planned_hours),0) AS total_hours
+    FROM work_plans wp
+    JOIN users u ON u.id = wp.user_id
+    LEFT JOIN work_plan_entries wpe ON wpe.plan_id = wp.id
+    WHERE wp.id = ?
+    GROUP BY wp.id
+");
             $pRow->execute([$planId]);
             $pr = $pRow->fetch();
 
             if ($pr) {
                 $wn = (int) $pr['week_number'];
                 $ml = date('F Y', strtotime($pr['plan_month']));
+                $ownerRole = $pr['role'] ?? '';
+                $viewPath = in_array($ownerRole, ['admin', 'manager'])
+                    ? "/{$ownerRole}/planning/myplan_view.php?id=" . $planId
+                    : '/staff/planning/plan_view.php?id=' . $planId;
                 notify(
                     (int) $pr['user_id'],
                     'Work Plan Rejected',
                     'Your Week ' . $wn . ' work plan for ' . $ml . ' was rejected. Reason: ' . $remarks,
                     'task',
-                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    APP_URL . $viewPath,
                     true,
                     [
                         'template' => 'work_plan_status',
@@ -447,9 +467,11 @@ include '../../../includes/header.php';
                                             </td>
                                             <td>
                                                 <div style="font-weight:600;font-size:.82rem;">
-                                                    <?= htmlspecialchars($p['full_name']) ?></div>
+                                                    <?= htmlspecialchars($p['full_name']) ?>
+                                                </div>
                                                 <div style="font-size:.68rem;color:#9ca3af;">
-                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?></div>
+                                                    <?= htmlspecialchars($p['employee_id'] ?? '') ?>
+                                                </div>
                                             </td>
                                             <td class="text-center"><strong
                                                     style="color:#c9a84c;">W<?= $p['week_number'] ?></strong></td>

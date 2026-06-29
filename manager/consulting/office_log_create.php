@@ -69,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $pageTitle = 'Log Office Work';
 include '../../includes/header.php';
 ?>
-<link rel="stylesheet" href="../../../staff/planning/consulting.css">
+<link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/dashboard.css">
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
@@ -306,8 +306,12 @@ include '../../includes/header.php';
                                 </span>
                             </div>
                             <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
-                                <button type="submit" class="cn-btn cn-btn-gold" style="justify-content:center;">
-                                    <i class="fas fa-save"></i> Save Log
+                                <button type="submit" id="saveOfficeLogBtn" class="cn-btn cn-btn-gold" style="justify-content:center;">
+                                    <span id="saveOfficeLogBtnIcon"><i class="fas fa-save"></i> Save Log</span>
+                                    <span id="saveOfficeLogBtnLoading" style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width:.85rem;height:.85rem;"></span>
+                                        Saving...
+                                    </span>
                                 </button>
                                 <a href="office_log_list.php" class="cn-btn cn-btn-out" style="justify-content:center;">
                                     <i class="fas fa-times"></i> Cancel
@@ -371,5 +375,12 @@ function updateStatusCards() {
 
 calcDuration();
 updateStatusCards();
+document.getElementById('officeLogForm').addEventListener('submit', function () {
+    const btn = document.getElementById('saveOfficeLogBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    document.getElementById('saveOfficeLogBtnIcon').style.display = 'none';
+    document.getElementById('saveOfficeLogBtnLoading').style.display = 'inline-flex';
+});
 </script>
 <?php include '../../includes/footer.php'; ?>
