@@ -97,77 +97,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        // Delete entries explicitly removed in the UI
-        if (!empty($deletedIds)) {
-            $ph = implode(',', array_fill(0, count($deletedIds), '?'));
-            $db->prepare("DELETE FROM work_plan_entries WHERE id IN ({$ph}) AND plan_id = ?")
-               ->execute(array_merge($deletedIds, [$planId]));
-        }
-
-        foreach ($entries as $e) {
-            if (empty($e['client_id'])) continue;
-
-            $entryId  = (int)($e['entry_id'] ?? 0);
-            $clientId = (int)$e['client_id'];
-            $planDate = $e['plan_date'];
-            $timeIn   = !empty($e['planned_time_in'])  ? $e['planned_time_in']  : null;
-            $timeOut  = !empty($e['planned_time_out']) ? $e['planned_time_out'] : null;
-            $notes    = trim($e['notes'] ?? '');
-            $dow      = date('l', strtotime($planDate));
-
-            $hours = 0;
-            if ($timeIn && $timeOut) {
-                $diff  = strtotime($timeOut) - strtotime($timeIn);
-                $hours = $diff > 0 ? round($diff / 3600, 2) : 0;
+        $db->beginTransaction();
+        try {
+            // Delete entries explicitly removed in the UI
+            if (!empty($deletedIds)) {
+                $ph = implode(',', array_fill(0, count($deletedIds), '?'));
+                $db->prepare("DELETE FROM work_plan_entries WHERE id IN ({$ph}) AND plan_id = ?")
+                   ->execute(array_merge($deletedIds, [$planId]));
             }
 
-            $clientCodeQ = $db->prepare("SELECT company_code FROM companies WHERE id=?");
-            $clientCodeQ->execute([$clientId]);
-            $clientCode = $clientCodeQ->fetchColumn() ?: null;
+            foreach ($entries as $e) {
+                if (empty($e['client_id'])) continue;
 
-            if ($entryId) {
-                // Update existing entry — must belong to this plan
-                $db->prepare("
-                    UPDATE work_plan_entries SET
-                        client_id = ?, client_code = ?, plan_date = ?, day_of_week = ?,
-                        planned_time_in = ?, planned_time_out = ?, planned_hours = ?, notes = ?
-                    WHERE id = ? AND plan_id = ?
-                ")->execute([
-                    $clientId, $clientCode, $planDate, $dow,
-                    $timeIn, $timeOut, $hours, $notes,
-                    $entryId, $planId,
-                ]);
-            } else {
-                // New entry added during this edit
-                $db->prepare("
-                    INSERT INTO work_plan_entries
-                        (plan_id, assigned_to, client_id, client_code, plan_date, day_of_week,
-                         planned_time_in, planned_time_out, planned_hours, notes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                ")->execute([
-                    $planId, $plan['user_id'], $clientId, $clientCode,
-                    $planDate, $dow, $timeIn, $timeOut, $hours, $notes,
-                ]);
+                $entryId  = (int)($e['entry_id'] ?? 0);
+                $clientId = (int)$e['client_id'];
+                $planDate = $e['plan_date'];
+                $timeIn   = !empty($e['planned_time_in'])  ? $e['planned_time_in']  : null;
+                $timeOut  = !empty($e['planned_time_out']) ? $e['planned_time_out'] : null;
+                $notes    = trim($e['notes'] ?? '');
+                $dow      = date('l', strtotime($planDate));
+
+                $hours = 0;
+                if ($timeIn && $timeOut) {
+                    $diff  = strtotime($timeOut) - strtotime($timeIn);
+                    $hours = $diff > 0 ? round($diff / 3600, 2) : 0;
+                }
+
+                $clientCodeQ = $db->prepare("SELECT company_code FROM companies WHERE id=?");
+                $clientCodeQ->execute([$clientId]);
+                $clientCode = $clientCodeQ->fetchColumn() ?: null;
+
+                if ($entryId) {
+                    // Update existing entry — must belong to this plan
+                    $db->prepare("
+                        UPDATE work_plan_entries SET
+                            client_id = ?, client_code = ?, plan_date = ?, day_of_week = ?,
+                            planned_time_in = ?, planned_time_out = ?, planned_hours = ?, notes = ?
+                        WHERE id = ? AND plan_id = ?
+                    ")->execute([
+                        $clientId, $clientCode, $planDate, $dow,
+                        $timeIn, $timeOut, $hours, $notes,
+                        $entryId, $planId,
+                    ]);
+                } else {
+                    // New entry added during this edit
+                    $db->prepare("
+                        INSERT INTO work_plan_entries
+                            (plan_id, assigned_to, client_id, client_code, plan_date, day_of_week,
+                             planned_time_in, planned_time_out, planned_hours, notes)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ")->execute([
+                        $planId, $plan['user_id'], $clientId, $clientCode,
+                        $planDate, $dow, $timeIn, $timeOut, $hours, $notes,
+                    ]);
+                }
             }
+
+            $db->prepare("UPDATE work_plans SET updated_at = NOW() WHERE id = ?")->execute([$planId]);
+
+            $db->commit();
+
+            // Notify the plan owner — a notification failure should not undo the save
+            try {
+                notify(
+                    (int)$plan['user_id'],
+                    'Work Plan Updated',
+                    $user['full_name'] . ' made changes to your Week ' . $plan['week_number'] . ' plan for ' . $monthLabel . '.',
+                    'task',
+                    APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
+                    true,
+                    ['template' => 'generic']
+                );
+            } catch (Exception $notifEx) {
+                error_log('[exec:plan_edit] notify failed for plan_id=' . $planId . ': ' . $notifEx->getMessage());
+            }
+
+            logActivity('Executive edited plan #' . $planId, 'consulting', 'plan_id=' . $planId);
+            setFlash('success', 'Plan updated successfully!');
+            header('Location: plan_view.php?id=' . $planId);
+            exit;
+
+        } catch (Exception $e) {
+            $db->rollBack();
+            error_log('[exec:plan_edit] plan_id=' . $planId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save changes. Please try again or contact support.';
         }
-
-        $db->prepare("UPDATE work_plans SET updated_at = NOW() WHERE id = ?")->execute([$planId]);
-
-        // Notify the plan owner that their plan was edited by the executive
-        notify(
-            (int)$plan['user_id'],
-            'Work Plan Updated',
-            $user['full_name'] . ' made changes to your Week ' . $plan['week_number'] . ' plan for ' . $monthLabel . '.',
-            'task',
-            APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
-            true,
-            ['template' => 'generic']
-        );
-
-        logActivity('Executive edited plan #' . $planId, 'consulting', 'plan_id=' . $planId);
-        setFlash('success', 'Plan updated successfully!');
-        header('Location: plan_view.php?id=' . $planId);
-        exit;
     }
 }
 

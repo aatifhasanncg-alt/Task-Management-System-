@@ -12,7 +12,7 @@ $branchId = (int)($_GET['branch_id'] ?? 0);
 $deptId   = (int)($_GET['dept_id']   ?? 0);
 $user     = currentUser();
 
-if (!$user || !isExecutive()) {
+if (!$user || !(isExecutive() || isManager())) {
     echo json_encode([]);
     exit;
 }
@@ -42,7 +42,7 @@ $st = $db->prepare("
     LEFT JOIN branches    b ON b.id = u.branch_id
     LEFT JOIN departments d ON d.id = u.department_id
     JOIN  roles           r ON r.id = u.role_id
-    WHERE r.role_name IN ('staff','admin')
+    WHERE r.role_name IN ('staff','admin','manager')
       AND u.is_active   = 1
       AND u.branch_id   = ?
       AND u.department_id = ?

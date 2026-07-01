@@ -113,9 +113,11 @@ if ($filterType === '' || $filterType === 'office') {
                owl.notes,
                c.company_name, c.company_code,
                'office' AS log_type,
-               NULL AS day_of_week
+               NULL AS day_of_week,
+               sv.full_name AS supervisor_name
         FROM office_work_logs owl
         JOIN companies c ON c.id = owl.client_id
+        LEFT JOIN users sv ON sv.id = owl.supervisor_id
         WHERE " . implode(' AND ', $oWhere) . "
         ORDER BY owl.log_date DESC, owl.time_in DESC
     ";
@@ -562,7 +564,7 @@ include '../../includes/header.php';
                                         </td>
                                         <!-- Supervisor -->
                                         <td style="font-size:.78rem;">
-                                            <?php if ($isVisit && !empty($l['supervisor_name'])): ?>
+                                            <?php if (!empty($l['supervisor_name'])): ?>
                                                 <span style="font-weight:600;color:#374151;">
                                                     <?= htmlspecialchars($l['supervisor_name']) ?>
                                                 </span>
@@ -583,7 +585,7 @@ include '../../includes/header.php';
 
                                         <!-- Hours -->
                                         <td class="text-center">
-                                            <strong style="color:<?= $isVisit ? hoursColor($hoursVal) : '#8b5cf6' ?>">
+                                            <strong style="color:<?= $isVisit ? '#10b981' : '#8b5cf6' ?>">
                                                 <?= number_format($hoursVal, 1) ?>h
                                             </strong>
                                         </td>

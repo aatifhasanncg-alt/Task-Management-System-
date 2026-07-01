@@ -3,7 +3,7 @@
 if (!defined('APP_URL')) {
     require_once __DIR__ . '/../config/config.php';
 }
-$pageTitle = $pageTitle ?? 'TaskHub';
+$pageTitle = $pageTitle ?? 'TAMS';
 $__user = isset($_SESSION['user_id']) ? (function () {
     try {
         return currentUser(); } catch (Exception $e) {
@@ -16,7 +16,7 @@ $__user = isset($_SESSION['user_id']) ? (function () {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
     <meta name="csrf" content="<?= csrfToken() ?>" />
-    <title><?= htmlspecialchars($pageTitle) ?> — TaskHub</title>
+    <title><?= htmlspecialchars($pageTitle) ?> — TAMS</title>
     <link
         href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
         rel="stylesheet" />

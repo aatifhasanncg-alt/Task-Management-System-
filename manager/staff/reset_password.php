@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $html = emailWrapper("
             <h2 style='color:#0a0f1e;'>Password Reset Request</h2>
             <p>Dear <strong>{$staffUser['full_name']}</strong>,</p>
-            <p>An administrator has requested a password reset for your TaskHub account.
+            <p>An administrator has requested a password reset for your TAMS account.
                Click the button below to set a new password.</p>
             <div style='background:#f9fafb;border-radius:10px;padding:16px;margin:20px 0;text-align:center;'>
                 <p style='margin:0 0 4px;font-size:.8rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;'>Username</p>
@@ -101,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         sendMail(
             $staffUser['email'],
             $staffUser['full_name'],
-            '[TaskHub] Reset Your Password',
+            '[TAMS] Reset Your Password',
             $html
         );
         $sent = true;
@@ -209,9 +209,13 @@ include '../../includes/header.php';
                                     </table>
                                 </div>
 
-                                <button type="submit" class="btn btn-warning w-100" style="font-weight:600;">
-                                    <i class="fas fa-paper-plane me-2"></i>Send Reset Link
-                                </button>
+                                <button type="submit" id="resetSubmitBtn" class="btn btn-warning w-100" style="font-weight:600;">
+                                <span id="resetBtnIcon"><i class="fas fa-paper-plane me-2"></i>Send Reset Link</span>
+                                <span id="resetBtnLoading" style="display:none;align-items:center;justify-content:center;gap:.4rem;">
+                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    Sending...
+                                </span>
+                            </button>
                             </form>
                         </div>
                     </div>
@@ -220,4 +224,13 @@ include '../../includes/header.php';
             </div>
 
         </div>
+        <script>
+document.querySelector('form').addEventListener('submit', function () {
+    const btn = document.getElementById('resetSubmitBtn');
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    document.getElementById('resetBtnIcon').style.display = 'none';
+    document.getElementById('resetBtnLoading').style.display = 'inline-flex';
+});
+</script>
         <?php include '../../includes/footer.php'; ?>

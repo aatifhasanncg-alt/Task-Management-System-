@@ -26,7 +26,7 @@ $isItStaff = (bool) $itAccessStmt->fetchColumn();
 
 $isItManager = false;
 if (function_exists('hasAdminDeptAccess')) {
-    $isItManager = $isItStaff && (hasAdminDeptAccess($user) || in_array($role, ['admin','executive'], true));
+    $isItManager = $isItStaff && (hasAdminDeptAccess($db, $uid) || in_array($role, ['admin','executive'], true));
 }
 
 // Fetch issue

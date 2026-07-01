@@ -55,7 +55,7 @@ if (!function_exists('isActiveExec')) {
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">TaskHub</div>
+            <div class="brand-name">TAMS</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>

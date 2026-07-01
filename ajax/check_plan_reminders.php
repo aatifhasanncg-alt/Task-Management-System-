@@ -58,7 +58,7 @@ function notifyPlan(PDO $db, array $p, string $label, string $notifiedCol): void
             $link = APP_URL . "/executive/consulting/plan_view.php?id=" . $p['plan_id'];
             break;
         case 'admin':
-            $link = APP_URL . "/admin/planning/plan_view.php?id=" . $p['plan_id'];
+            $link = APP_URL . "/admin/planning/myplan_view.php?id=" . $p['plan_id'];
             break;
         case 'manager':
             $link = APP_URL . "/manager/consulting/plan_view.php?id=" . $p['plan_id'];

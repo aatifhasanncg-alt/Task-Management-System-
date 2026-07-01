@@ -111,20 +111,19 @@ switch ($role) {
                     value="<?= htmlspecialchars($search) ?>">
             </div>
             <div class="col-md-3">
-                <div class="col-md-3">
-                    <label class="form-label-mis">Status</label>
-                    <select name="status" class="form-select form-select-sm">
-                        <option value="">All</option>
-                        <?php foreach ($taskStatuses as $ts): ?>
-                            <option value="<?= htmlspecialchars($ts['status_name']) ?>" <?= $status === $ts['status_name'] ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($ts['status_name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <button class="btn btn-gold btn-sm w-100">Filter</button>
-                </div>
+                <label class="form-label-mis">Status</label>
+                <select name="status" class="form-select form-select-sm">
+                    <option value="">All</option>
+                    <?php foreach ($taskStatuses as $ts): ?>
+                        <option value="<?= htmlspecialchars($ts['status_name']) ?>" <?= $status === $ts['status_name'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($ts['status_name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-gold btn-sm w-100">Filter</button>
+            </div>
         </form>
 
         <div class="card-mis">
@@ -135,6 +134,7 @@ switch ($role) {
                         <th>Title</th>
                         <th>Department</th>
                         <th>Branch</th>
+                        <th>Raised By</th>
                         <th>Category</th>
                         <th>Severity</th>
                         <th>Assignee</th>

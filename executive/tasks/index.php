@@ -340,7 +340,19 @@ include '../../includes/header.php';
             <div class="card-mis">
                 <div class="card-mis-header">
                     <h5><i class="fas fa-list-check text-warning me-2"></i>Tasks</h5>
-                    <small class="text-muted"><?= $total ?> results</small>
+                    <div class="d-flex align-items-center gap-2">
+                        <small class="text-muted"><?= $total ?> results</small>
+                        <a href="<?= APP_URL ?>/exports/export_excel.php?module=tasks&<?= http_build_query($_GET) ?>"
+                            class="btn btn-sm"
+                            style="background:#16a34a;color:white;border-radius:8px;padding:.35rem .8rem;">
+                            <i class="fas fa-file-excel me-1"></i>Excel
+                        </a>
+                        <a href="<?= APP_URL ?>/exports/export_pdf.php?module=tasks&<?= http_build_query($_GET) ?>"
+                            class="btn btn-sm"
+                            style="background:#dc2626;color:white;border-radius:8px;padding:.35rem .8rem;">
+                            <i class="fas fa-file-pdf me-1"></i>PDF
+                        </a>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table-mis w-100">
@@ -354,6 +366,7 @@ include '../../includes/header.php';
                                 <th>Status</th>
                                 <th>Priority</th>
                                 <th>Due</th>
+                                <th>Created</th>
                                 <th>FY</th>
                                 <th>Action</th>
                             </tr>
@@ -361,7 +374,7 @@ include '../../includes/header.php';
                         <tbody>
                             <?php if (empty($tasks)): ?>
                                 <tr>
-                                    <td colspan="10" class="empty-state">
+                                    <td colspan="11" class="empty-state">
                                         <i class="fas fa-list-check"></i>No tasks found
                                     </td>
                                 </tr>
@@ -429,6 +442,9 @@ include '../../includes/header.php';
                                     </td>
                                     <td style="font-size:.8rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : '' ?>">
                                         <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
+                                    </td>
+                                    <td style="font-size:.78rem;color:#9ca3af;white-space:nowrap;">
+                                        <?= $t['created_at'] ? date('d M Y', strtotime($t['created_at'])) : '—' ?>
                                     </td>
                                     <td style="font-size:.78rem;color:#9ca3af;">
                                         <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?>

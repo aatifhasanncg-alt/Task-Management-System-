@@ -263,7 +263,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $emailHtml = emailWrapper("
-            <h2 style='color:#0a0f1e;'>Welcome to TaskHub</h2>
+            <h2 style='color:#0a0f1e;'>Welcome to TAMS</h2>
             <p>Dear <strong>{$safeFullName}</strong>,</p>
             <p>Your account has been created. Here are your login credentials:</p>
             <table style='width:100%;border-collapse:collapse;margin:16px 0;'>
@@ -285,10 +285,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </p>
             <a href='" . APP_URL . "/auth/login.php'
                style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px;'>
-                Login to TaskHub
+                Login to TAMS
             </a>
         ");
-            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
+            sendMail($email, $fullName, '[TAMS] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
             // Email failure is non-fatal — log it instead of silently swallowing
             error_log('Welcome email failed for user ' . $newId . ': ' . $e->getMessage());
@@ -462,7 +462,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
         try {
             require_once '../../config/mailer.php';
             $emailHtml = emailWrapper("
-                <h2>Welcome to TaskHub</h2>
+                <h2>Welcome to TAMS</h2>
                 <p>Dear <strong>{$fullName}</strong>,</p>
                 <p><strong>Username:</strong> {$username}</p>
                 <p><strong>Password:</strong> {$finalPass}</p>
@@ -476,10 +476,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_import'])) {
                    style='display:inline-block;background:#c9a84c;color:#0a0f1e;
                           padding:10px 24px;border-radius:8px;text-decoration:none;
                           font-weight:700;margin-top:12px;'>
-                    Login to TaskHub
+                    Login to TAMS
                 </a>
             ");
-            sendMail($email, $fullName, '[TaskHub] Your Account Has Been Created', $emailHtml);
+            sendMail($email, $fullName, '[TAMS] Your Account Has Been Created', $emailHtml);
         } catch (Exception $e) {
             // Email failure is non-fatal — user was still created
         }

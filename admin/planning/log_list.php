@@ -169,12 +169,13 @@ UNION ALL
        owl.status, owl.description,
        c.company_name, c.company_code,
        u.full_name AS staff_name, u.employee_id,
-       NULL AS supervisor_name,
+       sv.full_name AS supervisor_name,
        d.dept_name AS department_name,
        'OFFICE' AS log_type, NULL AS day_of_week
     FROM office_work_logs owl
     LEFT JOIN companies c ON c.id = owl.client_id
     LEFT JOIN users u ON u.id = owl.user_id
+    LEFT JOIN users sv ON sv.id = owl.supervisor_id
     LEFT JOIN user_department_assignments uda 
         ON uda.user_id = u.id
     LEFT JOIN departments d 
@@ -182,6 +183,7 @@ UNION ALL
     WHERE {$whereOffice}
       AND (
             u.id = ?
+            OR owl.supervisor_id = ?
             OR u.managed_by = ?
             OR uda.managed_by = ?
           )
@@ -192,7 +194,7 @@ $stmt->execute(array_merge(
     $paramsVisit,
     [$uid, $uid, $uid, $uid],
     $paramsOffice,
-    [$uid, $uid, $uid]
+    [$uid, $uid, $uid, $uid]
 ));
 $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1059,7 +1061,6 @@ $baseQ = [
                             <tbody>
                                 <?php foreach ($logs as $i => $l):
                                     $hrs = (float) $l['duration_hours'];
-                                    $hrsClass = $hrs >= 4 ? 'hrs-good' : ($hrs >= 2 ? 'hrs-warn' : 'hrs-low');
                                     $descFull = $l['description'] ?? '';
                                     $descShort = mb_strimwidth($descFull, 0, 55, '…');
                                     ?>
@@ -1088,7 +1089,7 @@ $baseQ = [
                                         </td>
                                         <td>
                                             <div style="font-weight:600;">
-                                                <?= htmlspecialchars($l['supervisor_name'] ?? $user['full_name']) ?>
+                                                <?= htmlspecialchars($l['supervisor_name'] ?? '—') ?>
                                             </div>
                                         </td>
                                         <td>
@@ -1105,8 +1106,7 @@ $baseQ = [
                                         <td class="text-center" style="color:var(--muted);">
                                             <?= $l['time_out'] ? date('g:i A', strtotime($l['time_out'])) : '—' ?>
                                         </td>
-                                        <td class="text-center"><span
-                                                class="<?= $hrsClass ?>"><?= number_format($hrs, 1) ?>h</span></td>
+                                        <td class="text-center"><?= number_format($hrs, 1) ?>h</td>
                                         <td><?= vstBadge($l['status'] ?? '') ?></td>
                                         <td style="max-width:185px;color:var(--muted);"
                                             title="<?= htmlspecialchars($descFull) ?>"><?= htmlspecialchars($descShort) ?></td>
@@ -1142,8 +1142,7 @@ $baseQ = [
                                         <?= $totalLogs ?> records &nbsp;·&nbsp; <?= $visitCount ?> visit &nbsp;·&nbsp;
                                         <?= $totalLogs - $visitCount ?> office
                                     </td>
-                                    <td class="text-center"><span
-                                            class="hrs-good"><?= number_format($totalHours, 1) ?>h</span></td>
+                                    <td class="text-center"><?= number_format($totalHours, 1) ?>h</td>
                                     <td colspan="3"></td>
                                 </tr>
                             </tfoot>

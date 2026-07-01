@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TaskHub — ASK Global Advisory Pvt. Ltd.</title>
+  <meta name="robots" content="noindex, nofollow">
+  <title>TAMS — ASK Global Advisory Pvt. Ltd.</title>
   <link
     href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
     rel="stylesheet" />
@@ -903,7 +904,7 @@
     <div class="nav-brand">
       <div class="nav-logo"><span>ASK</span></div>
       <div class="nav-brand-text">
-        <div class="t1">TaskHub</div>
+        <div class="t1">TAMS</div>
         <div class="t2">ASK Global Advisory</div>
       </div>
     </div>
@@ -921,12 +922,12 @@
   <section class="hero">
     <div class="hero-inner">
       <div class="hero-badge"><i class="fas fa-star"></i> ASK Global Advisory Pvt. Ltd.</div>
-      <h1>Task<br><span class="gold">Management System</span><br>for Modern Consulting</h1>
+      <h1>Task<br><span class="gold">Assignment &amp; Management System</span><br>for Modern Consulting</h1>
       <p>A unified platform to manage tasks, track workflows across departments and branches, and generate real-time
         reports — built for ASK Global Advisory's daily operations.</p>
       <div class="hero-btns">
         <a href="#" class="btn-hero-primary" onclick="openLogin(event)">
-          <i class="fas fa-sign-in-alt"></i> Access TaskHub
+          <i class="fas fa-sign-in-alt"></i> Access TAMS
         </a>
         <a href="#workflow" class="btn-hero-outline">
           <i class="fas fa-play-circle"></i> See How It Works
@@ -978,7 +979,7 @@
     <div class="section-inner">
       <div class="section-label">Security</div>
       <div class="section-title">Setting Up Google Authenticator</div>
-      <p class="section-sub">TaskHub uses Time-based One-Time Passwords (TOTP) via Google Authenticator for every login.
+      <p class="section-sub">TAMS uses Time-based One-Time Passwords (TOTP) via Google Authenticator for every login.
         Follow these steps to activate 2FA on your account.</p>
 
       <div
@@ -986,7 +987,7 @@
         <i class="fas fa-exclamation-triangle" style="color:#f59e0b;flex-shrink:0;font-size:1.1rem;"></i>
         <p style="color:#fde68a;font-size:.82rem;line-height:1.5;margin:0;">
           <strong>First-time users:</strong> You will be prompted to set up 2FA on your very first login. You cannot
-          access TaskHub until 2FA is successfully verified.
+          access TAMS until 2FA is successfully verified.
         </p>
       </div>
 
@@ -1007,8 +1008,8 @@
         <div class="ga-step">
           <div class="ga-step-num">2</div>
           <div class="ga-step-icon"><i class="fas fa-sign-in-alt"></i></div>
-          <h4>Log In to TaskHub</h4>
-          <p>Enter your <strong style="color:white;">username and password</strong> on the TaskHub login page. On first
+          <h4>Log In to TAMS</h4>
+          <p>Enter your <strong style="color:white;">username and password</strong> on the TAMS login page. On first
             login, you will be redirected to the 2FA setup screen automatically.</p>
         </div>
 
@@ -1019,8 +1020,8 @@
           <h4>Scan the QR Code</h4>
           <p>Open Google Authenticator → tap the <strong style="color:white;">+</strong> button → select <em>"Scan a QR
               code"</em> → point your camera at the QR code shown on screen.</p>
-          <div class="ga-note"><i class="fas fa-info-circle me-1"></i> Can't scan? Use the manual entry key shown below
-            the QR code instead.</div>
+          <div class="ga-note"><i class="fas fa-info-circle me-1"></i> If scanning fails, contact your administrator for
+            an alternate setup method.</div>
         </div>
 
         <!-- Step 4 -->
@@ -1029,7 +1030,7 @@
           <div class="ga-step-icon"><i class="fas fa-key"></i></div>
           <h4>Enter the 6-Digit Code</h4>
           <p>Google Authenticator will display a <strong style="color:white;">6-digit code</strong> that refreshes every
-            30 seconds. Enter this code in the verification box on TaskHub and click <em>Verify</em>.</p>
+            30 seconds. Enter this code in the verification box on TAMS and click <em>Verify</em>.</p>
           <div class="ga-note"><i class="fas fa-clock me-1"></i> Act quickly — codes expire in 30 seconds. If it fails,
             wait for the next code.</div>
         </div>
@@ -1057,9 +1058,8 @@
           <div style="color:#fca5a5;font-size:.82rem;font-weight:700;margin-bottom:.25rem;">Lost your phone or changed
             devices?</div>
           <p style="color:#9ca3af;font-size:.78rem;line-height:1.55;margin:0;">
-            Contact your <strong style="color:white;">Branch Admin</strong> or the system administrator to reset your
-            2FA. They can disable your existing 2FA from the staff management panel so you can set it up again on your
-            new device.
+            Contact your administrator through verified internal channels to regain access. Identity verification will
+            be required before any account changes are made.
           </p>
         </div>
       </div>
@@ -1075,14 +1075,14 @@
       <div class="features-grid">
         <?php
         $features = [
-          ['fa-shield-alt',     'Two-Factor Authentication',  'Every login is secured with Google Authenticator TOTP verification.'],
-          ['fa-bell',           'Real-Time Notifications',    'Instant app and email alerts on task events, approvals, and updates.'],
-          ['fa-chart-pie',      'Performance Reports',        'Interactive charts and dashboards for tracking team and department output.'],
-          ['fa-file-pdf',       'PDF Export',                 'Export reports and summaries to PDF in one click.'],
-          ['fa-exchange-alt',   'Task Transfer',              'Tracked handoff chain between staff and departments with full history.'],
-          ['fa-clock',          'Time Tracking',              'Log time spent at every stage for accurate performance measurement.'],
-          ['fa-calendar-alt',   'Work Planning',              'Weekly planning with scheduled visits, hours, and approval workflows.'],
-          ['fa-bug',            'Issue Reporting',            'Staff can raise technical issues directly through the system for IT review.'],
+          ['fa-shield-alt', 'Two-Factor Authentication', 'Every login is secured with Google Authenticator TOTP verification.'],
+          ['fa-bell', 'Real-Time Notifications', 'Instant app and email alerts on task events, approvals, and updates.'],
+          ['fa-chart-pie', 'Performance Reports', 'Interactive charts and dashboards for tracking team and department output.'],
+          ['fa-file-pdf', 'PDF Export', 'Export reports and summaries to PDF in one click.'],
+          ['fa-exchange-alt', 'Task Transfer', 'Tracked handoff chain between staff and departments with full history.'],
+          ['fa-clock', 'Time Tracking', 'Log time spent at every stage for accurate performance measurement.'],
+          ['fa-calendar-alt', 'Work Planning', 'Weekly planning with scheduled visits, hours, and approval workflows.'],
+          ['fa-bug', 'Issue Reporting', 'Staff can raise technical issues directly through the system for IT review.'],
         ];
         foreach ($features as [$icon, $title, $desc]): ?>
           <div class="feature-card">
@@ -1101,16 +1101,13 @@
       <div class="nav-brand" style="margin-bottom:.4rem;">
         <div class="nav-logo" style="width:28px;height:28px;"><span style="font-size:.72rem;">ASK</span></div>
         <div class="nav-brand-text">
-          <div class="t1" style="font-size:.85rem;">TaskHub</div>
+          <div class="t1" style="font-size:.85rem;">TAMS</div>
         </div>
       </div>
       <p>© <?= date('Y') ?> ASK Global Advisory Pvt. Ltd. · "You and Us working Together"</p>
     </div>
     <div class="footer-links">
-      <a href="auth/login.php?role=executive">Executive</a>
-      <a href="auth/login.php?role=manager">Manager</a>
-      <a href="auth/login.php?role=admin">Admin</a>
-      <a href="auth/login.php?role=staff">Staff</a>
+      <a href="#" onclick="openLogin(event)">Login</a>
     </div>
   </footer>
 
@@ -1118,18 +1115,21 @@
   <div class="modal-overlay" id="loginModal">
     <div class="modal-box">
       <div class="modal-header">
-        <h4><i class="fas fa-sign-in-alt me-2" style="color:#c9a84c;"></i> Login to TaskHub</h4>
+        <h4><i class="fas fa-sign-in-alt me-2" style="color:#c9a84c;"></i> Login to TAMS</h4>
         <button class="modal-close" onclick="closeLogin()"><i class="fas fa-times"></i></button>
       </div>
       <div class="modal-body">
         <div class="modal-role-tabs">
-          <button class="modal-tab" onclick="setRole('executive',this)"><i class="fas fa-crown me-1"></i>Executive</button>
-          <button class="modal-tab" onclick="setRole('manager',this)"><i class="fas fa-sitemap me-1"></i>Manager</button>
-          <button class="modal-tab active" onclick="setRole('admin',this)"><i class="fas fa-user-shield me-1"></i>Admin</button>
+          <button class="modal-tab" onclick="setRole('executive',this)"><i
+              class="fas fa-crown me-1"></i>Executive</button>
+          <button class="modal-tab" onclick="setRole('manager',this)"><i
+              class="fas fa-sitemap me-1"></i>Manager</button>
+          <button class="modal-tab active" onclick="setRole('admin',this)"><i
+              class="fas fa-user-shield me-1"></i>Admin</button>
           <button class="modal-tab" onclick="setRole('staff',this)"><i class="fas fa-user me-1"></i>Staff</button>
         </div>
 
-        <form id="loginForm" action="auth/login.php" method="GET">
+        <form id="loginForm" action="auth/login.php" method="POST">
           <input type="hidden" name="role" id="modalRole" value="admin">
           <button type="submit" class="modal-btn" onclick="goToLogin(event)">
             <i class="fas fa-arrow-right me-2"></i> Continue to Login
@@ -1159,8 +1159,7 @@
 
     function goToLogin(e) {
       e.preventDefault();
-      const role = document.getElementById('modalRole').value;
-      window.location.href = 'auth/login.php?role=' + role;
+      document.getElementById('loginForm').submit();
     }
 
     /* active nav link on scroll */
@@ -1177,7 +1176,6 @@
       });
     });
 
-    window.addEventListener('load', () => openLogin());
   </script>
 </body>
 

@@ -519,16 +519,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it']) && $canEditDept) {
     verifyCsrf();
+
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify the CURRENT assignee + creator about the status change ──
+                // (Note: if this same submit also reassigns IT staff below, this notifies
+                // the *previous* assignee about the status change, and the IT reassignment
+                // block further down separately notifies the *new* assignee about being
+                // assigned. This is intentional — current owner learns status changed,
+                // new owner learns they were assigned.)
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . 'includes/issue_view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
+
+    // ── IT ticket fields ──
     $it = $_POST['it'] ?? [];
 
     $assignedItStaff = ($it['assigned_it_staff'] ?? '') !== '' ? (int) $it['assigned_it_staff'] : null;
-    $resolution = trim($it['resolution'] ?? '');
-    $isResolved = isset($it['is_resolved']) ? 1 : 0;
-    $issueCategory = trim($it['issue_category'] ?? '');
-    $severity = trim($it['severity'] ?? 'Medium');
-    $detailedDesc = trim($it['detailed_description'] ?? '');
-    $reportedDate = $it['reported_date'] ?: null;
-    $tokenRaiserId = ($it['token_raiser_id'] ?? '') !== '' ? (int) $it['token_raiser_id'] : null;
+    $resolution      = trim($it['resolution'] ?? '');
+    $isResolved      = isset($it['is_resolved']) ? 1 : 0;
+    $issueCategory   = trim($it['issue_category'] ?? '');
+    $severity        = trim($it['severity'] ?? 'Medium');
+    $detailedDesc    = trim($it['detailed_description'] ?? '');
+    $reportedDate    = $it['reported_date'] ?: null;
+    $tokenRaiserId   = ($it['token_raiser_id'] ?? '') !== '' ? (int) $it['token_raiser_id'] : null;
 
     $prevAssignee = $detail['assigned_it_staff'] ?? null;
 
@@ -567,26 +644,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it']) && $canEdi
         $db->beginTransaction();
         try {
             $lastToken = $db->query("
-            SELECT token_number FROM task_it
-            WHERE token_number LIKE 'IT-%'
-            ORDER BY CAST(SUBSTRING(token_number, 4) AS UNSIGNED) DESC
-            LIMIT 1
-            FOR UPDATE
-        ")->fetchColumn();
+                SELECT token_number FROM task_it
+                WHERE token_number LIKE 'IT-%'
+                ORDER BY CAST(SUBSTRING(token_number, 4) AS UNSIGNED) DESC
+                LIMIT 1
+                FOR UPDATE
+            ")->fetchColumn();
             $nextSeq = $lastToken ? ((int) substr($lastToken, 3)) + 1 : 1;
             $tokenNumber = 'IT-' . str_pad((string) $nextSeq, 6, '0', STR_PAD_LEFT);
 
-            $raiserId = $tokenRaiserId ?: (int) ($task['created_by'] ?? $user['id']);
-            $deptIdForIt = (int) ($task['department_id'] ?? 0);
+            $raiserId      = $tokenRaiserId ?: (int) ($task['created_by'] ?? $user['id']);
+            $deptIdForIt   = (int) ($task['department_id'] ?? 0);
             $branchIdForIt = (int) ($task['branch_id'] ?? 0);
 
             $db->prepare("
-            INSERT INTO task_it
-                (task_id, token_number, token_raiser_id, department_id, branch_id,
-                 issue_category, detailed_description, assigned_it_staff,
-                 resolution, severity, is_resolved, reported_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ")->execute([
+                INSERT INTO task_it
+                    (task_id, token_number, token_raiser_id, department_id, branch_id,
+                     issue_category, detailed_description, assigned_it_staff,
+                     resolution, severity, is_resolved, reported_date)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ")->execute([
                         $id,
                         $tokenNumber,
                         $raiserId,
@@ -631,7 +708,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_it']) && $canEdi
     }
 
     if ($assignedItStaff && $assignedItStaff != $prevAssignee) {
-        $raiserId = $freshItRow['token_raiser_id'] ?? $task['created_by'] ?? null;
+        $raiserId    = $freshItRow['token_raiser_id'] ?? $task['created_by'] ?? null;
         $tokenForMsg = $freshItRow['token_number'] ?? '';
         $staffNameStmt = $db->prepare("SELECT full_name FROM users WHERE id=?");
         $staffNameStmt->execute([$assignedItStaff]);
@@ -695,6 +772,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['transfer_department']
 // NOT NULL: task_id (auto), company_id (from task), firm_name, company_type_id, file_type_id, pan_vat_id, vat_client_id
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $canEditDept) {
     verifyCsrf();
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify assigned staff + creator, same as standalone status update ──
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/admin/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
     $r2 = $_POST['retail'] ?? [];
     $retFy = trim($r2['fiscal_year'] ?? '');
     $retFyId = getFiscalYearId($db, $retFy);
@@ -770,6 +916,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retail']) && $ca
 // NOT NULL: task_id (auto), company_id (from task). All other columns nullable.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEditDept) {
     verifyCsrf();
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify assigned staff + creator, same as standalone status update ──
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/admin/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
     $t2 = $_POST['tax'] ?? [];
     $taxFy = trim($t2['fiscal_year'] ?? '');
     $taxFyId = getFiscalYearId($db, $taxFy);
@@ -846,6 +1061,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tax']) && $canEd
 // NOT NULL: task_id (auto). All other columns nullable / have defaults.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $canEditDept) {
     verifyCsrf();
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify assigned staff + creator, same as standalone status update ──
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/admin/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
     $b = $_POST['banking'] ?? [];
 
     foreach (['assigned_date', 'ecd', 'completion_date'] as $df) {
@@ -927,6 +1211,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_banking']) && $c
 // NOT NULL: task_id (auto), company_id (from task). All other columns nullable.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
     verifyCsrf();
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify assigned staff + creator, same as standalone status update ──
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/admin/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
     $co = $_POST['corporate'] ?? [];
     $coFyId = ($co['fiscal_year_id'] ?? '') !== '' ? (int) $co['fiscal_year_id'] : getFiscalYearId($db, $co['fiscal_year_id'] ?? '');
     // Save follow-up to task_followups ONLY
@@ -1009,6 +1362,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_corporate'])) {
 // All other columns nullable / have defaults.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_finance']) && $canEditDept) {
     verifyCsrf();
+    // ── Shared: apply main task status if changed via this form ──
+    $newMainStatus = trim($_POST['main_status'] ?? '');
+    if ($newMainStatus && $newMainStatus !== ($task['status'] ?? '')) {
+        $validStatuses = array_column($taskStatuses, 'status_name');
+        if (in_array($newMainStatus, $validStatuses)) {
+            $nsidRow = $db->prepare("SELECT id FROM task_status WHERE status_name=?");
+            $nsidRow->execute([$newMainStatus]);
+            $nsid = (int) ($nsidRow->fetchColumn() ?: 0);
+            if ($nsid) {
+                $oldStatusForMsg = $task['status'] ?? null;
+                $db->prepare("UPDATE tasks SET status_id=?, updated_at=NOW() WHERE id=?")->execute([$nsid, $id]);
+                try {
+                    $db->prepare("INSERT INTO task_workflow(task_id,action,from_user_id,old_status,new_status)VALUES(?,?,?,?,?)")
+                        ->execute([$id, 'status_changed', $user['id'], $oldStatusForMsg, $newMainStatus]);
+                } catch (Exception $e) {
+                }
+                logActivity("Status: {$task['task_number']} → {$newMainStatus}", 'tasks');
+
+                // ── Notify assigned staff + creator, same as standalone status update ──
+                $statusMsg = "Task #{$task['task_number']}";
+                if (!empty($task['company_name']))
+                    $statusMsg .= " ({$task['company_name']})";
+                $statusMsg .= " status changed from \"{$oldStatusForMsg}\" to \"{$newMainStatus}\".";
+                $notifyData = [
+                    'template' => 'task_status_changed',
+                    'task' => [
+                        'id' => $id,
+                        'task_number' => $task['task_number'],
+                        'title' => $task['title'],
+                        'department' => $task['dept_name'] ?? '',
+                        'old_status' => $oldStatusForMsg,
+                        'new_status' => $newMainStatus,
+                        'due_date' => $task['due_date'] ?? null,
+                        'fiscal_year' => $task['fiscal_year'] ?? '',
+                        'company' => $task['company_name'] ?? '',
+                        'priority' => $task['priority'] ?? '',
+                    ]
+                ];
+                if (!empty($task['assigned_to']) && $task['assigned_to'] != $user['id']) {
+                    $assigneeRoleStmt = $db->prepare("SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?");
+                    $assigneeRoleStmt->execute([$task['assigned_to']]);
+                    $assigneeRole = $assigneeRoleStmt->fetchColumn() ?: 'staff';
+                    notify(
+                        (int) $task['assigned_to'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/' . $assigneeRole . '/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+                if (!empty($task['created_by']) && $task['created_by'] != $user['id'] && $task['created_by'] != $task['assigned_to']) {
+                    notify(
+                        (int) $task['created_by'],
+                        "Status Updated: {$task['task_number']}",
+                        $statusMsg,
+                        'status',
+                        APP_URL . '/admin/tasks/view.php?id=' . $id,
+                        true,
+                        $notifyData
+                    );
+                }
+
+                // keep $task['status'] in sync for any later checks in the same request
+                $task['status'] = $newMainStatus;
+            }
+        }
+    }
     $f = $_POST['finance'] ?? [];
     $finFy = trim($f['fiscal_year'] ?? '');
     $finFyId = getFiscalYearId($db, $finFy);
@@ -1256,7 +1678,7 @@ include '../../includes/header.php';
                          TAX DEPT — task_tax
                          Nullable: all except task_id, company_id
                     ════════════════════════════════════════════ -->
-                    <?php if ($task['dept_code'] === 'TAX' &&  $canViewDept): ?>
+                    <?php if ($task['dept_code'] === 'TAX' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-receipt text-warning me-2"></i>Tax Details</h5>
@@ -1533,8 +1955,45 @@ include '../../includes/header.php';
                                             <div class="col-12"><label class="form-label-mis">Notes</label><textarea
                                                     name="tax[notes]" class="form-control form-control-sm"
                                                     rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Tax Details</button></div>
+
+                                            <div class="col-12">
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task
+                                                        Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save Tax
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
+                                                </button>
+                                            </div>
                                         </div>
                                     </form>
                                 <?php endif; ?>
@@ -1545,7 +2004,7 @@ include '../../includes/header.php';
                          BANKING DEPT — task_banking
                          NOT NULL: task_id only. All others nullable.
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'BANK' &&  $canViewDept): ?>
+                    <?php elseif ($task['dept_code'] === 'BANK' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-landmark text-warning me-2"></i>Banking Details</h5>
@@ -1715,8 +2174,45 @@ include '../../includes/header.php';
                                         <div class="mt-3"><label class="form-label-mis">Remarks</label><textarea
                                                 name="banking[remarks]" class="form-control form-control-sm"
                                                 rows="2"><?= htmlspecialchars($detail['remarks'] ?? '') ?></textarea></div>
-                                        <div class="mt-3"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                    class="fas fa-save me-1"></i>Save Banking Details</button></div>
+                                        <div class="mt-3">
+                                            <div class="col-12">
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save Banking
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
+                                                </button>
+                                            </div>
+                                        </div>
                                     </form>
                                 <?php endif; ?>
                             </div>
@@ -1727,7 +2223,7 @@ include '../../includes/header.php';
                          NOT NULL: task_id, company_id
                          due_amount: GENERATED — never in INSERT/UPDATE
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'FIN' &&  $canViewDept): ?>
+                    <?php elseif ($task['dept_code'] === 'FIN' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-coins text-warning me-2"></i>Finance Details</h5>
@@ -1884,8 +2380,45 @@ include '../../includes/header.php';
                                                         class="form-check-label" for="finDone" style="font-size:.85rem;">Mark as
                                                         Completed (sets task to Done)</label></div>
                                             </div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Finance Details</button></div>
+                                            <div class="col-12">
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task
+                                                        Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save Finance
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
+                                                </button>
+                                            </div>
+
                                         </div>
                                     </form>
                                 <?php endif; ?>
@@ -1898,7 +2431,7 @@ include '../../includes/header.php';
                                    company_type_id, file_type_id,
                                    pan_vat_id, vat_client_id
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'IT' &&  $canViewDept): ?>
+                    <?php elseif ($task['dept_code'] === 'IT' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-headset text-warning me-2"></i>IT Support Details</h5>
@@ -2074,16 +2607,50 @@ include '../../includes/header.php';
                                             </div>
 
                                             <div class="col-12">
-                                                <button type="submit" class="btn btn-gold btn-sm">
-                                                    <i class="fas fa-save me-1"></i>Save IT Details
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task
+                                                        Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save IT
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
                                                 </button>
                                             </div>
+
                                         </div>
                                     </form>
                                 <?php endif; ?>
                             </div>
                         </div>
-                    <?php elseif ($task['dept_code'] === 'RETAIL' &&  $canViewDept): ?>
+                    <?php elseif ($task['dept_code'] === 'RETAIL' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-store text-warning me-2"></i>Retail Details</h5>
@@ -2345,8 +2912,46 @@ include '../../includes/header.php';
                                             <div class="col-12"><label class="form-label-mis">Notes</label><textarea
                                                     name="retail[notes]" class="form-control form-control-sm"
                                                     rows="2"><?= htmlspecialchars($detail['notes'] ?? '') ?></textarea></div>
-                                            <div class="col-12"><button type="submit" class="btn btn-gold btn-sm"><i
-                                                        class="fas fa-save me-1"></i>Save Retail Details</button></div>
+
+                                            <div class="col-12">
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task
+                                                        Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save Retail
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
+                                                </button>
+                                            </div>
+
                                         </div>
                                     </form>
                                 <?php endif; ?>
@@ -2358,7 +2963,7 @@ include '../../includes/header.php';
                          NOT NULL: task_id, company_id
                          All other columns nullable
                     ════════════════════════════════════════════ -->
-                    <?php elseif ($task['dept_code'] === 'CORP' &&  $canViewDept): ?>
+                    <?php elseif ($task['dept_code'] === 'CORP' && $canViewDept): ?>
                         <div class="vw-section">
                             <div class="vw-section-header">
                                 <h5><i class="fas fa-building text-warning me-2"></i>Corporate Details</h5>
@@ -2461,7 +3066,8 @@ include '../../includes/header.php';
                                             <div class="col-md-6">
                                                 <label class="form-label-mis">Firm Name
                                                     <?php if ($isLinked): ?><span class="badge-linked"><i
-                                                                class="fas fa-link"></i> from company</span><?php endif; ?>
+                                                                class="fas fa-link"></i>
+                                                            from company</span><?php endif; ?>
                                                 </label>
                                                 <input type="text" name="corporate[firm_name]"
                                                     class="form-control form-control-sm"
@@ -2717,11 +3323,43 @@ include '../../includes/header.php';
                                             </div>
 
                                             <div class="col-12">
-                                                <button type="submit" class="btn btn-gold btn-sm">
-                                                    <i class="fas fa-save me-1"></i>Save Corporate Details
+                                                <div
+                                                    style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:.9rem 1rem;margin-top:.5rem;">
+                                                    <label class="form-label-mis" style="margin-bottom:.5rem;">
+                                                        <i class="fas fa-circle-dot me-1" style="color:#c9a84c;"></i>Task
+                                                        Status
+                                                    </label>
+                                                    <div style="display:flex;flex-wrap:wrap;gap:.5rem;">
+                                                        <?php foreach ($taskStatuses as $ts):
+                                                            $sCol = $ts['color'] ?? '#9ca3af';
+                                                            $sBg = $ts['bg_color'] ?? '#f3f4f6';
+                                                            $isChecked = ($task['status'] ?? '') === $ts['status_name'];
+                                                            ?>
+                                                            <label style="cursor:pointer;">
+                                                                <input type="radio" name="main_status"
+                                                                    value="<?= htmlspecialchars($ts['status_name']) ?>"
+                                                                    <?= $isChecked ? 'checked' : '' ?> style="display:none;"
+                                                                    class="status-radio-input">
+                                                                <span class="status-pill-option"
+                                                                    data-bg="<?= htmlspecialchars($sBg) ?>"
+                                                                    style="background:<?= $isChecked ? $sBg : '#fff' ?>;color:<?= $sCol ?>;border:1.5px solid <?= $sCol ?>;padding:.3rem .8rem;border-radius:99px;font-size:.78rem;font-weight:600;display:inline-block;">
+                                                                    <?= htmlspecialchars($ts['status_name']) ?>
+                                                                </span>
+                                                            </label>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-12">
+                                                <button type="submit" class="btn btn-gold btn-sm save-dept-btn">
+                                                    <span class="btn-icon"><i class="fas fa-save me-1"></i>Save Corporate
+                                                        Details</span>
+                                                    <span class="btn-loading" style="display:none;">
+                                                        <span class="spinner-border spinner-border-sm me-1" role="status"
+                                                            aria-hidden="true"></span>Saving...
+                                                    </span>
                                                 </button>
                                             </div>
-
                                         </div>
                                     </form>
                                 <?php endif; ?>
@@ -2735,7 +3373,8 @@ include '../../includes/header.php';
                                 <p style="font-size:.9rem;color:#6b7280;"><?= htmlspecialchars($task['dept_name']) ?>
                                     details not filled yet.</p>
                                 <a href="edit.php?id=<?= $id ?>" class="btn btn-gold btn-sm"><i
-                                        class="fas fa-plus me-1"></i>Add Details</a>
+                                        class="fas fa-plus me-1"></i>Add
+                                    Details</a>
                             </div>
                         </div>
                     <?php endif; ?>
@@ -2828,36 +3467,6 @@ include '../../includes/header.php';
 
                 <!-- ═══════════ RIGHT COLUMN ═══════════ -->
                 <div class="col-lg-4">
-
-                    <!-- Update Status -->
-                    <div class="vw-section mb-3">
-                        <div class="vw-section-header">
-                            <h5><i class="fas fa-circle-dot text-warning me-2"></i>Update Status</h5>
-                        </div>
-                        <div class="vw-section-body">
-                            <form method="POST">
-                                <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
-                                <input type="hidden" name="update_status" value="1">
-                                <div class="mb-3">
-                                    <?php foreach ($taskStatuses as $ts):
-                                        $sCol = $ts['color'] ?? '#9ca3af';
-                                        $sBg = $ts['bg_color'] ?? '#f3f4f6'; ?>
-                                        <div class="form-check mb-2">
-                                            <input class="form-check-input" type="radio" name="new_status"
-                                                value="<?= htmlspecialchars($ts['status_name']) ?>" id="st_<?= $ts['id'] ?>"
-                                                <?= ($task['status'] ?? '') === $ts['status_name'] ? 'checked' : '' ?>>
-                                            <label class="form-check-label" for="st_<?= $ts['id'] ?>">
-                                                <span
-                                                    style="background:<?= $sBg ?>;color:<?= $sCol ?>;padding:.2rem .6rem;border-radius:99px;font-size:.78rem;font-weight:600;"><?= htmlspecialchars($ts['status_name']) ?></span>
-                                            </label>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                                <button type="submit" class="btn btn-gold w-100 btn-sm"><i
-                                        class="fas fa-save me-1"></i>Update Status</button>
-                            </form>
-                        </div>
-                    </div>
                     <!-- Task Meta -->
                     <div class="vw-section p-3"
                         style="font-size:.8rem;color:#6b7280;border-left:3px solid var(--gold,#c9a84c);">
@@ -2949,6 +3558,26 @@ include '../../includes/header.php';
                 });
             });
         }
+    });
+    document.querySelectorAll('.status-radio-input').forEach(radio => {
+        radio.addEventListener('change', function () {
+            const group = this.closest('div').parentElement;
+            group.querySelectorAll('.status-radio-input').forEach(r => {
+                const pill = r.nextElementSibling;
+                const isSel = r.checked;
+                pill.style.background = isSel ? pill.dataset.bg : '#fff';
+            });
+        });
+    });
+    document.querySelectorAll('form').forEach(form => {
+        const btn = form.querySelector('.save-dept-btn');
+        if (!btn) return;
+        form.addEventListener('submit', function () {
+            btn.disabled = true;
+            btn.style.opacity = '0.7';
+            btn.querySelector('.btn-icon').style.display = 'none';
+            btn.querySelector('.btn-loading').style.display = 'inline-flex';
+        });
     });
     if (document.getElementById('it_assigned_to'))
         new TomSelect('#it_assigned_to', { placeholder: 'Search IT staff…', allowEmptyOption: true, maxOptions: 500 });

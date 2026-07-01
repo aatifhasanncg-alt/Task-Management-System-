@@ -6,7 +6,7 @@ require_once '../../config/db.php';
 require_once '../../config/config.php';
 require_once '../../config/session.php';
 require_once '../../config/helpers.php';
-requireExecutive();
+requireManager();
 
 $db = getDB();
 $user = currentUser();
@@ -222,7 +222,7 @@ include '../../includes/header.php';
 </style>
 
 <div class="app-wrapper">
-    <?php include '../../includes/sidebar_executive.php'; ?>
+    <?php include '../../includes/sidebar_manager.php'; ?>
     <div class="main-content">
         <?php include '../../includes/topbar.php'; ?>
         <div class="cn-wrap">
@@ -238,7 +238,7 @@ include '../../includes/header.php';
                     <div class="d-flex gap-2 flex-wrap align-items-center plan-hero-actions">
                         <input type="month" class="form-control form-control-sm" style="width:140px;min-width:120px;"
                             value="<?= $month ?>" onchange="location='?month='+this.value">
-                        <a href="plan_create.php?month=<?= $month ?>" class="btn btn-sm btn-gold">
+                        <a href="create_plan.php?month=<?= $month ?>" class="btn btn-sm btn-gold">
                             <i class="fas fa-plus me-1"></i> New Plan
                         </a>
                         <a href="index.php?month=<?= $month ?>" class="btn btn-sm btn-outline-secondary">
@@ -297,7 +297,7 @@ include '../../includes/header.php';
                         <div style="font-size:.78rem;margin-bottom:14px;">
                             Create your first work plan for this month.
                         </div>
-                        <a href="plan_create.php?month=<?= $month ?>" class="cn-btn cn-btn-gold"
+                        <a href="create_plan.php?month=<?= $month ?>" class="cn-btn cn-btn-gold"
                             style="display:inline-flex;">
                             <i class="fas fa-plus me-2"></i>Create Plan
                         </a>

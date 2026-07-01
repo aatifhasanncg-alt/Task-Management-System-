@@ -1,6 +1,6 @@
 <?php
 /**
- * consulting/executive/plan_create.php — Executive: Create Plan for a Staff Member
+ * manager/consulting/plan_create.php — Manager: Create Plan for a Staff Member
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
@@ -28,26 +28,24 @@ $monthLabel = $monthDate->format('F Y');
 $weeks = [];
 $last  = (clone $monthDate)->modify('last day of this month');
 
-// Rewind to the Sunday that starts the week containing the 1st
-$first = clone $monthDate;
-$dowFirst = (int)$first->format('w'); // 0=Sun
-if ($dowFirst !== 0) {
-    $first->modify('-' . $dowFirst . ' days');
-}
-
-$cur = clone $first;
+// Month always starts exactly on the 1st — no rewinding into the previous month
+$cur = clone $monthDate;
 $wn  = 1;
 while ($cur <= $last && $wn <= 6) {
     $ws = clone $cur;
-    $we = (clone $cur)->modify('+6 days'); // Sun → Sat
+    $dowStart       = (int)$ws->format('w');       // 0=Sun ... 6=Sat
+    $daysToSaturday = (6 - $dowStart + 7) % 7;      // days until this week's Saturday
+    $we = (clone $ws)->modify('+' . $daysToSaturday . ' days'); // Sun → Sat
     if ($we > $last) $we = clone $last;
+
     $weeks[] = [
         'week_number'     => $wn,
         'week_start_date' => $ws->format('Y-m-d'),
         'week_end_date'   => $we->format('Y-m-d'),
         'label'           => 'Week ' . $wn . ' (' . $ws->format('d M') . ' – ' . $we->format('d M') . ')',
     ];
-    $cur = (clone $we)->modify('+1 day');
+
+    $cur = (clone $we)->modify('+1 day'); // next week starts the day after this week's Saturday
     $wn++;
 }
 // ── Staff list ────────────────────────────────────────────────
@@ -287,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         logActivity(
-            'Executive created plan for user #' . $targetUid,
+            'Manager created plan for user #' . $targetUid,
             'consulting',
             'plan_id=' . $planId
         );
@@ -332,7 +330,7 @@ include '../../includes/header.php';
             <div class="page-hero mb-4">
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
                     <div>
-                        <div class="page-hero-badge"><i class="fas fa-briefcase"></i> Executive · Consulting</div>
+                        <div class="page-hero-badge"><i class="fas fa-briefcase"></i> Manager · Consulting</div>
                         <h4>Create Work Plan</h4>
                         <p>Assign a work plan to a staff member · <?= date('d M Y') ?></p>
                     </div>

@@ -467,6 +467,7 @@ include '../../includes/header.php';
                                 <th>Status</th>
                                 <th>Priority</th>
                                 <th>Due Date</th>
+                                <th>Created</th>
                                 <th>FY</th>
                                 <th>Actions</th>
                             </tr>
@@ -474,7 +475,7 @@ include '../../includes/header.php';
                         <tbody>
                             <?php if (empty($tasks)): ?>
                                 <tr>
-                                    <td colspan="9" class="empty-state"><i class="fas fa-list-check"></i> No tasks found
+                                    <td colspan="10" class="empty-state"><i class="fas fa-list-check"></i> No tasks found
                                     </td>
                                 </tr>
                             <?php endif; ?>
@@ -543,6 +544,9 @@ include '../../includes/header.php';
                                     <td
                                         style="font-size:.8rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#6b7280;' ?>">
                                         <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
+                                    </td>
+                                    <td style="font-size:.78rem;color:#9ca3af;white-space:nowrap;">
+                                        <?= $t['created_at'] ? date('d M Y', strtotime($t['created_at'])) : '—' ?>
                                     </td>
                                     <td style="font-size:.78rem;color:#9ca3af;">
                                         <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?>

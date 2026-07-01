@@ -28,26 +28,24 @@ $monthLabel = $monthDate->format('F Y');
 $weeks = [];
 $last  = (clone $monthDate)->modify('last day of this month');
 
-// Rewind to the Sunday that starts the week containing the 1st
-$first = clone $monthDate;
-$dowFirst = (int)$first->format('w'); // 0=Sun
-if ($dowFirst !== 0) {
-    $first->modify('-' . $dowFirst . ' days');
-}
-
-$cur = clone $first;
+// Month always starts exactly on the 1st — no rewinding into the previous month
+$cur = clone $monthDate;
 $wn  = 1;
 while ($cur <= $last && $wn <= 6) {
     $ws = clone $cur;
-    $we = (clone $cur)->modify('+6 days'); // Sun → Sat
+    $dowStart       = (int)$ws->format('w');       // 0=Sun ... 6=Sat
+    $daysToSaturday = (6 - $dowStart + 7) % 7;      // days until this week's Saturday
+    $we = (clone $ws)->modify('+' . $daysToSaturday . ' days'); // Sun → Sat
     if ($we > $last) $we = clone $last;
+
     $weeks[] = [
         'week_number'     => $wn,
         'week_start_date' => $ws->format('Y-m-d'),
         'week_end_date'   => $we->format('Y-m-d'),
         'label'           => 'Week ' . $wn . ' (' . $ws->format('d M') . ' – ' . $we->format('d M') . ')',
     ];
-    $cur = (clone $we)->modify('+1 day');
+
+    $cur = (clone $we)->modify('+1 day'); // next week starts the day after this week's Saturday
     $wn++;
 }
 // ── Staff list ────────────────────────────────────────────────
@@ -188,62 +186,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // BUG FIX 6: status should respect auto_submit flag
         $planStatus = $autoSubmit ? 'approved' : 'draft';
 
-        $ins = $db->prepare("
-            INSERT INTO work_plans
-                (user_id, supervisor_id, department_id, branch_id, week_number,
-                 week_start_date, week_end_date, plan_month, status, approved_by, approved_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        ");
-        $ins->execute([
-            $targetUid,
-            $uid,                                           // BUG FIX 7: store creator as supervisor
-            $staffDeptId,
-            $branchId,
-            $weekNumber,
-            $weekStart,
-            $weekEnd,
-            $planMonthDate,
-            $planStatus,
-            $autoSubmit ? $uid : null,                     // approved_by
-            $autoSubmit ? date('Y-m-d H:i:s') : null,      // approved_at
-        ]);
-        $planId = (int)$db->lastInsertId();
+        $db->beginTransaction();
+        try {
+            $ins = $db->prepare("
+                INSERT INTO work_plans
+                    (user_id, supervisor_id, department_id, branch_id, week_number,
+                     week_start_date, week_end_date, plan_month, status, approved_by, approved_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ");
+            $ins->execute([
+                $targetUid,
+                $uid,                                           // BUG FIX 7: store creator as supervisor
+                $staffDeptId,
+                $branchId,
+                $weekNumber,
+                $weekStart,
+                $weekEnd,
+                $planMonthDate,
+                $planStatus,
+                $autoSubmit ? $uid : null,                     // approved_by
+                $autoSubmit ? date('Y-m-d H:i:s') : null,      // approved_at
+            ]);
+            $planId = (int)$db->lastInsertId();
 
-        // BUG FIX 8: day_of_week was never set; calculate it from plan_date
-        foreach ($entries as $e) {
-            if (empty($e['client_id'])) continue;
+            // BUG FIX 8: day_of_week was never set; calculate it from plan_date
+            foreach ($entries as $e) {
+                if (empty($e['client_id'])) continue;
 
-            $planDate = $e['plan_date'] ?? '';
-            $clientId = (int)$e['client_id'];
-            $timeIn   = !empty($e['planned_time_in'])  ? $e['planned_time_in']  : null;
-            $timeOut  = !empty($e['planned_time_out']) ? $e['planned_time_out'] : null;
-            $notes    = trim($e['notes'] ?? '');
+                $planDate = $e['plan_date'] ?? '';
+                $clientId = (int)$e['client_id'];
+                $timeIn   = !empty($e['planned_time_in'])  ? $e['planned_time_in']  : null;
+                $timeOut  = !empty($e['planned_time_out']) ? $e['planned_time_out'] : null;
+                $notes    = trim($e['notes'] ?? '');
 
-            $hours = 0;
-            if ($timeIn && $timeOut) {
-                $diff  = strtotime($timeOut) - strtotime($timeIn);
-                $hours = $diff > 0 ? round($diff / 3600, 2) : 0;
+                $hours = 0;
+                if ($timeIn && $timeOut) {
+                    $diff  = strtotime($timeOut) - strtotime($timeIn);
+                    $hours = $diff > 0 ? round($diff / 3600, 2) : 0;
+                }
+
+                // Calculate day_of_week from plan_date
+                $dow = $planDate ? date('l', strtotime($planDate)) : 'Monday';
+
+                // BUG FIX 9: also store client_code for denormalised lookup
+                $clientCodeQ = $db->prepare("SELECT company_code FROM companies WHERE id=?");
+                $clientCodeQ->execute([$clientId]);
+                $clientCode = $clientCodeQ->fetchColumn() ?: null;
+
+                $db->prepare("
+                    INSERT INTO work_plan_entries
+                        (plan_id, assigned_to, client_id, client_code, plan_date, day_of_week,
+                         planned_time_in, planned_time_out, planned_hours, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                ")->execute([
+                    $planId, $targetUid, $clientId, $clientCode,
+                    $planDate, $dow, $timeIn, $timeOut, $hours, $notes
+                ]);
             }
 
-            // Calculate day_of_week from plan_date
-            $dow = $planDate ? date('l', strtotime($planDate)) : 'Monday';
-
-            // BUG FIX 9: also store client_code for denormalised lookup
-            $clientCodeQ = $db->prepare("SELECT company_code FROM companies WHERE id=?");
-            $clientCodeQ->execute([$clientId]);
-            $clientCode = $clientCodeQ->fetchColumn() ?: null;
-
-            $db->prepare("
-                INSERT INTO work_plan_entries
-                    (plan_id, assigned_to, client_id, client_code, plan_date, day_of_week,
-                     planned_time_in, planned_time_out, planned_hours, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-            ")->execute([
-                $planId, $targetUid, $clientId, $clientCode,
-                $planDate, $dow, $timeIn, $timeOut, $hours, $notes
-            ]);
+            $db->commit();
+        } catch (Exception $e) {
+            $db->rollBack();
+            error_log('[exec:plan_create] target_uid=' . $targetUid . ', week=' . $weekNumber . ': ' . $e->getMessage());
+            $errors[] = 'Failed to create the plan. Please try again or contact support.';
         }
-
+    if (!$errors) {
         // ── Notifications ────────────────────────────────────
         // Notify the staff member
         $staffNotifLink = APP_URL . '/staff/planning/plan_view.php?id=' . $planId;
@@ -295,6 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         setFlash('success', 'Work plan created and assigned successfully!');
         header('Location: plan_view.php?id=' . $planId);
         exit;
+        }
     }
 }
 

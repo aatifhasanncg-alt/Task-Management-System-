@@ -155,7 +155,7 @@ function conNavActiveMgr(string $file, string $dir = ''): string
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">TaskHub</div>
+            <div class="brand-name">TAMS</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>
@@ -367,9 +367,6 @@ function conNavActiveMgr(string $file, string $dir = ''): string
                 class="nav-item<?= conNavActiveMgr('client_report.php', 'branch') ?>">
                 <i class="fas fa-building"></i><span>Client Report</span>
             </a>
-            <a href="<?= APP_URL ?>it/issue_list.php" class="nav-item<?= conNavActiveMgr('issue_list.php', 'it') ?>">
-                <i class="fa-regular fa-bug"></i><span>Technical Issues</span>
-            </a>
            <!-- ── My Workspace: personal plan/log actions ── -->
             <div class="nav-section-label">
                 <i class="fas fa-user-clock me-1"></i> My Workspace
@@ -417,7 +414,7 @@ function conNavActiveMgr(string $file, string $dir = ''): string
             </a>
             <?php if ($__hasITAccess): ?>
                 <a href="<?= APP_URL ?>it/issue_list.php" class="nav-item<?= conNavActiveMgr('issue_list.php', 'it') ?>">
-                    <i class="fa-regular fa-bug"></i><span>Technical Issues</span>
+                    <i class="fa-solid fa-screwdriver-wrench"></i><span>Technical Issues</span>
                 </a>
             <?php endif; ?>
             <div class="nav-section-label">Tasks</div>

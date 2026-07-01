@@ -194,6 +194,7 @@ $sql1 = "
         c.pan_number,
         d.dept_name,
         b.branch_name,
+        sv.full_name         AS supervisor_name,
         rpe.plan_date        AS reschedule_date,
         rpe.planned_time_in  AS reschedule_time_in,
         rpe.planned_time_out AS reschedule_time_out,
@@ -206,6 +207,7 @@ $sql1 = "
     ON rpe.id = wl.rescheduled_to_entry_id
     LEFT JOIN departments d ON d.id = wl.department_id
     LEFT JOIN branches    b ON b.id = wl.branch_id
+    LEFT JOIN users       sv ON sv.id = wl.supervisor_id
     WHERE " . implode(' AND ', $where1);
 
 $sql2 = "
@@ -223,12 +225,7 @@ $sql2 = "
         owl.notes,
         owl.status         AS office_status,
         NULL               AS visit_status,
-        NULL AS rescheduled_to_entry_id,
-NULL AS reschedule_date,
-NULL AS reschedule_time_in,
-NULL AS reschedule_time_out,
-NULL AS reschedule_hours,
-NULL AS reschedule_notes,
+        NULL               AS rescheduled_to_entry_id,
         owl.created_at,
         u.full_name,
         u.employee_id,
@@ -236,12 +233,19 @@ NULL AS reschedule_notes,
         c.company_code,
         c.pan_number,
         d.dept_name,
-        b.branch_name
+        b.branch_name,
+        sv.full_name       AS supervisor_name,
+        NULL               AS reschedule_date,
+        NULL               AS reschedule_time_in,
+        NULL               AS reschedule_time_out,
+        NULL               AS reschedule_hours,
+        NULL               AS reschedule_notes
     FROM office_work_logs owl
     JOIN users      u ON u.id = owl.user_id
     JOIN companies  c ON c.id = owl.client_id
     LEFT JOIN departments d ON d.id = owl.department_id
     LEFT JOIN branches    b ON b.id = owl.branch_id
+    LEFT JOIN users       sv ON sv.id = owl.supervisor_id
     WHERE " . implode(' AND ', $where2);
 
 // Determine which legs to include:
@@ -769,6 +773,7 @@ include '../../includes/header.php';
                                 <th class="text-center" style="width:70px;">Hours</th>
                                 <th class="text-center" style="width:85px;">Status</th>
                                 <th>Description</th>
+                                <th style="width:100px;">Logged At</th>
                                 <th style="width:50px;" class="text-center">View</th>
                             </tr>
                         </thead>
@@ -812,6 +817,7 @@ include '../../includes/header.php';
                                         'reschedule_hours' => $l['reschedule_hours'] ?? '',
                                         'reschedule_notes' => $l['reschedule_notes'] ?? '',
                                         'notes' => $notes,
+                                        'supervisor_name' => $l['supervisor_name'] ?? '',
                                         'created_at' => $l['created_at'] ?? '',
                                     ]), ENT_QUOTES, 'UTF-8');
                                     ?>
@@ -852,9 +858,7 @@ include '../../includes/header.php';
                                             <?= $l['time_out'] ? date('h:i A', strtotime($l['time_out'])) : '—' ?>
                                         </td>
                                         <td class="text-center">
-                                            <strong style="color:<?= hoursColor((float) $l['duration_hours']) ?>">
-                                                <?= number_format((float) $l['duration_hours'], 1) ?>h
-                                            </strong>
+                                            <?= number_format((float) $l['duration_hours'], 1) ?>h
                                         </td>
                                         <td class="text-center">
                                             <?php if ($isOffice): ?>
@@ -886,6 +890,9 @@ include '../../includes/header.php';
                                         <td
                                             style="font-size:.77rem;color:#6b7280;max-width:220px;word-wrap:break-word;white-space:normal;">
                                             <?= htmlspecialchars(mb_substr($desc, 0, 80)) . (mb_strlen($desc) > 80 ? '…' : '') ?>
+                                        </td>
+                                        <td style="font-size:.74rem;color:#9ca3af;">
+                                            <?= $l['created_at'] ? date('d M Y, h:i A', strtotime($l['created_at'])) : '—' ?>
                                         </td>
                                         <td class="text-center">
                                             <button type="button" class="btn-view-log" data-log='<?= $modalData ?>'
@@ -1320,6 +1327,7 @@ include '../../includes/header.php';
 
             const items = [
                 { label: 'Staff', val: data.full_name + (data.employee_id ? ' (' + data.employee_id + ')' : '') },
+                { label: 'Supervisor', val: data.supervisor_name || '—' },
                 { label: 'Client', val: data.company_name + (data.company_code ? ' — ' + data.company_code : '') },
                 { label: 'PAN', val: data.pan_number || '—' },
                 { label: 'Department', val: data.dept_name || '—' },
@@ -1328,6 +1336,7 @@ include '../../includes/header.php';
                 { label: 'Time In', val: data.time_in || '—' },
                 { label: 'Time Out', val: data.time_out || '—' },
                 { label: 'Duration', val: data.duration },
+                { label: 'Logged At', val: data.created_at ? data.created_at : '—' },
                 { label: isOffice ? 'Work Status' : 'Visit Status', val: statusLabel },
             ];
 

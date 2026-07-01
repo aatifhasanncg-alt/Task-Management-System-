@@ -64,7 +64,7 @@ if (!$errors) {
                 $title,
                 $description,
                 $itDeptId,
-                (int) $user['branch_id'],
+                !empty($user['branch_id']) ? (int)$user['branch_id'] : 1,
                 $uid,
                 $openStatusId,
                 $priorityMap[$severity] ?? 'medium',
@@ -93,8 +93,8 @@ if (!$errors) {
                 $taskId,
                 $tokenNumber,
                 $uid,
-                (int) $user['department_id'],
-                (int) $user['branch_id'],
+                !empty($user['department_id']) ? (int)$user['department_id'] : 1,
+                !empty($user['branch_id']) ? (int)$user['branch_id'] : 1,
                 $category,
                 $description,
                 $severity,
@@ -156,7 +156,7 @@ if (!$errors) {
             $db->commit();
             logActivity('Raised IT issue #' . $taskId, 'it_support');
             setFlash('success', 'Issue raised successfully! IT support has been notified.');
-            header('Location: ' . APP_URL . '/' . $role . '/tasks/view.php?id=' . $taskId);
+            header('Location: ' . APP_URL . 'includes/issue_view.php?id=' . $taskId);
             exit;
 
         } catch (Exception $e) {

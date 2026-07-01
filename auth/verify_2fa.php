@@ -31,7 +31,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_once '../vendor/GoogleAuthenticator.php';
     $ga = new PHPGangsta_GoogleAuthenticator();
 
-    if ($ga->verifyCode($user['ga_secret'], $code, 1)) {
+    if (!empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
+        $minutesLeft = ceil((strtotime($user['locked_until']) - time()) / 60);
+        $errors[] = "Too many failed attempts. Please try again in {$minutesLeft} minute(s).";
+    } elseif ($ga->verifyCode($user['ga_secret'], $code, 1)) {
+        session_regenerate_id(true);
+
+        // ── Reset failed attempt counter on successful 2FA ────────────
+        $db->prepare("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?")
+            ->execute([$userId]);
+
         // Log OTP
         $db->prepare("INSERT INTO otp_logs (user_id, otp_code, type, ip_address) VALUES (?,?,?,?)")
             ->execute([$userId, $code, 'login', $_SERVER['REMOTE_ADDR']]);
@@ -41,13 +50,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $bSt->execute([$user['branch_id']]);
         $bName = $bSt->fetchColumn();
 
-        $_SESSION['user_id']   = $user['id'];
+        $_SESSION['user_id'] = $user['id'];
         $_SESSION['full_name'] = $user['full_name'];
-        $_SESSION['role']      = strtolower($user['role_name'] ?? 'staff');
+        $_SESSION['role'] = strtolower($user['role_name'] ?? 'staff');
         $_SESSION['branch_id'] = $user['branch_id'];
         $_SESSION['branch_name'] = $bName ?: '';
-        $_SESSION['dept_id']   = $user['department_id'];
-        $_SESSION['email']     = $user['email'];
+        $_SESSION['dept_id'] = $user['department_id'];
+        $_SESSION['email'] = $user['email'];
 
         // Store dept_code in session for routing
         $_SESSION['dept_code'] = '';
@@ -61,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Check if consulting department for redirect
 
-        if ($_SESSION['role'] === 'admin') {
+        if (in_array($_SESSION['role'], ['admin', 'manager'])) {
             $dSt = $db->prepare("SELECT department_id FROM admin_department_access WHERE admin_id=?");
             $dSt->execute([$user['id']]);
             $_SESSION['allowed_depts'] = array_column($dSt->fetchAll(), 'department_id');
@@ -73,10 +82,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $db->prepare("UPDATE users SET last_login=NOW() WHERE id=?")->execute([$user['id']]);
         logActivity('2FA Login', 'auth');
-        $_SESSION['role'] = $user['role_name'];
         $role = strtolower($user['role_name']);
         setRememberToken($user['id'], true);
-        session_regenerate_id(true);
         $deptCode = $_SESSION['dept_code'] ?? '';
 
         if ($deptCode === 'CON' && $role === 'admin') {
@@ -88,6 +95,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         exit;
     } else {
+        $newAttempts = (int) $user['failed_attempts'] + 1;
+        if ($newAttempts >= LOGIN_MAX_ATTEMPTS) {
+            $lockUntil = (new DateTime())->modify('+' . LOGIN_LOCKOUT_MINUTES . ' minutes')->format('Y-m-d H:i:s');
+            $db->prepare("UPDATE users SET failed_attempts=?, locked_until=? WHERE id=?")
+                ->execute([$newAttempts, $lockUntil, $userId]);
+        } else {
+            $db->prepare("UPDATE users SET failed_attempts=? WHERE id=?")->execute([$newAttempts, $userId]);
+        }
         $errors[] = 'Invalid authentication code. Please try again.';
     }
 }
@@ -98,7 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Two-Factor Authentication | TaskHub</title>
+    <title>Two-Factor Authentication | TAMS</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link

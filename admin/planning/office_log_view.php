@@ -26,12 +26,14 @@ $query = "
            ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2) AS duration_hours,
            c.company_name, c.company_code, c.pan_number,
            d.dept_name, b.branch_name,
-           u.full_name
+           u.full_name,
+           sv.full_name AS supervisor_name
     FROM office_work_logs owl
     LEFT JOIN companies   c ON c.id = owl.client_id
     LEFT JOIN departments d ON d.id = owl.department_id
     LEFT JOIN branches    b ON b.id = owl.branch_id
     LEFT JOIN users       u ON u.id = owl.user_id
+    LEFT JOIN users       sv ON sv.id = owl.supervisor_id
     WHERE owl.id = ?
 ";
 
@@ -52,9 +54,9 @@ $month = date('Y-m', strtotime($log['log_date']));
 
 $statusMeta = [
     'not_started' => ['label' => 'Not Started', 'color' => '#dc2626', 'bg' => '#fee2e2', 'icon' => 'fa-clock'],
-    'wip'         => ['label' => 'WIP',         'color' => '#3b82f6', 'bg' => '#eff6ff', 'icon' => 'fa-spinner'],
-    'holding'     => ['label' => 'Holding',     'color' => '#6d28d9', 'bg' => '#ede9fe', 'icon' => 'fa-pause-circle'],
-    'completed'   => ['label' => 'Completed',   'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
+    'wip' => ['label' => 'WIP', 'color' => '#3b82f6', 'bg' => '#eff6ff', 'icon' => 'fa-spinner'],
+    'holding' => ['label' => 'Holding', 'color' => '#6d28d9', 'bg' => '#ede9fe', 'icon' => 'fa-pause-circle'],
+    'completed' => ['label' => 'Completed', 'color' => '#10b981', 'bg' => '#f0fdf4', 'icon' => 'fa-check-circle'],
 ];
 $sm = $statusMeta[$log['status']] ?? ['label' => ucfirst($log['status'] ?? '—'), 'color' => '#9ca3af', 'bg' => '#f9fafb', 'icon' => 'fa-circle'];
 
@@ -145,11 +147,20 @@ include '../../includes/header.php';
                                 </div>
                                 <div class="col-md-4">
                                     <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;
-                letter-spacing:.05em;margin-bottom:5px;">
+                                        letter-spacing:.05em;margin-bottom:5px;">
                                         <i class="fas fa-user me-1"></i>Logged By
                                     </div>
                                     <div style="font-size:.9rem;font-weight:700;color:#1f2937;">
                                         <?= htmlspecialchars($log['full_name'] ?? '—') ?>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                                             letter-spacing:.05em;margin-bottom:5px;">
+                                        <i class="fas fa-user-shield me-1"></i>Supervisor
+                                    </div>
+                                    <div style="font-size:.9rem;font-weight:700;color:#1f2937;">
+                                        <?= htmlspecialchars($log['supervisor_name'] ?? '—') ?>
                                     </div>
                                 </div>
                                 <!-- Date -->
@@ -350,10 +361,10 @@ include '../../includes/header.php';
                         </div>
                         <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;">
                             <?php if ($log['user_id'] == $uid): ?>
-                            <a href="office_log_edit.php?id=<?= $log['id'] ?>" class="cn-btn cn-btn-gold"
-                                style="justify-content:center;">
-                                <i class="fas fa-edit"></i> Edit This Log
-                            </a>
+                                <a href="office_log_edit.php?id=<?= $log['id'] ?>" class="cn-btn cn-btn-gold"
+                                    style="justify-content:center;">
+                                    <i class="fas fa-edit"></i> Edit This Log
+                                </a>
                             <?php endif; ?>
                             <a href="office_log_create.php" class="cn-btn cn-btn-out" style="justify-content:center;">
                                 <i class="fas fa-plus"></i> New Office Log

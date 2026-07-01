@@ -69,7 +69,17 @@ if ($__isConsPrimary) {
 $month = substr($log['month_year'], 0, 7); // stored as 'Y-m'
 $monthDate = DateTime::createFromFormat('Y-m', $month) ?: new DateTime();
 $monthLabel = $monthDate->format('F Y');
-
+// ── Supervisor options: anyone in CON dept (primary or UDA), active ──────────
+$supervisors = $db->query("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    LEFT JOIN departments d  ON d.id = u.department_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    LEFT JOIN departments d2 ON d2.id = uda.department_id
+    WHERE u.is_active = 1
+      AND (d.dept_code = 'CON' OR d2.dept_code = 'CON')
+    ORDER BY u.full_name
+")->fetchAll(PDO::FETCH_ASSOC);
 // ── Companies ──────────────────────────────────────────────────
 $companies = $db->query("
     SELECT id, company_name, company_code, pan_number
@@ -111,7 +121,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $rescheduleTimeIn = trim($_POST['reschedule_time_in'] ?? '') ?: null;
     $rescheduleTimeOut = trim($_POST['reschedule_time_out'] ?? '') ?: null;
     $rescheduleNotes = trim($_POST['reschedule_notes'] ?? '');
-
+    $supervisorId = (isset($_POST['supervisor_id']) && $_POST['supervisor_id'] !== '')
+        ? (int) $_POST['supervisor_id']
+        : (int) ($log['supervisor_id'] ?? 0);
     if ($visitStatus === 'rescheduled' && !$rescheduleDate) {
         $errors[] = 'Please select a new date for the rescheduled visit.';
     }
@@ -140,6 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->prepare("
                 UPDATE work_logs SET
                     client_id        = ?,
+                    supervisor_id    = ?,
                     log_date         = ?,
                     day_of_week      = ?,
                     time_in          = ?,
@@ -151,6 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE id = ? AND user_id = ?
             ")->execute([
                         $clientId,
+                        $supervisorId,
                         $logDate,
                         date('l', strtotime($logDate)),
                         $timeIn,
@@ -175,11 +189,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($existingEntryId) {
                     // Update the existing plan entry in place
                     $db->prepare("
-            UPDATE work_plan_entries SET
-                plan_date = ?, day_of_week = ?, planned_time_in = ?,
-                planned_time_out = ?, planned_hours = ?, notes = ?
-            WHERE id = ?
-        ")->execute([
+                        UPDATE work_plan_entries SET
+                            plan_date = ?, day_of_week = ?, planned_time_in = ?,
+                            planned_time_out = ?, planned_hours = ?, notes = ?
+                        WHERE id = ?
+                    ")->execute([
                                 $rescheduleDate,
                                 $rDow,
                                 $rescheduleTimeIn,
@@ -210,13 +224,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (!$planId) {
                         $db->prepare("
-                INSERT INTO work_plans
-                (user_id, supervisor_id, department_id, branch_id, plan_month,
-                 week_number, week_start_date, week_end_date, status)
-                VALUES (?,?,?,?,?,?,?,?, 'draft')
-            ")->execute([
+                            INSERT INTO work_plans
+                            (user_id, supervisor_id, department_id, branch_id, plan_month,
+                            week_number, week_start_date, week_end_date, status)
+                            VALUES (?,?,?,?,?,?,?,?, 'draft')
+                        ")->execute([
                                     $uid,
-                                    $log['supervisor_id'] ?? null,
+                                    $supervisorId,
                                     $deptId,
                                     $branchId,
                                     $rPlanMonth,
@@ -280,7 +294,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
 
         } catch (Exception $e) {
-            $errors[] = 'Failed to save: ' . $e->getMessage();
+            error_log('[log_edit] log_id=' . $logId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save changes. Please try again or contact support.';
         }
     }
 }
@@ -475,7 +490,19 @@ include '../../includes/header.php';
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
-
+                                <!-- Supervisor -->
+                                <div class="cn-form-group" style="margin-bottom:14px;">
+                                    <label class="cn-label">Supervisor <span class="required-star">*</span></label>
+                                    <select name="supervisor_id" id="supervisorSelect" class="cn-input" required>
+                                        <option value="">— Select Supervisor —</option>
+                                        <?php foreach ($supervisors as $s): ?>
+                                            <option value="<?= $s['id'] ?>" <?= ($postData['supervisor_id'] ?? $log['supervisor_id']) == $s['id'] ? 'selected' : '' ?>>
+                                                <?= htmlspecialchars($s['full_name']) ?>
+                                                <?= $s['employee_id'] ? ' (' . htmlspecialchars($s['employee_id']) . ')' : '' ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
                                 <!-- Date + Times -->
                                 <div
                                     style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
@@ -769,7 +796,15 @@ include '../../includes/header.php';
             }
         }
     });
-
+    // ── TomSelect on supervisor ────────────────────────────────────
+    const supervisorSelectEl = document.getElementById('supervisorSelect');
+    if (supervisorSelectEl) {
+        new TomSelect(supervisorSelectEl, {
+            placeholder: 'Search supervisor…',
+            allowEmptyOption: true,
+            maxOptions: 500,
+        });
+    }
     // ── Duration calculator ────────────────────────────────────────
     function calcHours() {
         const tin = document.getElementById('timeIn').value;

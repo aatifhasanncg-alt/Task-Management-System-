@@ -620,7 +620,7 @@ const USE_AJAX_STAFF  = false; // staff list is always server-side
 const ADMIN_BRANCH_ID = <?= (int)$staffUser['branch_id'] ?>;
 const ADMIN_USER_ID   = <?= (int)$staffUser['id'] ?>;
 const ADMIN_USER_NAME = <?= json_encode($staffUser['full_name']) ?>;
-const AJAX_URL          = '<?= APP_URL ?>/ajax/get_staff_by_staff.php';
+const AJAX_URL          = '<?= APP_URL ?>/ajax/get_staff_by_admin.php';
 const PREV_ASSIGNED     = '<?= (int)($_POST['assigned_to'] ?? 0) ?>';
 
 let assignedToTS = null;

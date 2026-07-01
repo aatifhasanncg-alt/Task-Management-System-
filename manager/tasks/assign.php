@@ -889,7 +889,7 @@ include '../../includes/header.php';
     const ADMIN_BRANCH_ID = <?= (int) $adminUser['branch_id'] ?>;
     const ADMIN_USER_ID = <?= (int) $adminUser['id'] ?>;
     const ADMIN_USER_NAME = <?= json_encode($adminUser['full_name']) ?>;
-    const AJAX_URL = '<?= APP_URL ?>/ajax/get_staff_by_admin.php';
+    const AJAX_URL = '<?= APP_URL ?>/ajax/get_staff_by_executive.php';
     const PREV_ASSIGNED = '<?= (int) ($_POST['assigned_to'] ?? 0) ?>';
 
     let assignedToTS = null;
@@ -1000,7 +1000,7 @@ include '../../includes/header.php';
         const hint = document.getElementById('staff-hint');
         if (hint) hint.style.display = 'none';
 
-        fetch(`${AJAX_URL}?dept_id=${encodeURIComponent(deptId)}&caller_id=${ADMIN_USER_ID}`)
+        fetch(`${AJAX_URL}?dept_id=${encodeURIComponent(deptId)}&caller_id=${ADMIN_USER_ID}&branch_id=${ADMIN_BRANCH_ID}`)
             .then(r => r.json())
             .then(data => {
                 document.getElementById('staff-loading').style.display = 'none';

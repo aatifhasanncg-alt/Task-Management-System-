@@ -74,7 +74,8 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 try {
     $spreadsheet = IOFactory::load($file['tmp_name']);
 } catch (Exception $e) {
-    setFlash('error', 'Could not read file: ' . htmlspecialchars($e->getMessage()));
+    error_log('[bulk_import] file read failed: ' . $e->getMessage());
+    setFlash('error', 'Could not read the uploaded file. Please make sure it is a valid .xlsx, .xls, or .csv file and try again.');
     header('Location: add.php'); exit;
 }
 
@@ -184,36 +185,43 @@ for ($row = 2; $row <= $highRow; $row++) {
             }
         }
 
-        $db->prepare("
-            UPDATE companies SET
-                company_name    = ?,
-                pan_number      = ?,
-                reg_number      = ?,
-                company_type_id = ?,
-                branch_id       = ?,
-                return_type     = ?,
-                industry_id     = ?,
-                contact_person  = ?,
-                contact_phone   = ?,
-                contact_email   = ?,
-                address         = ?,
-                updated_at      = NOW()
-            WHERE id = ?
-        ")->execute([
-            $name,
-            $pan   ?: null,
-            $reg   ?: null,
-            $typeId,
-            $branchId,
-            $returnType ?: null,
-            $industryId,
-            $cPerson ?: null,
-            $cPhone  ?: null,
-            $cEmail  ?: null,
-            $addr    ?: null,
-            $existingId,
-        ]);
-        $updated++;
+        try {
+            $db->prepare("
+                UPDATE companies SET
+                    company_name    = ?,
+                    pan_number      = ?,
+                    reg_number      = ?,
+                    company_type_id = ?,
+                    branch_id       = ?,
+                    return_type     = ?,
+                    industry_id     = ?,
+                    contact_person  = ?,
+                    contact_phone   = ?,
+                    contact_email   = ?,
+                    address         = ?,
+                    updated_at      = NOW()
+                WHERE id = ?
+            ")->execute([
+                $name,
+                $pan   ?: null,
+                $reg   ?: null,
+                $typeId,
+                $branchId,
+                $returnType ?: null,
+                $industryId,
+                $cPerson ?: null,
+                $cPhone  ?: null,
+                $cEmail  ?: null,
+                $addr    ?: null,
+                $existingId,
+            ]);
+            $updated++;
+        } catch (Exception $e) {
+            error_log('[bulk_import] update row ' . $row . ' (code ' . $code . '): ' . $e->getMessage());
+            $rowErrors[] = "Row {$row} (\"{$name}\"): Failed to update — skipped.";
+            $skipped++;
+            continue;
+        }
 
     } else {
         // ── INSERT path ───────────────────────────────────────────────────────
@@ -241,28 +249,35 @@ for ($row = 2; $row <= $highRow; $row++) {
         $maxCodeNum++;
         $autoCode = 'CP-' . str_pad($maxCodeNum, 3, '0', STR_PAD_LEFT);
 
-        $db->prepare("
-            INSERT INTO companies
-            (company_name, company_code, pan_number, reg_number,
-             company_type_id, branch_id, return_type, industry_id,
-             contact_person, contact_phone, contact_email,
-             address, added_by, is_active, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW())
-        ")->execute([
-            $name, $autoCode,
-            $pan  ?: null,
-            $reg  ?: null,
-            $typeId,
-            $branchId,
-            $returnType ?: null,
-            $industryId,
-            $cPerson ?: null,
-            $cPhone  ?: null,
-            $cEmail  ?: null,
-            $addr    ?: null,
-            $user['id'],
-        ]);
-        $inserted++;
+        try {
+            $db->prepare("
+                INSERT INTO companies
+                (company_name, company_code, pan_number, reg_number,
+                 company_type_id, branch_id, return_type, industry_id,
+                 contact_person, contact_phone, contact_email,
+                 address, added_by, is_active, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW())
+            ")->execute([
+                $name, $autoCode,
+                $pan  ?: null,
+                $reg  ?: null,
+                $typeId,
+                $branchId,
+                $returnType ?: null,
+                $industryId,
+                $cPerson ?: null,
+                $cPhone  ?: null,
+                $cEmail  ?: null,
+                $addr    ?: null,
+                $user['id'],
+            ]);
+            $inserted++;
+        } catch (Exception $e) {
+            error_log('[bulk_import] insert row ' . $row . ' (' . $name . '): ' . $e->getMessage());
+            $rowErrors[] = "Row {$row} (\"{$name}\"): Failed to insert — skipped.";
+            $skipped++;
+            continue;
+        }
     }
 }
 

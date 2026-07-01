@@ -105,8 +105,9 @@ if ($isAdmin) {
 }
 $inList = implode(',', array_map('intval', $scopeIds)) ?: '0';
 // ── WHERE ──────────────────────────────────────────────────────────────────
-$where = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND owl.user_id IN ({$inList})";
-$params = [$month];
+// Include logs in scope by staff membership OR where the login user is the supervisor
+$where = "DATE_FORMAT(owl.log_date,'%Y-%m') = ? AND (owl.user_id IN ({$inList}) OR owl.supervisor_id = ?)";
+$params = [$month, $uid];
 
 if ($staffFilter) {
     $where .= " AND owl.user_id = ?";
@@ -134,11 +135,13 @@ $stmt = $db->prepare("
            ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2) AS duration_hours,
            c.company_name, c.company_code,
            u.full_name AS staff_name, u.employee_id,
+           sv.full_name AS supervisor_name,
            COALESCE(d.dept_name, d2.dept_name)  AS department_name,
            b.branch_name
     FROM office_work_logs owl
     LEFT JOIN companies c ON c.id = owl.client_id
     LEFT JOIN users u ON u.id = owl.user_id
+    LEFT JOIN users sv ON sv.id = owl.supervisor_id
     LEFT JOIN departments d ON d.id = owl.department_id
     LEFT JOIN (
         SELECT uda_inner.user_id, MIN(uda_inner.department_id) AS department_id
@@ -1052,6 +1055,12 @@ $baseQ = [
                                                             style="color:var(--border);margin:0 .2rem;">·</span><?= htmlspecialchars($l['employee_id']) ?>
                                                     <?php endif; ?>
                                                 </span>
+                                                <?php if (!empty($l['supervisor_name'])): ?>
+                                                    <span class="staff-tag">
+                                                        <i class="fas fa-user-shield me-1"></i>
+                                                        Supervisor: <?= htmlspecialchars($l['supervisor_name']) ?>
+                                                    </span>
+                                                <?php endif; ?>
                                             </div>
                                             <div class="log-desc" title="<?= htmlspecialchars($l['description'] ?? '') ?>">
                                                 <?= htmlspecialchars(mb_strimwidth($l['description'] ?? '', 0, 130, '…')) ?>

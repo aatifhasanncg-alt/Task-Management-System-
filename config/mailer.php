@@ -83,7 +83,7 @@ function sendGenericNotificationEmail(
 // ── Email templates ───────────────────────────────────────────
 
 function emailTaskAssigned(array $user, array $task): bool {
-    $subject = "[TaskHub] New Task Assigned: {$task['task_number']}";
+    $subject = "[TAMS] New Task Assigned: {$task['task_number']}";
     $html = emailWrapper("
         <h2 style='color:#0a0f1e;'>New Task Assigned</h2>
         <p>Dear <strong>{$user['full_name']}</strong>,</p>
@@ -95,14 +95,14 @@ function emailTaskAssigned(array $user, array $task): bool {
             <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Status</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{$task['status']}</td></tr>
             <tr><td style='padding:8px;background:#f9fafb;font-weight:600;'>Due Date</td><td style='padding:8px;'>" . ($task['due_date'] ? date('d M Y', strtotime($task['due_date'])) : 'Not set') . "</td></tr>
         </table>
-        <p>Please log in to TaskHub to view and update this task.</p>
+        <p>Please log in to TAMS to view and update this task.</p>
         <a href='" . ($task['url'] ?? APP_URL . '/staff/tasks/view.php?id=' . $task['id']) . "' style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>View Task</a>
     ");
     return sendMail($user['email'], $user['full_name'], $subject, $html);
 }
 
 function emailTaskTransferred(array $user, array $task, string $remarks): bool {
-    $subject = "[TaskHub] Task Transferred to You: {$task['task_number']}";
+    $subject = "[TAMS] Task Transferred to You: {$task['task_number']}";
 
     $remarksHtml = $remarks
         ? "<div style='background:#f5f3ff;border-left:4px solid #8b5cf6;padding:12px 16px;border-radius:6px;margin:16px 0;'>
@@ -133,11 +133,11 @@ function emailTaskTransferred(array $user, array $task, string $remarks): bool {
 }
 
 function emailPasswordReset(array $user, string $newPassword): bool {
-    $subject = "[TaskHub] Your Password Has Been Reset";
+    $subject = "[TAMS] Your Password Has Been Reset";
     $html = emailWrapper("
         <h2 style='color:#0a0f1e;'>Password Reset</h2>
         <p>Dear <strong>{$user['full_name']}</strong>,</p>
-        <p>Your TaskHub password has been reset by an administrator.</p>
+        <p>Your TAMS password has been reset by an administrator.</p>
         <p><strong>New Password:</strong> <code style='background:#f3f4f6;padding:4px 8px;border-radius:4px;font-size:16px;'>{$newPassword}</code></p>
         <p>Please log in and change your password immediately.</p>
         <a href='" . APP_URL . "/auth/login.php' style='display:inline-block;background:#c9a84c;color:#0a0f1e;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:700;'>Login Now</a>
@@ -186,7 +186,7 @@ function emailWorkPlanStatus(
 
     // Colour scheme per status
     if ($status === 'approved') {
-        $subject      = "[TaskHub] Work Plan Approved - Week {$week}";
+        $subject      = "[TAMS] Work Plan Approved - Week {$week}";
         $accentColor  = '#1D9E75';
         $statusBg     = '#E1F5EE';
         $statusTxt    = '#0F6E56';
@@ -194,7 +194,7 @@ function emailWorkPlanStatus(
         $actionLabel  = 'View Approved Plan';
         $remarksLabel = 'Approval Note';
     } else {
-        $subject      = "[TaskHub] Work Plan Rejected - Week {$week}";
+        $subject      = "[TAMS] Work Plan Rejected - Week {$week}";
         $accentColor  = '#E24B4A';
         $statusBg     = '#FCEBEB';
         $statusTxt    = '#A32D2D';
@@ -290,7 +290,7 @@ function emailWorkPlanStatus(
         {$actionBtn}
 
         <p style='color:#9ca3af;font-size:11px;margin-top:24px;'>
-            This is an automated notification from TaskHub. Please do not reply to this email.
+            This is an automated notification from TAMS. Please do not reply to this email.
         </p>
     ");
 
@@ -300,7 +300,7 @@ function emailWorkPlanStatus(
 // ── Work plan created / assigned notification email ───────────
 // $plan must contain: week, month, message, url
 function emailWorkPlan(array $user, array $plan): bool {
-    $subject = "[TaskHub] Work Plan Notification";
+    $subject = "[TAMS] Work Plan Notification";
 
     $html = emailWrapper("
         <h2 style='color:#0a0f1e;'>Work Plan Notification</h2>
@@ -338,7 +338,7 @@ function emailWrapper(string $content): string {
                 <span style='color:#0a0f1e;font-weight:900;font-size:14px;'>ASK</span>
             </div>
             <div>
-                <div style='color:white;font-weight:700;font-size:16px;'>TaskHub</div>
+                <div style='color:white;font-weight:700;font-size:16px;'>TAMS</div>
                 <div style='color:#8899aa;font-size:12px;'>ASK Global Advisory Pvt. Ltd.</div>
             </div>
         </div>

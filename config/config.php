@@ -3,9 +3,9 @@
 require_once __DIR__ . '/notify.php';
 require_once __DIR__ . '/../secrets.php';
 date_default_timezone_set('Asia/Kathmandu');
-define('APP_NAME',    'TaskHub');
+define('APP_NAME',    'TAMS');
 define('ORG_NAME',    'ASK Global Advisory Pvt. Ltd.');
-define('ORG_TAGLINE', 'At ASK business problems end, solutions begin');
+define('ORG_TAGLINE', 'You and us working together');
 define('ORG_EMAIL',   'askglobaladvisorydemo@gmail.com');
 define('APP_URL',     'http://localhost/mis/');
 define('APP_VERSION', '1.0.0');
@@ -44,7 +44,7 @@ define('DEPT_DETAIL_TABLES', [
 
 // ── Email / SMTP ──────────────────────────────────────────────
 define('MAIL_FROM',      'askglobaladvisorydemo@gmail.com');
-define('MAIL_FROM_NAME', 'ASK Global Advisory TaskHub');
+define('MAIL_FROM_NAME', 'ASK Global Advisory TAMS');
 
 // Cross-department assignment permissions
 // 'from_dept_code' => ['allowed_to_assign_dept_codes']

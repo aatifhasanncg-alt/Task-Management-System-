@@ -36,8 +36,19 @@ $companies = $db->query("
     FROM companies WHERE is_active=1 ORDER BY company_name
 ")->fetchAll();
 
-$errors = [];
+// ── Supervisor options: anyone in CON dept (primary or UDA), active ──────────
+$supervisors = $db->query("
+    SELECT DISTINCT u.id, u.full_name, u.employee_id
+    FROM users u
+    LEFT JOIN departments d  ON d.id = u.department_id
+    LEFT JOIN user_department_assignments uda ON uda.user_id = u.id
+    LEFT JOIN departments d2 ON d2.id = uda.department_id
+    WHERE u.is_active = 1
+      AND (d.dept_code = 'CON' OR d2.dept_code = 'CON')
+    ORDER BY u.full_name
+")->fetchAll(PDO::FETCH_ASSOC);
 
+$errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verifyCsrf();
 
@@ -48,6 +59,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $description = trim($_POST['description'] ?? '');
     $notes       = trim($_POST['notes']   ?? '') ?: null;
     $status      = in_array($_POST['status'] ?? '', ['not_started', 'wip', 'holding', 'completed']) ? $_POST['status'] : 'wip';
+    $supervisorId = (isset($_POST['supervisor_id']) && $_POST['supervisor_id'] !== '')
+        ? (int) $_POST['supervisor_id']
+        : (int) ($log['supervisor_id'] ?? 0);
+
+    if (!$supervisorId) {
+        $mb = $db->prepare("SELECT managed_by FROM users WHERE id = ?");
+        $mb->execute([$uid]);
+        $supervisorId = (int) $mb->fetchColumn();
+    }
 
     if (!$clientId)    $errors[] = 'Please select a client.';
     if (!$logDate)     $errors[] = 'Log date is required.';
@@ -60,54 +80,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $db->prepare("
-            UPDATE office_work_logs
-            SET client_id=?, log_date=?, time_in=?, time_out=?,
-                description=?, notes=?, status=?
-            WHERE id=? AND user_id=?
-        ")->execute([
-            $clientId, $logDate, $timeIn, $timeOut,
-            $description, $notes, $status,
-            $logId, $uid
-        ]);
-        // ── Supervisor Notifications ───────────────────────────────────────────────
         try {
-            require_once '../../config/notify.php';
+            $db->prepare("
+                UPDATE office_work_logs
+                SET client_id=?, supervisor_id=?, log_date=?, time_in=?, time_out=?,
+                    description=?, notes=?, status=?
+                WHERE id=? AND user_id=?
+            ")->execute([
+                $clientId, $supervisorId ?: null, $logDate, $timeIn, $timeOut,
+                $description, $notes, $status,
+                $logId, $uid
+            ]);
 
-            $clientStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
-            $clientStmt->execute([$clientId]);
-            $clientName = $clientStmt->fetchColumn() ?: '—';
+            // ── Supervisor Notifications ─────────────────────────────────────
+            try {
+                require_once '../../config/notify.php';
 
-            // Notify only the manager (managed_by)
-            if (!empty($user['managed_by'])) {
-                notify(
-                    (int)$user['managed_by'],
-                    'Office Work Log Edited',
-                    "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\nStatus: {$statusLabel} · Time: {$tin} – {$tout}\nDescription: " . ($description ?: '—'),
-                    'system',
-                    $logUrl,
-                    true,
-                    ['template' => 'generic']
-                );
+                $clientStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
+                $clientStmt->execute([$clientId]);
+                $clientName = $clientStmt->fetchColumn() ?: '—';
+
+                $staffName   = $user['full_name'] ?? ('User #' . $uid);
+                $logDateFmt  = date('d M Y', strtotime($logDate));
+                $statusLabels = [
+                    'not_started' => 'Not Started',
+                    'wip'         => 'WIP',
+                    'holding'     => 'Holding',
+                    'completed'   => 'Completed',
+                ];
+                $statusLabel = $statusLabels[$status] ?? ucfirst($status);
+                $tin  = $timeIn  ? date('g:i A', strtotime($timeIn))  : '—';
+                $tout = $timeOut ? date('g:i A', strtotime($timeOut)) : '—';
+
+                if (!empty($user['managed_by'])) {
+                    // Determine the manager's role to build the correct link
+                    $mgrRoleStmt = $db->prepare("
+                        SELECT r.role_name
+                        FROM users u
+                        LEFT JOIN roles r ON r.id = u.role_id
+                        WHERE u.id = ?
+                    ");
+                    $mgrRoleStmt->execute([(int)$user['managed_by']]);
+                    $mgrRole = strtolower($mgrRoleStmt->fetchColumn() ?: '');
+
+                    if ($mgrRole === 'admin') {
+                        $logUrl = APP_URL . '/admin/planning/office_log_view.php?id=' . $logId;
+                    } elseif (in_array($mgrRole, ['executive', 'manager'], true)) {
+                        $logUrl = APP_URL . '/' . $mgrRole . '/consulting/office_log_view.php?id=' . $logId;
+                    } else {
+                        // Fallback if role is missing/unrecognized
+                        $logUrl = APP_URL . '/staff/consulting/office_log_view.php?id=' . $logId;
+                    }
+
+                    notify(
+                        (int)$user['managed_by'],
+                        'Office Work Log Edited',
+                        "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\nStatus: {$statusLabel} · Time: {$tin} – {$tout}\nDescription: " . ($description ?: '—'),
+                        'system',
+                        $logUrl,
+                        true,
+                        ['template' => 'generic']
+                    );
+                }
+            } catch (Exception $notifEx) {
+                error_log('Office log edit notification error: ' . $notifEx->getMessage());
             }
-        } catch (Exception $notifEx) {
-            error_log('Office log edit notification error: ' . $notifEx->getMessage());
+
+            logActivity('Office work log #' . $logId . ' updated', 'consulting');
+            setFlash('success', 'Office work log updated.');
+            header('Location: office_log_view.php?id=' . $logId);
+            exit;
+
+        } catch (Exception $e) {
+            error_log('[office_log_edit:exec] log_id=' . $logId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save changes. Please try again or contact support.';
         }
-        logActivity('Office work log #' . $logId . ' updated', 'consulting');
-        setFlash('success', 'Office work log updated.');
-        header('Location: office_log_view.php?id=' . $logId);
-        exit;
     }
 
     // Merge POST into $log for re-display
     $log = array_merge($log, [
-        'client_id'   => $clientId,
-        'log_date'    => $logDate,
-        'time_in'     => $timeIn,
-        'time_out'    => $timeOut,
-        'description' => $description,
-        'notes'       => $notes,
-        'status'      => $status,
+        'client_id'     => $clientId,
+        'supervisor_id' => $supervisorId,
+        'log_date'      => $logDate,
+        'time_in'       => $timeIn,
+        'time_out'      => $timeOut,
+        'description'   => $description,
+        'notes'         => $notes,
+        'status'        => $status,
     ]);
 }
 
@@ -184,6 +243,20 @@ include '../../includes/header.php';
                                                     <?= htmlspecialchars($c['company_name']) ?>
                                                     <?= $c['company_code'] ? ' — ' . $c['company_code'] : '' ?>
                                                     <?= !empty($c['pan_number']) ? ' · PAN: ' . $c['pan_number'] : '' ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+
+                                    <div class="col-md-4">
+                                        <label class="cn-label">Supervisor <span class="required-star">*</span></label>
+                                        <select name="supervisor_id" id="supervisorSelect" class="cn-input" required>
+                                            <option value="">— Select Supervisor —</option>
+                                            <?php foreach ($supervisors as $s): ?>
+                                                <option value="<?= $s['id'] ?>"
+                                                    <?= (int)($log['supervisor_id'] ?? 0) === (int)$s['id'] ? 'selected' : '' ?>>
+                                                    <?= htmlspecialchars($s['full_name']) ?>
+                                                    <?= $s['employee_id'] ? ' (' . htmlspecialchars($s['employee_id']) . ')' : '' ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
@@ -384,6 +457,15 @@ new TomSelect('#clientSelect', {
     dropdownParent: 'body',
     searchField: ['text']
 });
+
+const supervisorSelectEl = document.getElementById('supervisorSelect');
+if (supervisorSelectEl) {
+    new TomSelect(supervisorSelectEl, {
+        placeholder: 'Search supervisor…',
+        allowEmptyOption: true,
+        maxOptions: 500,
+    });
+}
 
 function calcDuration() {
     const tin  = document.getElementById('timeIn').value;

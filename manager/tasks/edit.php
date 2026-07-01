@@ -471,7 +471,7 @@ include '../../includes/header.php';
                 <h5><i class="fas fa-info-circle text-warning me-2"></i>Task Details</h5>
             </div>
             <div class="card-mis-body">
-                form method="POST" id="editTaskForm">
+                <form method="POST" id="editTaskForm">
                     <input type="hidden" name="csrf_token"  value="<?= csrfToken() ?>">
                     <input type="hidden" name="update_task" value="1">
                     <div class="row g-3">

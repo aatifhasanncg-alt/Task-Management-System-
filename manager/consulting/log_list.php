@@ -1,6 +1,6 @@
 <?php
 /**
- * consulting/manager/log_list.php — Manager: All Staff Visit Logs + Office Logs
+ * consulting/executive/log_list.php — Executive: All Staff Visit Logs + Office Logs
  */
 require_once '../../config/db.php';
 require_once '../../config/config.php';
@@ -22,7 +22,7 @@ $weekNum = (int) ($_GET['week'] ?? 0);
 $logType = $_GET['log_type'] ?? '';   // '' = all | 'field' | 'office'
 $branchId = (int) ($_GET['branch_id'] ?? 0);
 
-$monthDate  = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
+$monthDate = DateTime::createFromFormat('Y-m-d', $month . '-01') ?: $now;
 $monthLabel = $monthDate->format('F Y');
 $branchList = $db->query("
     SELECT id, branch_name, branch_code
@@ -185,6 +185,7 @@ $sql1 = "
         NULL               AS notes,
         NULL               AS office_status,
         wl.visit_status,
+        wl.rescheduled_to_entry_id,
         wl.created_at,
         u.full_name,
         u.employee_id,
@@ -192,12 +193,21 @@ $sql1 = "
         c.company_code,
         c.pan_number,
         d.dept_name,
-        b.branch_name
+        b.branch_name,
+        sv.full_name         AS supervisor_name,
+        rpe.plan_date        AS reschedule_date,
+        rpe.planned_time_in  AS reschedule_time_in,
+        rpe.planned_time_out AS reschedule_time_out,
+        rpe.planned_hours    AS reschedule_hours,
+        rpe.notes            AS reschedule_notes
     FROM work_logs wl
     JOIN users      u ON u.id = wl.user_id
     JOIN companies  c ON c.id = wl.client_id
+    LEFT JOIN work_plan_entries rpe
+    ON rpe.id = wl.rescheduled_to_entry_id
     LEFT JOIN departments d ON d.id = wl.department_id
     LEFT JOIN branches    b ON b.id = wl.branch_id
+    LEFT JOIN users       sv ON sv.id = wl.supervisor_id
     WHERE " . implode(' AND ', $where1);
 
 $sql2 = "
@@ -215,6 +225,7 @@ $sql2 = "
         owl.notes,
         owl.status         AS office_status,
         NULL               AS visit_status,
+        NULL               AS rescheduled_to_entry_id,
         owl.created_at,
         u.full_name,
         u.employee_id,
@@ -222,12 +233,19 @@ $sql2 = "
         c.company_code,
         c.pan_number,
         d.dept_name,
-        b.branch_name
+        b.branch_name,
+        sv.full_name       AS supervisor_name,
+        NULL               AS reschedule_date,
+        NULL               AS reschedule_time_in,
+        NULL               AS reschedule_time_out,
+        NULL               AS reschedule_hours,
+        NULL               AS reschedule_notes
     FROM office_work_logs owl
     JOIN users      u ON u.id = owl.user_id
     JOIN companies  c ON c.id = owl.client_id
     LEFT JOIN departments d ON d.id = owl.department_id
     LEFT JOIN branches    b ON b.id = owl.branch_id
+    LEFT JOIN users       sv ON sv.id = owl.supervisor_id
     WHERE " . implode(' AND ', $where2);
 
 // Determine which legs to include:
@@ -268,6 +286,7 @@ include '../../includes/header.php';
 ?>
 
 <link rel="stylesheet" href="<?= APP_URL ?>/staff/planning/consulting.css">
+
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/style.css">
 <link rel="stylesheet" href="<?= APP_URL ?>/assets/css/datatables.custom.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
@@ -754,6 +773,7 @@ include '../../includes/header.php';
                                 <th class="text-center" style="width:70px;">Hours</th>
                                 <th class="text-center" style="width:85px;">Status</th>
                                 <th>Description</th>
+                                <th style="width:100px;">Logged At</th>
                                 <th style="width:50px;" class="text-center">View</th>
                             </tr>
                         </thead>
@@ -790,7 +810,14 @@ include '../../includes/header.php';
                                         'visit_status' => $l['visit_status'] ?? '',
                                         'office_status' => $l['office_status'] ?? '',
                                         'description' => $desc,
+                                        'rescheduled_to_entry_id' => $l['rescheduled_to_entry_id'] ?? '',
+                                        'reschedule_date' => $l['reschedule_date'] ?? '',
+                                        'reschedule_time_in' => $l['reschedule_time_in'] ?? '',
+                                        'reschedule_time_out' => $l['reschedule_time_out'] ?? '',
+                                        'reschedule_hours' => $l['reschedule_hours'] ?? '',
+                                        'reschedule_notes' => $l['reschedule_notes'] ?? '',
                                         'notes' => $notes,
+                                        'supervisor_name' => $l['supervisor_name'] ?? '',
                                         'created_at' => $l['created_at'] ?? '',
                                     ]), ENT_QUOTES, 'UTF-8');
                                     ?>
@@ -830,10 +857,8 @@ include '../../includes/header.php';
                                         <td class="text-center" style="font-size:.81rem;">
                                             <?= $l['time_out'] ? date('h:i A', strtotime($l['time_out'])) : '—' ?>
                                         </td>
-                                        <td class="text-center">
-                                            <strong style="color:<?= hoursColor((float) $l['duration_hours']) ?>">
-                                                <?= number_format((float) $l['duration_hours'], 1) ?>h
-                                            </strong>
+                                       <td class="text-center">
+                                            <?= number_format((float) $l['duration_hours'], 1) ?>h
                                         </td>
                                         <td class="text-center">
                                             <?php if ($isOffice): ?>
@@ -865,6 +890,9 @@ include '../../includes/header.php';
                                         <td
                                             style="font-size:.77rem;color:#6b7280;max-width:220px;word-wrap:break-word;white-space:normal;">
                                             <?= htmlspecialchars(mb_substr($desc, 0, 80)) . (mb_strlen($desc) > 80 ? '…' : '') ?>
+                                        </td>
+                                        <td style="font-size:.74rem;color:#9ca3af;">
+                                            <?= $l['created_at'] ? date('d M Y, h:i A', strtotime($l['created_at'])) : '—' ?>
                                         </td>
                                         <td class="text-center">
                                             <button type="button" class="btn-view-log" data-log='<?= $modalData ?>'
@@ -1138,7 +1166,26 @@ include '../../includes/header.php';
             <div class="log-detail-grid" id="modalGrid">
                 <!-- injected by JS -->
             </div>
+            <div id="modalRescheduleWrap" style="display:none;margin-top:15px;">
+                <div style="
+        background:#fffbeb;
+        border:1px solid #fde68a;
+        border-radius:10px;
+        padding:12px;
+    ">
+                    <div style="
+            font-size:.8rem;
+            font-weight:700;
+            color:#b45309;
+            margin-bottom:10px;
+        ">
+                        <i class="fas fa-redo me-1"></i>
+                        Rescheduled Details
+                    </div>
 
+                    <div id="modalRescheduleContent"></div>
+                </div>
+            </div>
             <!-- Description -->
             <div class="log-detail-item full mt-3" id="modalDescWrap">
                 <label>Description / Work Done</label>
@@ -1253,6 +1300,11 @@ include '../../includes/header.php';
         const descWrap = document.getElementById('modalDescWrap');
         const notesBox = document.getElementById('modalNotes');
         const notesWrap = document.getElementById('modalNotesWrap');
+        const rescheduleWrap =
+            document.getElementById('modalRescheduleWrap');
+
+        const rescheduleContent =
+            document.getElementById('modalRescheduleContent');
 
         function openModal(data) {
             const isOffice = data.source === 'office';
@@ -1275,6 +1327,7 @@ include '../../includes/header.php';
 
             const items = [
                 { label: 'Staff', val: data.full_name + (data.employee_id ? ' (' + data.employee_id + ')' : '') },
+                { label: 'Supervisor', val: data.supervisor_name || '—' },
                 { label: 'Client', val: data.company_name + (data.company_code ? ' — ' + data.company_code : '') },
                 { label: 'PAN', val: data.pan_number || '—' },
                 { label: 'Department', val: data.dept_name || '—' },
@@ -1283,6 +1336,7 @@ include '../../includes/header.php';
                 { label: 'Time In', val: data.time_in || '—' },
                 { label: 'Time Out', val: data.time_out || '—' },
                 { label: 'Duration', val: data.duration },
+                { label: 'Logged At', val: data.created_at ? data.created_at : '—' },
                 { label: isOffice ? 'Work Status' : 'Visit Status', val: statusLabel },
             ];
 
@@ -1308,7 +1362,57 @@ include '../../includes/header.php';
             } else {
                 notesWrap.style.display = 'none';
             }
+            if (
+                data.visit_status === 'rescheduled' &&
+                data.reschedule_date
+            ) {
+                rescheduleContent.innerHTML =
+                    '<div class="log-detail-grid">' +
 
+                    '<div class="log-detail-item">' +
+                    '<label>New Visit Date</label>' +
+                    '<div class="val">' + escapeHtml(data.reschedule_date) + '</div>' +
+                    '</div>' +
+
+                    '<div class="log-detail-item">' +
+                    '<label>Planned Hours</label>' +
+                    '<div class="val">' + escapeHtml(data.reschedule_hours || '-') + 'h</div>' +
+                    '</div>' +
+
+                    '<div class="log-detail-item">' +
+                    '<label>Time In</label>' +
+                    '<div class="val">' +
+                    (data.reschedule_time_in
+                        ? new Date('2000-01-01 ' + data.reschedule_time_in)
+                            .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+                        : '-') +
+                    '</div>' +
+                    '</div>' +
+
+                    '<div class="log-detail-item">' +
+                    '<label>Time Out</label>' +
+                    '<div class="val">' +
+                    (data.reschedule_time_out
+                        ? new Date('2000-01-01 ' + data.reschedule_time_out)
+                            .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+                        : '-') +
+                    '</div>' +
+                    '</div>' +
+
+                    '</div>' +
+
+                    (data.reschedule_notes ?
+                        '<div style="margin-top:10px;">' +
+                        '<label style="font-size:.7rem;color:#9ca3af;">Notes</label>' +
+                        '<div class="log-desc-box">' +
+                        escapeHtml(data.reschedule_notes) +
+                        '</div></div>'
+                        : '');
+
+                rescheduleWrap.style.display = '';
+            } else {
+                rescheduleWrap.style.display = 'none';
+            }
             overlay.classList.add('active');
             document.body.style.overflow = 'hidden';
         }

@@ -50,7 +50,7 @@ $uid = (int) $user['id'];
 
 $planId = (int) ($_GET['id'] ?? 0);
 if (!$planId) {
-    header('Location: plan_list.php');
+    header('Location: my_plans.php');
     exit;
 }
 
@@ -263,12 +263,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // ── End Notifications ──────────────────────────────────────────────
 
             setFlash('success', 'Plan updated successfully!');
-            header('Location: plan_list.php?month=' . $month);
+            header('Location: my_plans.php?month=' . $month);
             exit;
 
         } catch (Exception $e) {
             $db->rollBack();
-            $errors[] = $e->getMessage();
+            error_log('[plan_edit:staff] plan_id=' . $planId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to update the plan. Please try again or contact support.';
         }
     }
 }
@@ -434,7 +435,7 @@ include '../../includes/header.php';
                                         approval status.
                                     </div>
                                 <?php endif; ?>
-                                <a href="plan_list.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
+                                <a href="my_plans.php?month=<?= $month ?>" class="cn-btn cn-btn-out"
                                     style="justify-content:center;">
                                     <i class="fas fa-times"></i> Cancel
                                 </a>

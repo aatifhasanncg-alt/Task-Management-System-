@@ -60,43 +60,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $db->prepare("
-            UPDATE office_work_logs
-            SET client_id=?, log_date=?, time_in=?, time_out=?,
-                description=?, notes=?, status=?
-            WHERE id=? AND user_id=?
-        ")->execute([
-            $clientId, $logDate, $timeIn, $timeOut,
-            $description, $notes, $status,
-            $logId, $uid
-        ]);
-        // ── Supervisor Notifications ───────────────────────────────────────────────
         try {
-            require_once '../../config/notify.php';
+            $db->prepare("
+                UPDATE office_work_logs
+                SET client_id=?, log_date=?, time_in=?, time_out=?,
+                    description=?, notes=?, status=?
+                WHERE id=? AND user_id=?
+            ")->execute([
+                $clientId, $logDate, $timeIn, $timeOut,
+                $description, $notes, $status,
+                $logId, $uid
+            ]);
 
-            $clientStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
-            $clientStmt->execute([$clientId]);
-            $clientName = $clientStmt->fetchColumn() ?: '—';
+            // ── Supervisor Notifications ─────────────────────────────────────
+            try {
+                require_once '../../config/notify.php';
 
-            // Notify only the manager (managed_by)
-            if (!empty($user['managed_by'])) {
-                notify(
-                    (int)$user['managed_by'],
-                    'Office Work Log Edited',
-                    "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\nStatus: {$statusLabel} · Time: {$tin} – {$tout}\nDescription: " . ($description ?: '—'),
-                    'system',
-                    $logUrl,
-                    true,
-                    ['template' => 'generic']
-                );
+                $clientStmt = $db->prepare("SELECT company_name FROM companies WHERE id=?");
+                $clientStmt->execute([$clientId]);
+                $clientName = $clientStmt->fetchColumn() ?: '—';
+
+                $staffName   = $user['full_name'] ?? ('User #' . $uid);
+                $logDateFmt  = date('d M Y', strtotime($logDate));
+                $statusLabels = [
+                    'not_started' => 'Not Started',
+                    'wip'         => 'WIP',
+                    'holding'     => 'Holding',
+                    'completed'   => 'Completed',
+                ];
+                $statusLabel = $statusLabels[$status] ?? ucfirst($status);
+                $tin  = $timeIn  ? date('g:i A', strtotime($timeIn))  : '—';
+                $tout = $timeOut ? date('g:i A', strtotime($timeOut)) : '—';
+
+                if (!empty($user['managed_by'])) {
+                    // Determine the manager's role to build the correct link
+                    $mgrRoleStmt = $db->prepare("
+                        SELECT r.role_name
+                        FROM users u
+                        LEFT JOIN roles r ON r.id = u.role_id
+                        WHERE u.id = ?
+                    ");
+                    $mgrRoleStmt->execute([(int)$user['managed_by']]);
+                    $mgrRole = strtolower($mgrRoleStmt->fetchColumn() ?: '');
+
+                    if ($mgrRole === 'admin') {
+                        $logUrl = APP_URL . '/admin/planning/office_log_view.php?id=' . $logId;
+                    } elseif (in_array($mgrRole, ['executive', 'manager'], true)) {
+                        $logUrl = APP_URL . '/' . $mgrRole . '/consulting/office_log_view.php?id=' . $logId;
+                    } else {
+                        // Fallback if role is missing/unrecognized
+                        $logUrl = APP_URL . '/staff/consulting/office_log_view.php?id=' . $logId;
+                    }
+
+                    notify(
+                        (int)$user['managed_by'],
+                        'Office Work Log Edited',
+                        "{$staffName} edited an office work log for {$clientName} on {$logDateFmt}.\nStatus: {$statusLabel} · Time: {$tin} – {$tout}\nDescription: " . ($description ?: '—'),
+                        'system',
+                        $logUrl,
+                        true,
+                        ['template' => 'generic']
+                    );
+                }
+            } catch (Exception $notifEx) {
+                error_log('Office log edit notification error: ' . $notifEx->getMessage());
             }
-        } catch (Exception $notifEx) {
-            error_log('Office log edit notification error: ' . $notifEx->getMessage());
+
+            logActivity('Office work log #' . $logId . ' updated', 'consulting');
+            setFlash('success', 'Office work log updated.');
+            header('Location: office_log_view.php?id=' . $logId);
+            exit;
+
+        } catch (Exception $e) {
+            error_log('[office_log_edit:exec] log_id=' . $logId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save changes. Please try again or contact support.';
         }
-        logActivity('Office work log #' . $logId . ' updated', 'consulting');
-        setFlash('success', 'Office work log updated.');
-        header('Location: office_log_view.php?id=' . $logId);
-        exit;
     }
 
     // Merge POST into $log for re-display
@@ -146,15 +184,22 @@ include '../../includes/header.php';
 
             <!-- Errors -->
             <?php if (!empty($errors)): ?>
-                <div class="cn-alert cn-alert-danger mb-3">
-                    <div style="font-weight:700;font-size:.84rem;margin-bottom:5px;">
-                        <i class="fas fa-exclamation-circle me-1"></i>Please fix the following:
+                <div
+                    style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:.8rem 1rem;margin-bottom:1.25rem;display:flex;align-items:flex-start;gap:.75rem;">
+                    <i class="fas fa-exclamation-circle"
+                        style="color:#ef4444;font-size:1.1rem;margin-top:.1rem;flex-shrink:0;"></i>
+                    <div>
+                        <div style="font-size:.8rem;font-weight:700;color:#991b1b;margin-bottom:.35rem;">
+                            Please fix the following:
+                        </div>
+                        <ul style="margin:0;padding-left:1.25rem;font-size:.78rem;color:#991b1b;">
+                            <?php foreach ($errors as $rowIdx => $rowMsgs):
+                                foreach ((array) $rowMsgs as $e): ?>
+                                    <li>Entry #<?= (int) $rowIdx + 1 ?>: <?= htmlspecialchars($e) ?></li>
+                                <?php endforeach;
+                            endforeach; ?>
+                        </ul>
                     </div>
-                    <ul style="margin:0;padding-left:1.2rem;font-size:.8rem;">
-                        <?php foreach ($errors as $e): ?>
-                            <li><?= htmlspecialchars($e) ?></li>
-                        <?php endforeach; ?>
-                    </ul>
                 </div>
             <?php endif; ?>
 

@@ -1,5 +1,5 @@
 <?php
-// auth/login.php — ASK Global Advisory TaskHub
+// auth/login.php — ASK Global Advisory TAMS
 require_once '../config/db.php';
 require_once '../config/config.php';
 require_once '../config/session.php';
@@ -70,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Please select your branch.';
 
     if (!$errors) {
-    $st = $db->prepare("
+        $st = $db->prepare("
         SELECT u.*, r.role_name AS role, b.branch_name
         FROM   users    u
         JOIN   roles    r ON r.id  = u.role_id
@@ -80,56 +80,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           AND  u.is_active  = 1
         LIMIT  1
     ");
-    $st->execute([$username, $username, $role]);
-    $user = $st->fetch(PDO::FETCH_ASSOC);
+        $st->execute([$username, $username, $role]);
+        $user = $st->fetch(PDO::FETCH_ASSOC);
 
-    // ── Lockout check — happens BEFORE password_verify ──────────────
-    // Important: check lockout even if $user is null is unnecessary (no account to lock),
-    // but if $user exists, the lock must be checked before we touch password_verify.
-    if ($user && !empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
-        $minutesLeft = ceil((strtotime($user['locked_until']) - time()) / 60);
-        $errors[] = "This account is temporarily locked due to multiple failed login attempts. Please try again in {$minutesLeft} minute(s).";
+        // ── Lockout check — happens BEFORE password_verify ──────────────
+        // Important: check lockout even if $user is null is unnecessary (no account to lock),
+        // but if $user exists, the lock must be checked before we touch password_verify.
+        if ($user && !empty($user['locked_until']) && strtotime($user['locked_until']) > time()) {
+            $minutesLeft = ceil((strtotime($user['locked_until']) - time()) / 60);
+            $errors[] = "This account is temporarily locked due to multiple failed login attempts. Please try again in {$minutesLeft} minute(s).";
 
-    } elseif (!$user || !password_verify($password, $user['password'])) {
+        } elseif (!$user || !password_verify($password, $user['password'])) {
 
-        // ── Record failed attempt only if the account exists ───────
-        // (Prevents wasting a write on usernames that don't exist at all,
-        //  and avoids leaking which usernames are real via timing/behavior.)
-        if ($user) {
-            $newAttempts = (int) $user['failed_attempts'] + 1;
+            if ($user) {
+                $newAttempts = (int) $user['failed_attempts'] + 1;
 
-            if ($newAttempts >= LOGIN_MAX_ATTEMPTS) {
-                $lockUntil = (new DateTime())->modify('+' . LOGIN_LOCKOUT_MINUTES . ' minutes')->format('Y-m-d H:i:s');
+                if ($newAttempts >= LOGIN_MAX_ATTEMPTS) {
+                    $lockUntil = (new DateTime())->modify('+' . LOGIN_LOCKOUT_MINUTES . ' minutes')->format('Y-m-d H:i:s');
 
-                $db->prepare("
-                    UPDATE users
-                    SET failed_attempts = ?, locked_until = ?
-                    WHERE id = ?
-                ")->execute([$newAttempts, $lockUntil, $user['id']]);
+                    $db->prepare("
+                UPDATE users
+                SET failed_attempts = ?, locked_until = ?
+                WHERE id = ?
+            ")->execute([$newAttempts, $lockUntil, $user['id']]);
 
-                logActivity('Login locked', 'auth', "user_id={$user['id']}, attempts={$newAttempts}");
-
-                $errors[] = "Too many failed attempts. This account has been locked for " . LOGIN_LOCKOUT_MINUTES . " minutes.";
-            } else {
-                $db->prepare("
-                    UPDATE users
-                    SET failed_attempts = ?
-                    WHERE id = ?
-                ")->execute([$newAttempts, $user['id']]);
-
-                $remaining = LOGIN_MAX_ATTEMPTS - $newAttempts;
-                $errors[] = "Invalid credentials. Please check your username, password, and role. ({$remaining} attempt(s) remaining)";
+                    logActivity('Login locked', 'auth', "user_id={$user['id']}, attempts={$newAttempts}");
+                } else {
+                    $db->prepare("
+                UPDATE users
+                SET failed_attempts = ?
+                WHERE id = ?
+            ")->execute([$newAttempts, $user['id']]);
+                }
             }
-        } else {
+
+            // Same generic message whether or not the account exists
             $errors[] = 'Invalid credentials. Please check your username, password, and role.';
-        }
 
-    } elseif (!in_array($role, ['executive', 'manager']) && (int) $user['branch_id'] !== $branchId) {
-        $errors[] = 'You are not assigned to the selected branch.';
+        } elseif (!in_array($role, ['executive', 'manager']) && (int) $user['branch_id'] !== $branchId) {
+            $errors[] = 'You are not assigned to the selected branch.';
 
-    } else {
-        // ── Successful login — reset attempt counter ───────────────
-        $db->prepare("
+        } else {
+            // ── Successful login — reset attempt counter ───────────────
+            $db->prepare("
             UPDATE users
             SET failed_attempts = 0, locked_until = NULL
             WHERE id = ?
@@ -140,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['force_pw_change_user'] = $user['id'];
                 $_SESSION['force_pw_change_role'] = $user['role'];
-                header('Location: /auth/force_password_change.php');
+                header('Location: ' . APP_URL . 'auth/force_password_change.php');
                 exit;
             }
 
@@ -167,9 +160,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['2fa_pending_user'] = $user['id'];
                 $_SESSION['2fa_pending_role'] = $role;
 
-                // ✅ ADD THIS — token set before 2FA redirect
-                setRememberToken($user['id'], true);
-
                 header('Location: verify_2fa.php');
                 exit;
             }
@@ -193,15 +183,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         last_login_ip = ?
                     WHERE id = ?
                 ")->execute([$loginIp, $user['id']]);
-
-            // Force password change check — BEFORE any session is written
-            if (!empty($user['must_change_password'])) {
-                session_regenerate_id(true);
-                $_SESSION['force_pw_change_user'] = $user['id'];
-                $_SESSION['force_pw_change_role'] = $user['role'];
-                header('Location: /auth/force_password_change.php');
-                exit;
-            }
 
             session_regenerate_id(true);
 
@@ -257,7 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($deptCode === 'CON' && $role === 'admin') {
                 header('Location: ' . APP_URL . 'admin/planning/index.php');
             } elseif ($deptCode === 'CON' && $role === 'manager') {
-                header('Location: ' . APP_URL . 'manager/consutling/index.php');
+                header('Location: ' . APP_URL . 'manager/consulting/index.php');
             } elseif ($deptCode === 'CON' && $role === 'staff') {
                 header('Location: ' . APP_URL . 'staff/planning/index.php');
             } else {
@@ -278,7 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login — TaskHub | ASK Global Advisory</title>
+    <title>Login — TAMS | ASK Global Advisory</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link
@@ -701,7 +682,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <!-- ══ RIGHT ══════════════════════════════════════════════════════════ -->
         <div class="login-right">
             <h3>Welcome Back</h3>
-            <p class="subtitle">Sign in to continue to TaskHub</p>
+            <p class="subtitle">Sign in to continue to TAMS</p>
 
             <!-- Role tabs -->
             <div class="role-tabs" role="tablist" aria-label="Select your role">

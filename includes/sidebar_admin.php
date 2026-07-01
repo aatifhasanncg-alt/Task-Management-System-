@@ -143,7 +143,7 @@ function conNavActive(string $file, string $dir = ''): string
     <div class="sidebar-brand">
         <div class="brand-logo"><span>ASK</span></div>
         <div>
-            <div class="brand-name">TaskHub</div>
+            <div class="brand-name">TAMS</div>
             <div class="brand-sub">ASK Global Advisory</div>
         </div>
     </div>
@@ -322,7 +322,7 @@ function conNavActive(string $file, string $dir = ''): string
             <?php endif; ?>
             <?php if ($__hasITAccess): ?>
                 <a href="<?= APP_URL ?>it/issue_list.php" class="nav-item<?= conNavActive('issue_list.php', 'it') ?>">
-                    <i class="fa-regular fa-bug"></i><span>Technical Issues</span>
+                    <i class="fa-solid fa-screwdriver-wrench"></i><span>Technical Issues</span>
                 </a>
             <?php endif; ?>
 

@@ -263,7 +263,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         } catch (Exception $ex) {
             $db->rollBack();
-            $errors[] = 'Failed to save: ' . $ex->getMessage();
+            error_log('[plan_edit:add_entries] plan_id=' . $planId . ': ' . $ex->getMessage());
+            $errors[] = 'Failed to save entries. Please try again or contact support.';
         }
         // Stop here — non-full-editor should not fall through to full edit
         if (empty($errors)) return;
@@ -343,7 +344,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $user['full_name'] . ' updated your work plan — Week ' . $weekNum . ', ' . $monthLabel,
                         APP_URL . '/staff/planning/plan_view.php?id=' . $planId,
                     ]);
-                } catch (Exception $ne) {}
+                } catch (Exception $ne) {
+                    error_log('[plan_edit:notify] plan_id=' . $planId . ': ' . $ne->getMessage());
+                }
             }
 
             logActivity('Edited plan #' . $planId . ' Week ' . $weekNum, 'consulting');
@@ -354,7 +357,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         } catch (Exception $e) {
             $db->rollBack();
-            $errors[] = 'Failed to save: ' . $e->getMessage();
+            error_log('[plan_edit:full] plan_id=' . $planId . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save the plan. Please try again or contact support.';
         }
     }
 }

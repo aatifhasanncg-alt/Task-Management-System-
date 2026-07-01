@@ -24,34 +24,31 @@ $monthStart = $monthDate->format('Y-m-01');
 $monthLabel = $monthDate->format('F Y');
 
 $weeks = [];
-$first = clone $monthDate;
 $last  = clone $monthDate;
 $last->modify('last day of this month');
 
-// Rewind to the Sunday that starts the week containing the 1st
-$dowFirst = (int)$first->format('w');
-if ($dowFirst !== 0) {
-    $first->modify('-' . $dowFirst . ' days');
-}
-
-$cur = clone $first;
+// Month always starts exactly on the 1st — no rewinding into the previous month
+$cur = clone $monthDate;
 $wn  = 1;
-while ($cur <= $last && $wn <= 5) {
+while ($cur <= $last && $wn <= 6) {
     $ws = clone $cur;
-    $we = clone $cur;
-    $we->modify('+6 days'); // Sun + 6 = Sat
+    $dowStart       = (int)$ws->format('w');       // 0=Sun ... 6=Sat
+    $daysToSaturday = (6 - $dowStart + 7) % 7;      // days until this week's Saturday
+    $we = clone $ws;
+    $we->modify('+' . $daysToSaturday . ' days');   // Sun → Sat
     if ($we > $last) $we = clone $last;
+
     $weeks[] = [
         'week_number'     => $wn,
         'week_start_date' => $ws->format('Y-m-d'),
         'week_end_date'   => $we->format('Y-m-d'),
         'label'           => 'Week ' . $wn . ' (' . $ws->format('d M') . ' – ' . $we->format('d M') . ')',
     ];
+
     $cur = clone $we;
-    $cur->modify('+1 day');
+    $cur->modify('+1 day'); // next week starts the day after this week's Saturday
     $wn++;
 }
-
 // Companies for this branch
 $companies = $db->prepare("
     SELECT id, company_name, company_code, pan_number FROM companies
@@ -192,7 +189,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         } catch (Exception $e) {
             $db->rollBack();
-            $errors[] = 'Failed to save plan: ' . $e->getMessage();
+            error_log('[plan_create] user_id=' . $uid . ': ' . $e->getMessage());
+            $errors[] = 'Failed to save the plan. Please try again or contact support.';
         }
     }
 }

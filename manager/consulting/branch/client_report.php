@@ -349,7 +349,7 @@ $unvisitedClients = $db->query("
 
 // ── Clients for filter dropdown ───────────────────────────────
 $clientsForFilter = $db->query("
-    SELECT DISTINCT c.id, c.company_name
+    SELECT DISTINCT c.id, c.company_name, c.company_code, c.pan_number
     FROM companies c
     WHERE c.is_active = 1
       " . ($filterBranchId ? "AND c.branch_id = {$filterBranchId}" : "") . "
@@ -397,6 +397,8 @@ $pageTitle = 'Client Report — ' . $monthLabel;
 include '../../../includes/header.php';
 ?>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 
 <div class="app-wrapper">
     <?php include '../../../includes/sidebar_manager.php'; ?>
@@ -487,22 +489,30 @@ include '../../../includes/header.php';
                         <?php endif; ?>
                         <div class="col-md-2">
                             <label class="form-label-mis">Client</label>
-                            <select id="fClient" class="form-select form-select-sm" onchange="applyFilters()">
+                            <select id="fClient" class="form-select form-select-sm">
                                 <option value="">— All Clients —</option>
                                 <?php foreach ($clientsForFilter as $cf): ?>
-                                    <option value="<?= $cf['id'] ?>" <?= $filterClientId == $cf['id'] ? 'selected' : '' ?>>
+                                    <option value="<?= $cf['id'] ?>"
+                                        data-code="<?= htmlspecialchars($cf['company_code'] ?? '') ?>"
+                                        data-pan="<?= htmlspecialchars($cf['pan_number'] ?? '') ?>"
+                                        <?= $filterClientId == $cf['id'] ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($cf['company_name']) ?>
+                                        <?= $cf['company_code'] ? ' — ' . $cf['company_code'] : '' ?>
+                                        <?= $cf['pan_number'] ? ' — ' . $cf['pan_number'] : '' ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-2">
                             <label class="form-label-mis">Staff</label>
-                            <select id="fStaff" class="form-select form-select-sm" onchange="applyFilters()">
+                            <select id="fStaff" class="form-select form-select-sm">
                                 <option value="">— All Staff —</option>
                                 <?php foreach ($scopeStaff as $sf): ?>
-                                    <option value="<?= $sf['id'] ?>" <?= $filterStaffId == $sf['id'] ? 'selected' : '' ?>>
+                                    <option value="<?= $sf['id'] ?>"
+                                        data-emp="<?= htmlspecialchars($sf['employee_id'] ?? '') ?>"
+                                        <?= $filterStaffId == $sf['id'] ? 'selected' : '' ?>>
                                         <?= htmlspecialchars($sf['full_name']) ?>
+                                        <?= $sf['employee_id'] ? ' (' . $sf['employee_id'] . ')' : '' ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -1134,7 +1144,59 @@ include '../../../includes/header.php';
     const TREND_FIELD_HOURS = <?= json_encode(array_map(fn($t) => (float) $t['hours'], $trendData)) ?>;
     const TREND_FIELD_VISITS = <?= json_encode(array_map(fn($t) => (int) $t['logs'], $trendData)) ?>;
     const TREND_OFF_HOURS = <?= json_encode($officeTrendMapped) ?>;
+    new TomSelect('#fClient', {
+        placeholder: 'Search by name, code or PAN…',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        score: function (search) {
+            const s = search.toLowerCase();
+            return function (item) {
+                const text = (item.text || '').toLowerCase();
+                const code = (item.$option?.dataset?.code || '').toLowerCase();
+                const pan = (item.$option?.dataset?.pan || '').toLowerCase();
+                return (text.includes(s) || code.includes(s) || pan.includes(s)) ? 1 : 0;
+            };
+        },
+        render: {
+            option: function (data, escape) {
+                const code = data.$option?.dataset?.code || '';
+                const pan = data.$option?.dataset?.pan || '';
+                const name = escape(data.text.split(' — ')[0]);
+                return `<div style="padding:3px 2px;">
+                <div style="font-weight:600;font-size:.83rem;">${name}</div>
+                <div style="font-size:.7rem;color:#9ca3af;display:flex;gap:8px;margin-top:1px;">
+                    ${code ? `<span><i class="fas fa-tag" style="font-size:.6rem;"></i> ${escape(code)}</span>` : ''}
+                    ${pan ? `<span><i class="fas fa-id-card" style="font-size:.6rem;"></i> PAN: ${escape(pan)}</span>` : ''}
+                </div>
+            </div>`;
+            },
+            item: function (data, escape) {
+                const pan = data.$option?.dataset?.pan || '';
+                const name = escape(data.text.split(' — ')[0]);
+                return pan
+                    ? `<div>${name} <span style="font-size:.7rem;color:#9ca3af;">(PAN: ${escape(pan)})</span></div>`
+                    : `<div>${name}</div>`;
+            }
+        },
+        onChange: function () { applyFilters(); }
+    });
 
+    new TomSelect('#fStaff', {
+        placeholder: 'Search by name or employee ID…',
+        allowEmptyOption: true,
+        maxOptions: 500,
+        searchField: ['text'],
+        score: function (search) {
+            const s = search.toLowerCase();
+            return function (item) {
+                const text = (item.text || '').toLowerCase();
+                const emp = (item.$option?.dataset?.emp || '').toLowerCase();
+                return (text.includes(s) || emp.includes(s)) ? 1 : 0;
+            };
+        },
+        onChange: function () { applyFilters(); }
+    });
     /* ── 6-Month Trend Chart ─────────────────────────────────────── */
     new Chart(document.getElementById('trendChart'), {
         type: 'line',

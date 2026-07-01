@@ -24,11 +24,13 @@ $log = $db->prepare("
     SELECT owl.*,
            ROUND(TIME_TO_SEC(TIMEDIFF(owl.time_out, owl.time_in)) / 3600, 2) AS duration_hours,
            c.company_name, c.company_code, c.pan_number,
-           d.dept_name, b.branch_name
+           d.dept_name, b.branch_name,
+           sv.full_name AS supervisor_name
     FROM office_work_logs owl
     LEFT JOIN companies   c ON c.id = owl.client_id
     LEFT JOIN departments d ON d.id = owl.department_id
     LEFT JOIN branches    b ON b.id = owl.branch_id
+    LEFT JOIN users       sv ON sv.id = owl.supervisor_id
     WHERE owl.id = ? AND owl.user_id = ?
 ");
 $log->execute([$id, $uid]);
@@ -146,6 +148,17 @@ include '../../includes/header.php';
                                     <div style="font-size:.75rem;color:#6b7280;margin-top:2px;">
                                         <?= date('l', strtotime($log['log_date'])) ?>
                                         &nbsp;·&nbsp; <?= date('F Y', strtotime($log['log_date'])) ?>
+                                    </div>
+                                </div>
+
+                                <!-- Supervisor -->
+                                <div class="col-md-4">
+                                    <div style="font-size:.7rem;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                                                letter-spacing:.05em;margin-bottom:5px;">
+                                        <i class="fas fa-user-shield me-1"></i>Supervisor
+                                    </div>
+                                    <div style="font-size:.9rem;font-weight:700;color:#1f2937;">
+                                        <?= htmlspecialchars($log['supervisor_name'] ?? '—') ?>
                                     </div>
                                 </div>
 

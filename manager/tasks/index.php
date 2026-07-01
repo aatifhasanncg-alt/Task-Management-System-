@@ -467,6 +467,7 @@ include '../../includes/header.php';
                                 <th>Status</th>
                                 <th>Priority</th>
                                 <th>Due Date</th>
+                                <th>Created</th>
                                 <th>FY</th>
                                 <th>Actions</th>
                             </tr>
@@ -474,7 +475,7 @@ include '../../includes/header.php';
                         <tbody>
                             <?php if (empty($tasks)): ?>
                                 <tr>
-                                    <td colspan="9" class="empty-state"><i class="fas fa-list-check"></i> No tasks found
+                                    <td colspan="10" class="empty-state"><i class="fas fa-list-check"></i> No tasks found
                                     </td>
                                 </tr>
                             <?php endif; ?>
@@ -512,10 +513,12 @@ include '../../includes/header.php';
                                     <td>
                                         <div
                                             style="font-weight:500;font-size:.87rem;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                            <?= htmlspecialchars($t['title']) ?></div>
+                                            <?= htmlspecialchars($t['title']) ?>
+                                        </div>
                                         <?php if ($t['company_name']): ?>
                                             <div style="font-size:.73rem;color:#9ca3af;">
-                                                <?= htmlspecialchars($t['company_name']) ?></div><?php endif; ?>
+                                                <?= htmlspecialchars($t['company_name']) ?>
+                                            </div><?php endif; ?>
                                     </td>
                                     <td>
                                         <span
@@ -524,7 +527,8 @@ include '../../includes/header.php';
                                         </span>
                                         <?php if (!empty($t['branch_name'])): ?>
                                             <div style="font-size:.68rem;color:#9ca3af;margin-top:.1rem;">
-                                                <?= htmlspecialchars($t['branch_name']) ?></div><?php endif; ?>
+                                                <?= htmlspecialchars($t['branch_name']) ?>
+                                            </div><?php endif; ?>
                                     </td>
                                     <td style="font-size:.85rem;"><?= htmlspecialchars($t['assigned_to_name'] ?? '—') ?>
                                     </td>
@@ -539,9 +543,14 @@ include '../../includes/header.php';
                                     </td>
                                     <td
                                         style="font-size:.8rem;<?= $overdue ? 'color:#ef4444;font-weight:600;' : 'color:#6b7280;' ?>">
-                                        <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?></td>
+                                        <?= $t['due_date'] ? date('d M Y', strtotime($t['due_date'])) : '—' ?>
+                                    </td>
+                                    <td style="font-size:.78rem;color:#9ca3af;white-space:nowrap;">
+                                        <?= $t['created_at'] ? date('d M Y', strtotime($t['created_at'])) : '—' ?>
+                                    </td>
                                     <td style="font-size:.78rem;color:#9ca3af;">
-                                        <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?></td>
+                                        <?= htmlspecialchars($t['fiscal_year'] ?? '—') ?>
+                                    </td>
                                     <td>
                                         <div class="d-flex gap-1">
                                             <a href="view.php?id=<?= $t['id'] ?>" class="btn btn-sm btn-outline-secondary"
@@ -564,15 +573,18 @@ include '../../includes/header.php';
                             <ul class="pagination pagination-sm mb-0">
                                 <?php if ($page > 1): ?>
                                     <li class="page-item"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>">‹</a>
+                                    </li>
                                 <?php endif; ?>
                                 <?php for ($p = max(1, $page - 2); $p <= min($pages, $page + 2); $p++): ?>
                                     <li class="page-item <?= $p == $page ? 'active' : '' ?>"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $p])) ?>"><?= $p ?></a>
+                                    </li>
                                 <?php endfor; ?>
                                 <?php if ($page < $pages): ?>
                                     <li class="page-item"><a class="page-link"
-                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a></li>
+                                            href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>">›</a>
+                                    </li>
                                 <?php endif; ?>
                             </ul>
                         </nav>

@@ -6,10 +6,17 @@ require_once __DIR__ . '/auth_token.php';
 
 // ── SESSION CONFIG ────────────────────────────────────────────
 ini_set('session.gc_maxlifetime', '86400'); // 1 day server-side
+ini_set('session.use_strict_mode', '1');
+ini_set('session.use_only_cookies', '1');
+ini_set('session.gc_probability', '1');
+ini_set('session.gc_divisor', '100');
+$isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+
 session_set_cookie_params([
-    'lifetime' => 0,          // browser session cookie is fine —
-    'path'     => '/',        // remember_token handles persistence
-    'secure'   => isset($_SERVER['HTTPS']),
+    'lifetime' => 0,
+    'path' => '/',
+    'secure' => $isHttps,
     'httponly' => true,
     'samesite' => 'Lax',
 ]);
@@ -23,54 +30,80 @@ tryAutoLogin();
 
 // ── LOGIN & ROLE CHECKS ───────────────────────────────────────
 
-function requireLogin(): void {
+function requireLogin(): void
+{
     if (empty($_SESSION['user_id'])) {
-        header('Location: /auth/login.php');
+        header('Location: ' . rtrim(APP_URL, '/') . '/auth/login.php');
         exit;
     }
 }
 
-function requireRole(string ...$roles): void {
+function requireRole(string ...$roles): void
+{
     requireLogin();
     if (!in_array($_SESSION['role'] ?? '', $roles, true)) {
-        header('Location: /auth/login.php?error=unauthorized');
+        header('Location: ' . rtrim(APP_URL, '/') . '/auth/login.php?error=unauthorized');
         exit;
     }
     // ── Update active_at on every authenticated page load ──
     try {
-        updateActiveAt(getDB(), (int)$_SESSION['user_id']);
-    } catch (Exception $e) {}
+        updateActiveAt(getDB(), (int) $_SESSION['user_id']);
+    } catch (Exception $e) {
+    }
 }
 
-function requireExecutive(): void { requireRole('executive'); }
-function requireAdmin(): void     { requireRole('admin'); }
-function requireManager(): void   { requireRole('manager'); }
-function requireAnyRole(): void   { requireRole('executive', 'admin', 'manager', 'staff'); }
+function requireExecutive(): void
+{
+    requireRole('executive');
+}
+function requireAdmin(): void
+{
+    requireRole('admin');
+}
+function requireManager(): void
+{
+    requireRole('manager');
+}
+function requireAnyRole(): void
+{
+    requireRole('executive', 'admin', 'manager', 'staff');
+}
 
-function getClientIp(): string {
-    $ip = $_SERVER['HTTP_X_FORWARDED_FOR']
-          ?? $_SERVER['HTTP_CLIENT_IP']
-          ?? $_SERVER['REMOTE_ADDR']
-          ?? '0.0.0.0';
+function getClientIp(): string
+{
+    if (defined('TRUSTED_PROXY') && TRUSTED_PROXY) {
+        $ip = $_SERVER['HTTP_X_FORWARDED_FOR']
+            ?? $_SERVER['HTTP_CLIENT_IP']
+            ?? $_SERVER['REMOTE_ADDR']
+            ?? '0.0.0.0';
+    } else {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    }
     if (str_contains($ip, ',')) {
         $ip = trim(explode(',', $ip)[0]);
     }
     return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '0.0.0.0';
 }
 
-function updateActiveAt(PDO $db, int $userId): void {
+function updateActiveAt(PDO $db, int $userId): void
+{
     try {
         $db->prepare("UPDATE users SET active_at = NOW() WHERE id = ?")
-           ->execute([$userId]);
-    } catch (Exception $e) {}
+            ->execute([$userId]);
+    } catch (Exception $e) {
+        error_log('[auth:updateActiveAt] ' . $e->getMessage());
+        return;
+    }
 }
 // ── CURRENT USER ─────────────────────────────────────────────
 
-function currentUser(): array {
+function currentUser(): array
+{
     $sessionUser = $_SESSION['user'] ?? [];
     $uid = $sessionUser['id'] ?? 0;
 
-    if (!$uid) return [];
+    if (!$uid)
+        return [];
 
     try {
         $db = getDB();
@@ -87,21 +120,37 @@ function currentUser(): array {
 
         return $user ?: [];
     } catch (Exception $e) {
+        error_log('[auth:currentUser] ' . $e->getMessage());
         return [];
     }
 }
 
-function isExecutive(): bool { return ($_SESSION['role'] ?? '') === 'executive'; }
-function isAdmin(): bool     { return ($_SESSION['role'] ?? '') === 'admin'; }
-function isManager(): bool   { return ($_SESSION['role'] ?? '') === 'manager'; }
-function isStaff(): bool     { return ($_SESSION['role'] ?? '') === 'staff'; }
+function isExecutive(): bool
+{
+    return ($_SESSION['role'] ?? '') === 'executive';
+}
+function isAdmin(): bool
+{
+    return ($_SESSION['role'] ?? '') === 'admin';
+}
+function isManager(): bool
+{
+    return ($_SESSION['role'] ?? '') === 'manager';
+}
+function isStaff(): bool
+{
+    return ($_SESSION['role'] ?? '') === 'staff';
+}
 
-function isCoreAdmin(): bool {
+function isCoreAdmin(): bool
+{
     $user = currentUser();
-    if (!$user['id']) return false;
+    if (empty($user['id']))
+        return false;
     try {
         return hasAdminDeptAccess(getDB(), (int) $user['id']);
     } catch (Exception $e) {
+        error_log('[auth:isCoreAdmin] ' . $e->getMessage());
         return false;
     }
 }
@@ -146,9 +195,11 @@ function hasAdminDeptAccess(PDO $db, ?int $userId = null): bool
 // ── PASSWORD CHANGE REMINDER ──────────────────────────────────
 // Returns true if user hasn't changed password in 30+ days
 
-function shouldPromptPasswordChange(): bool {
+function shouldPromptPasswordChange(): bool
+{
     $user = currentUser();
-    if (!$user['id']) return false;
+    if (empty($user['id']))
+        return false;
 
     // ✅ 1. Snooze override (PUT THIS FIRST)
     $cacheKey = 'pw_check_' . date('Y-m-d');
@@ -183,6 +234,7 @@ function shouldPromptPasswordChange(): bool {
         return $daysSince >= 30;
 
     } catch (Exception $e) {
+        error_log('[auth:shouldPromptPasswordChange] ' . $e->getMessage());
         return false;
     }
 }
@@ -190,10 +242,11 @@ function shouldPromptPasswordChange(): bool {
 // ── ADMIN SCOPE CHECKS ────────────────────────────────────────
 function requireExecutiveOrBM(): void
 {
-    if (isExecutive()) return;
+    if (isExecutive())
+        return;
 
     if (function_exists('isAdmin') && isAdmin()) {
-        $db   = getDB();
+        $db = getDB();
         $user = currentUser();
         $stmt = $db->prepare("
             SELECT d.dept_code
@@ -203,9 +256,10 @@ function requireExecutiveOrBM(): void
         ");
         $stmt->execute([$user['id'] ?? 0]);
         $deptCode = $stmt->fetchColumn() ?: '';
-        if ($deptCode === 'CORE') return;
+        if ($deptCode === 'CORE')
+            return;
     }
- 
+
     // Not authorized
     http_response_code(403);
     // Try to show a nice error page if header.php exists
@@ -226,36 +280,44 @@ function requireExecutiveOrBM(): void
     }
     exit;
 }
-function adminCanAccessDept(int $deptId): bool {
-    if (isExecutive()) return true;
+function adminCanAccessDept(int $deptId): bool
+{
+    if (isExecutive())
+        return true;
     return in_array($deptId, $_SESSION['allowed_depts'] ?? [], true);
 }
 
-function adminCanAccessBranch(int $branchId): bool {
-    if (isExecutive()) return true;
+function adminCanAccessBranch(int $branchId): bool
+{
+    if (isExecutive())
+        return true;
     return in_array($branchId, $_SESSION['allowed_branches'] ?? [], true);
 }
 
-function adminOwnsStaff(int $staffId): bool {
-    if (isExecutive()) return true;
+function adminOwnsStaff(int $staffId): bool
+{
+    if (isExecutive())
+        return true;
     require_once __DIR__ . '/db.php';
-    $db  = getDB();
+    $db = getDB();
     $uid = currentUser()['id'];
-    $st  = $db->prepare("SELECT id FROM users WHERE id = ? AND managed_by = ? LIMIT 1");
+    $st = $db->prepare("SELECT id FROM users WHERE id = ? AND managed_by = ? LIMIT 1");
     $st->execute([$staffId, $uid]);
     return (bool) $st->fetch();
 }
 
 // ── CSRF ─────────────────────────────────────────────────────
 
-function csrfToken(): string {
+function csrfToken(): string
+{
     if (empty($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
     return $_SESSION['csrf_token'];
 }
 
-function verifyCsrf(): void {
+function verifyCsrf(): void
+{
     $token = $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
     if (!hash_equals($_SESSION['csrf_token'] ?? '', $token)) {
         http_response_code(403);
@@ -265,22 +327,25 @@ function verifyCsrf(): void {
 
 // ── FLASH MESSAGES ───────────────────────────────────────────
 
-function setFlash(string $type, string $msg, bool $raw = false): void {
+function setFlash(string $type, string $msg, bool $raw = false): void
+{
     $_SESSION['flash'] = ['type' => $type, 'msg' => $msg, 'raw' => $raw];
 }
 
-function getFlash(): ?array {
+function getFlash(): ?array
+{
     $f = $_SESSION['flash'] ?? null;
     unset($_SESSION['flash']);
     return $f;
 }
 
-function flashHtml(): string {
+function flashHtml(): string
+{
     $map = [
         'success' => 'alert-success',
-        'danger'  => 'alert-danger',
-        'error'   => 'alert-danger',
-        'info'    => 'alert-info',
+        'danger' => 'alert-danger',
+        'error' => 'alert-danger',
+        'info' => 'alert-info',
         'warning' => 'alert-warning',
     ];
 
@@ -299,7 +364,7 @@ function flashHtml(): string {
 
     // ── Secondary flash (partial duplicate warnings) ──────────
     if (isset($_SESSION['flash_extra'])) {
-        $fe  = $_SESSION['flash_extra'];
+        $fe = $_SESSION['flash_extra'];
         unset($_SESSION['flash_extra']);
         $cls = $map[$fe['type']] ?? 'alert-warning';
         $msg = !empty($fe['raw']) ? $fe['msg'] : htmlspecialchars($fe['msg']);
@@ -314,32 +379,41 @@ function flashHtml(): string {
 
 // ── ACTIVITY LOG ─────────────────────────────────────────────
 
-function logActivity(string $action, string $module = '', string $details = ''): void {
+function logActivity(string $action, string $module = '', string $details = ''): void
+{
     try {
         require_once __DIR__ . '/db.php';
-        $db  = getDB();
+        $db = getDB();
         $uid = currentUser()['id'];
-        if (!$uid) return;
-        $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        if (!$uid)
+            return;
+        $ip = getClientIp();
         $db->prepare(
             "INSERT INTO activity_logs (user_id, action, module, details, ip_address)
              VALUES (?, ?, ?, ?, ?)"
         )->execute([$uid, $action, $module, $details, $ip]);
     } catch (Exception $e) {
-        // silent
+        error_log('[auth:logActivity] ' . $e->getMessage());
+        return;
     }
 }
 // Add this helper at the top of both view files, after the require_once lines
-function formatLastSeen(?string $activeAt, ?string $lastLogin): array {
+function formatLastSeen(?string $activeAt, ?string $lastLogin): array
+{
     // Prefer active_at (real-time), fall back to last_login
     $time = $activeAt ?? $lastLogin;
-    if (!$time) return ['label' => 'Never seen', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
+    if (!$time)
+        return ['label' => 'Never seen', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
 
     $diff = time() - strtotime($time);
 
-    if ($diff < 300)       return ['label' => 'Online now',         'color' => '#10b981', 'dot' => '#10b981', 'online' => true];
-    if ($diff < 3600)      return ['label' => round($diff/60) . 'm ago',  'color' => '#f59e0b', 'dot' => '#f59e0b', 'online' => false];
-    if ($diff < 86400)     return ['label' => round($diff/3600) . 'h ago', 'color' => '#6b7280', 'dot' => '#9ca3af', 'online' => false];
-    if ($diff < 604800)    return ['label' => round($diff/86400) . 'd ago', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
+    if ($diff < 300)
+        return ['label' => 'Online now', 'color' => '#10b981', 'dot' => '#10b981', 'online' => true];
+    if ($diff < 3600)
+        return ['label' => round($diff / 60) . 'm ago', 'color' => '#f59e0b', 'dot' => '#f59e0b', 'online' => false];
+    if ($diff < 86400)
+        return ['label' => round($diff / 3600) . 'h ago', 'color' => '#6b7280', 'dot' => '#9ca3af', 'online' => false];
+    if ($diff < 604800)
+        return ['label' => round($diff / 86400) . 'd ago', 'color' => '#9ca3af', 'dot' => '#9ca3af', 'online' => false];
     return ['label' => date('d M Y', strtotime($time)), 'color' => '#9ca3af', 'dot' => '#d1d5db', 'online' => false];
 }
